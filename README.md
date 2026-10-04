@@ -129,6 +129,9 @@ compared and exported.
   and a blink comparator (flick between A and B; the eye catches small jumps).
 - **Series**: versions side by side, like Monet painting the same haystacks in
   different light.
+- **Assembly**: a Note that puts other Notes together is shown as what it is: every part
+  in its own colour, a parts list (hide one, show only one, open its Note), and an
+  Explode slider that pulls the parts apart. A project opens on its assembly.
 
 Candidate starting point: [yet-another-cad-viewer](https://github.com/yeicor-3d/yet-another-cad-viewer),
 which already shows build123d models in the browser with face, edge and vertex
@@ -190,7 +193,8 @@ What actually decides whether a jig works, kept as data the agent must respect:
 
 ```
 monet/        note.py        read a Note without running it; rewrite its TAGS
-              runner.py      the one place a Note is executed: its own process, a time limit
+              runner.py      the one place a Note is executed: its own process, a time limit;
+                             writes the preview GLB and what the parts of an assembly are
               tags.py        find tagged features on a build (planar faces, square and round holes)
               feynman.py     the checks
               semmelweis.py  fingerprint + load check
@@ -226,7 +230,8 @@ it wider.
 - Tag kinds: only flat faces, square holes, round holes and bosses. No edges, vertices,
   whole objects, slots or patterns yet.
 - Checks that need more geometry than a fingerprint: minimum wall, maximum solid
-  thickness, overhangs, interference between parts of an assembly.
+  thickness, overhangs, interference between the parts of an assembly (in the sample the
+  nest's mouse ears overlap their neighbours by about 55 mm³ each; nothing reports it yet).
 - Canvas: Series (versions side by side), tagging edges and vertices, section caps.
 - Translation to Fusion / Onshape, and STEP import ("step 0").
 - Profiles are data only: hole and shaft compensation is not applied to geometry yet.

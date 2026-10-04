@@ -10,6 +10,8 @@ const wid = location.pathname.split('/')[2];
 const root = `/w/${wid}/api`;
 const PALETTE = ['#e26f28', '#2896c8', '#3caa5a', '#be46aa', '#d2aa1e', '#5a64dc', '#dc4650', '#14a096'];
 const BASE = new THREE.Color('#b9c2d6'), PICK = new THREE.Color('#ffd23f');
+// an assembly: every part in a colour of its own, quiet enough that a tag or a pointed-at face still stands out
+const PARTS = ['#8fa8d6', '#d6a58f', '#9cc7a4', '#c9a3d0', '#d4c58a', '#8fc7cf', '#d49aa8', '#a9b0e0', '#b8cf94', '#e0b48a', '#9fb8b0', '#c7b1a0'];
 
 async function api(path, method = 'GET', body) {
   const r = await fetch(root + path, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -19,7 +21,7 @@ async function api(path, method = 'GET', body) {
 }
 
 // what is on screen
-const S = { state: null, project: null, proj: null, note: null, data: null, faces: [], face: null, hot: null, rev: null, compare: null, message: '', saveResult: null };
+const S = { state: null, project: null, proj: null, note: null, data: null, faces: [], parts: [], part: null, hotPart: null, hidden: new Set(), face: null, hot: null, rev: null, compare: null, message: '', saveResult: null };
 
 // ---- the 3D view -------------------------------------------------------------------------------------
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);   // millimetres, Z up, as in the Notes
@@ -43,7 +45,8 @@ Object.values(groups).forEach((g) => scene.add(g));
 const cut = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
 const wipeA = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0), wipeB = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0);
 const box = new THREE.Box3(), size = new THREE.Vector3(), centre = new THREE.Vector3();
-let radius = 100, mesh = null, edgesOn = true, xray = false, sectionOn = false;
+let radius = 100, meshes = [], shared = null, edgesOn = true, xray = false, sectionOn = false, explode = 0, partColours = true;
+const home = new THREE.Vector3();   // the middle of the assembly as it is put together
 
 const material = () => new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0, roughness: 0.8, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 
@@ -67,9 +70,11 @@ function look(name) {
 }
 
 function frame(object, keepCamera) {
+  if (object === groups.part) for (const one of object.children) one.position.set(0, 0, 0);   // measured put together; spread() follows
   box.setFromObject(object);
   if (box.isEmpty()) return;
   box.getSize(size); box.getCenter(centre);
+  if (object === groups.part) home.copy(centre);
   radius = Math.max(1, size.length() / 2);
   if (!keepCamera) look('iso');
   setSection();
@@ -78,7 +83,7 @@ function frame(object, keepCamera) {
 async function loadInto(group, url, plain) {
   const gltf = await loader.loadAsync(url);
   group.clear();
-  let found = null;
+  let found = null, lines = null;
   gltf.scene.traverse((o) => {
     if (o.isMesh) {
       if (!o.geometry.attributes.normal) o.geometry.computeVertexNormals();
@@ -92,10 +97,55 @@ async function loadInto(group, url, plain) {
     } else if (o.isLine) {
       o.material = new THREE.LineBasicMaterial({ color: 0x10131b });
       o.userData.edges = true;
+      lines = o;
     }
   });
   group.add(gltf.scene);
-  return found;
+  return { mesh: found, lines };
+}
+
+// The draft arrives as one mesh, its triangles grouped part by part. Give every part an object of its own (they
+// share the vertices), so a part can be hidden, coloured and pulled out of the assembly. A plain Note is one part.
+function assemble({ mesh, lines }) {
+  meshes = []; shared = null;
+  groups.part.clear();
+  if (!mesh) return;
+  const g = mesh.geometry;
+  shared = { colour: g.attributes.color, index: g.index.array };
+  const parts = S.parts.length ? S.parts : [{ tris: [0, g.index.count / 3], edges: [0, lines ? lines.geometry.attributes.position.count / 2 : 0] }];
+  parts.forEach((part, i) => {
+    const pg = new THREE.BufferGeometry();
+    for (const k of ['position', 'normal', 'color']) pg.setAttribute(k, g.attributes[k]);
+    pg.setIndex(g.index);
+    pg.setDrawRange(part.tris[0] * 3, part.tris[1] * 3);
+    if (part.bbox) {
+      pg.boundingBox = new THREE.Box3(new THREE.Vector3(...part.bbox.slice(0, 3)), new THREE.Vector3(...part.bbox.slice(3)));
+      pg.boundingSphere = pg.boundingBox.getBoundingSphere(new THREE.Sphere());
+    }
+    const one = new THREE.Group(), m = new THREE.Mesh(pg, material());
+    m.userData.part = one.userData.part = i;
+    one.add(m);
+    if (lines && part.edges[1]) {
+      const lg = new THREE.BufferGeometry();
+      lg.setAttribute('position', lines.geometry.attributes.position);
+      lg.setDrawRange(part.edges[0] * 2, part.edges[1] * 2);
+      if (part.bbox) { lg.boundingBox = pg.boundingBox; lg.boundingSphere = pg.boundingSphere; }
+      const l = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x10131b }));
+      l.userData.edges = true;
+      one.add(l);
+    }
+    groups.part.add(one);
+    meshes.push(m);
+  });
+}
+
+// pull the parts away from the middle of the assembly, each along its own direction
+function spread() {
+  for (const one of groups.part.children) {
+    const b = S.parts[one.userData.part]?.bbox;
+    if (b) one.position.set((b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2).sub(home).multiplyScalar(explode);
+    one.visible = !S.hidden.has(one.userData.part);
+  }
 }
 
 function styleAll() {
@@ -123,15 +173,17 @@ function setSection() {
 
 // colour the faces: tagged ones on hover, the one that is pointed at
 function paint() {
-  if (!mesh) return;
-  const colour = mesh.geometry.attributes.color, index = mesh.geometry.index.array;
+  if (!shared) return;
+  const colour = shared.colour, index = shared.index;
   for (let i = 0; i < colour.count; i++) BASE.toArray(colour.array, i * 3);
-  const fill = (ids, c) => {
-    for (const id of ids) {
-      const f = S.faces[id]; if (!f) continue;
-      for (let k = f.tris[0] * 3; k < (f.tris[0] + f.tris[1]) * 3; k++) c.toArray(colour.array, index[k] * 3);
-    }
-  };
+  const range = (start, count, c) => { for (let k = start * 3; k < (start + count) * 3; k++) c.toArray(colour.array, index[k] * 3); };
+  const fill = (ids, c) => { for (const id of ids) { const f = S.faces[id]; if (f) range(f.tris[0], f.tris[1], c); } };
+  if (S.parts.length > 1) {
+    S.parts.forEach((part, i) => {
+      const lit = i === S.part || i === S.hotPart;
+      if (partColours || lit) range(part.tris[0], part.tris[1], new THREE.Color(PARTS[i % PARTS.length]).lerp(new THREE.Color('#ffffff'), lit ? 0.45 : 0));
+    });
+  }
   const tags = Object.keys(S.data?.tags ?? {});
   tags.forEach((name, n) => { if (S.hot === name || S.hot === '*') fill(S.data.tag_faces?.[name] ?? [], new THREE.Color(PALETTE[n % PALETTE.length])); });
   if (S.face) fill([S.face.i], PICK);
@@ -148,16 +200,18 @@ function faceOfTriangle(t) {
 let down = null;
 canvas.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
 canvas.addEventListener('pointerup', (e) => {
-  if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4 || !mesh || S.compare) return;
+  if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4 || !meshes.length || S.compare) return;
   const r = canvas.getBoundingClientRect();
   const ray = new THREE.Raycaster();
   ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
-  const hit = ray.intersectObject(mesh).find((h) => !sectionOn || cut.distanceToPoint(h.point) >= 0);
+  const hit = ray.intersectObjects(meshes.filter((m) => m.parent.visible), false).find((h) => !sectionOn || cut.distanceToPoint(h.point) >= 0);
   S.face = hit ? faceOfTriangle(hit.faceIndex) : null;
-  S.point = hit ? hit.point.toArray().map((v) => Math.round(v * 100) / 100) : null;
+  S.part = hit && S.parts.length > 1 ? hit.object.userData.part : null;
+  // where on the part, not where on the screen: an exploded part has been moved
+  S.point = hit ? hit.point.clone().sub(hit.object.parent.position).toArray().map((v) => Math.round(v * 100) / 100) : null;
   paint(); renderPanel(true);
   const tags = Object.entries(S.data?.tag_faces ?? {}).filter(([, ids]) => S.face && ids.includes(S.face.i)).map(([k]) => k);
-  api(`/p/${S.project}/selection`, 'POST', S.face ? { note: S.note, face: S.face, point: S.point, tags } : {}).catch(() => {});
+  api(`/p/${S.project}/selection`, 'POST', S.face ? { note: S.note, face: S.face, point: S.point, tags, part: S.parts[S.part]?.name ?? null } : {}).catch(() => {});
 });
 
 (function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
@@ -171,6 +225,18 @@ $('#section').onclick = (e) => {
   $('#sectionAxis').hidden = $('#sectionAt').hidden = !sectionOn; setSection(); styleAll();
 };
 $('#sectionAxis').onchange = $('#sectionAt').oninput = () => { setSection(); };
+$('#explode').oninput = (e) => {
+  explode = Number(e.target.value);
+  spread();
+  camera.zoom = 1 / (1 + explode * 0.85);   // step back as it grows, so it stays in view
+  camera.updateProjectionMatrix();
+};
+$('#partColours').onclick = (e) => { partColours = !partColours; e.target.classList.toggle('on', partColours); paint(); };
+function assemblyBar() {
+  const on = S.parts.length > 1 && !S.compare;
+  for (const id of ['#asmSep', '#partColours', '#explodeLabel', '#explode']) $(id).hidden = !on;
+  $('#explode').value = explode;
+}
 
 // ---- compare: the diff as the thing you trust --------------------------------------------------------------
 let blink = null;
@@ -183,6 +249,7 @@ async function compare(a, b = 'draft') {
       loadInto(groups.b, `${root}/p/${S.project}/n/${S.note}/diff.glb?${q}&side=b&r=${summary.stamp.slice(0, 12)}`)]);
     S.compare = { a, b, summary, mode: 'added', mix: 0.5 };
     S.face = null;
+    assemblyBar();
     $('#compare').hidden = false;
     $('#compareLabel').textContent = `v${a} → ${b === 'draft' ? 'draft' : 'v' + b}`;
     frame(groups.b, true);
@@ -205,7 +272,7 @@ function compareOff() {
   clearInterval(blink);
   S.compare = null; $('#compare').hidden = true;
   groups.a.clear(); groups.b.clear(); groups.part.visible = true;
-  frame(groups.part, true); styleAll(); renderPanel(true);
+  frame(groups.part, true); spread(); assemblyBar(); styleAll(); renderPanel(true);
 }
 document.querySelectorAll('[data-mode]').forEach((b) => { b.onclick = () => setMode(b.dataset.mode); });
 $('#mix').oninput = (e) => { S.compare.mix = Number(e.target.value); setSection(); styleAll(); };
@@ -214,10 +281,12 @@ $('#compareOff').onclick = compareOff;
 // ---- loading -----------------------------------------------------------------------------------------------
 function busy(text) { $('#busy').hidden = !text; $('#busy').textContent = text || ''; }
 const state = (n) => (n.kind === 'module' ? '' : n.state === 'error' ? 'red' : n.state === 'unbuilt' ? '' : n.changed ? 'yellow' : 'green');
+const order = { assembly: 0, note: 1, module: 2 };
 
 function renderSide() {
-  $('#notes').innerHTML = S.proj.notes.map((n) => `<div class="item ${n.name === S.note ? 'sel' : ''}" data-note="${esc(n.name)}" title="${n.kind === 'module' ? 'a helper module, imported by Notes' : n.state === 'error' ? 'does not build' : n.changed ? 'changed since the last save' : 'saved'}">
-    <span class="dot ${state(n)}"></span>${esc(n.name)}${n.kind === 'module' ? ' <small>module</small>' : ''}</div>`).join('') || '<div class="item muted">no Notes yet: ask your agent for a part</div>';
+  const sorted = [...S.proj.notes].sort((a, b) => order[a.kind] - order[b.kind] || a.name.localeCompare(b.name));
+  $('#notes').innerHTML = sorted.map((n) => `<div class="item ${n.name === S.note ? 'sel' : ''}" data-note="${esc(n.name)}" title="${n.kind === 'module' ? 'a helper module, imported by Notes' : n.kind === 'assembly' ? 'an assembly: Notes put together' : n.state === 'error' ? 'does not build' : n.changed ? 'changed since the last save' : 'saved'}">
+    <span class="dot ${state(n)}"></span>${esc(n.name)}${n.kind === 'note' ? '' : ` <small>${n.kind}</small>`}</div>`).join('') || '<div class="item muted">no Notes yet: ask your agent for a part</div>';
   $('#versions').innerHTML = [...S.proj.versions].reverse().map((v) => {
     const mine = v.notes[S.note]?.v === v.n;
     return `<div class="item" data-version="${v.n}" title="${esc(v.message)}\n${new Date(v.at).toLocaleString()}${v.commit ? '\ngit ' + esc(v.commit) : ''}\nclick: compare with the draft">
@@ -234,23 +303,29 @@ async function open(project, note) {
   S.proj = await api(`/p/${project}`);
   S.rev = S.proj.rev;
   const names = S.proj.notes.map((n) => n.name);
-  S.note = names.includes(note) ? note : (S.proj.notes.find((n) => n.kind === 'note')?.name ?? names[0] ?? null);
+  // a project opens on its assembly, where there is one: the parts put together
+  S.note = names.includes(note) ? note : (S.proj.notes.find((n) => n.kind === 'assembly')?.name ?? S.proj.notes.find((n) => n.kind === 'note')?.name ?? names[0] ?? null);
   history.replaceState(null, '', `#${project}${S.note ? '/' + S.note : ''}`);
   $('#project').value = project;
-  if (changedNote) { S.face = null; S.saveResult = null; }
+  if (changedNote) { S.face = null; S.saveResult = null; S.part = S.hotPart = null; S.hidden = new Set(); explode = 0; }
   renderSide();
-  if (!S.note) { S.data = null; groups.part.clear(); mesh = null; renderPanel(true); return; }
+  if (!S.note) { S.data = null; S.parts = []; assemble({}); assemblyBar(); renderPanel(true); return; }
   busy('building…');
   try {
     S.data = await api(`/p/${project}/n/${S.note}`);
     S.rev = (await api(`/p/${project}/rev`)).rev;   // the build itself moved the revision
     if (S.data.report?.built) {
       const stamp = `r=${S.rev}`;
-      [mesh, S.faces] = await Promise.all([loadInto(groups.part, `${root}/p/${project}/n/${S.note}/model.glb?${stamp}`, true),
-        fetch(`${root}/p/${project}/n/${S.note}/faces.json?${stamp}`).then((r) => r.json()).then((d) => d.faces)]);
+      const [loaded, described] = await Promise.all([loadInto(new THREE.Group(), `${root}/p/${project}/n/${S.note}/model.glb?${stamp}`, true),
+        fetch(`${root}/p/${project}/n/${S.note}/faces.json?${stamp}`).then((r) => r.json())]);
+      S.faces = described.faces; S.parts = described.parts ?? [];
+      if (S.part != null && !S.parts[S.part]) S.part = null;
+      assemble(loaded);
       if (S.face) S.face = S.faces.find((f) => f.i === S.face.i && f.type === S.face.type) ?? null;
       frame(groups.part, !changedNote);
-    } else { groups.part.clear(); mesh = null; S.faces = []; }
+      spread();
+    } else { S.faces = []; S.parts = []; assemble({}); }
+    assemblyBar();
     S.proj = await api(`/p/${project}`);
     renderSide();
   } catch (e) { S.data = { error: e.message }; }
@@ -296,13 +371,27 @@ function renderPanel(force) {
       <p class="muted">Grey is unchanged; colour starts at ${s.tolerance} mm.</p></div>`);
   }
 
+  if (d.is_note && r.built && S.parts.length > 1 && !S.compare) {
+    const known = new Set(S.proj.notes.filter((n) => n.kind !== 'module').map((n) => n.name));
+    cards.push(`<div class="card"><div class="row"><p class="head" style="margin:0">Assembly · ${S.parts.length} parts</p>
+      <span class="v">${S.hidden.size ? '<button data-act="showall">Show all</button>' : ''}</span></div>
+      ${S.parts.map((q, i) => `<div class="check part ${i === S.part ? 'sel' : ''}" data-part="${i}"><div class="row">
+        <span><span class="swatch" style="background:${PARTS[i % PARTS.length]}"></span><b class="${S.hidden.has(i) ? 'muted' : ''}">${esc(q.name)}</b></span>
+        <span class="v muted">${fmt(q.volume / 1000)} cm³</span>
+        ${known.has(q.name) ? `<button class="x" data-act="opennote" data-name="${esc(q.name)}" title="open this part's Note">↗</button>` : ''}
+        <button class="x" data-act="solo" data-i="${i}" title="show only this part">◎</button>
+        <button class="x" data-act="eye" data-i="${i}" title="${S.hidden.has(i) ? 'show' : 'hide'}">${S.hidden.has(i) ? '○' : '●'}</button></div>
+        <div class="why mono">${[0, 1, 2].map((k) => fmt(q.bbox[k + 3] - q.bbox[k])).join(' × ')} mm</div></div>`).join('')}
+      <p class="muted">Click a part here or in the view. Explode (above the view) pulls them apart.</p></div>`);
+  }
+
   if (d.is_note && r.built) {
     const m = r.measure;
     cards.push(`<div class="card"><p class="head">Part</p>${row('size', `${fmt(m.size_x)} × ${fmt(m.size_y)} × ${fmt(m.size_z)} mm`)}
       ${row('volume', `${fmt(m.volume_cm3)} cm³`)}${row('surface', `${fmt(m.area_cm2)} cm²`)}${row('z', `${fmt(m.min_z)} … ${fmt(m.max_z)}`)}${row('solids', m.solids)}
       ${Object.entries(d.params).map(([k, v]) => row(k, fmt(v))).join('')}</div>`);
 
-    cards.push(`<div class="card"><p class="head">Pointing at</p>${S.face ? `<p>${esc(words(S.face))}</p>
+    cards.push(`<div class="card"><p class="head">Pointing at</p>${S.face ? `<p>${S.parts[S.part] ? `<b>${esc(S.parts[S.part].name)}</b>: ` : ''}${esc(words(S.face))}</p>
       <div class="line"><input id="tagName" placeholder="name it: base, rod_bore…" maxlength="40"><button class="primary" data-act="tag">Tag it</button></div>
       <div class="line"><input id="tagRole" placeholder="what it is for: sits on the plywood" maxlength="200"></div>
       <p class="muted">Your agent sees what you point at. A tag is written into the Note and must survive every rebuild.</p>`
@@ -352,10 +441,29 @@ function renderPanel(force) {
 const act = async (fn) => { try { await fn(); await open(S.project, S.note); } catch (e) { alert(e.message); busy(); } };
 $('#panel').addEventListener('focusout', () => { if (S.stale) setTimeout(() => renderPanel(), 50); });
 $('#panel').addEventListener('input', (e) => { if (e.target.id === 'saveMsg') S.message = e.target.value; });
-$('#panel').addEventListener('mouseover', (e) => { const t = e.target.closest('[data-tag]'); const hot = t ? t.dataset.tag : null; if (hot !== S.hot) { S.hot = hot; paint(); } });
-$('#panel').addEventListener('mouseleave', () => { if (S.hot) { S.hot = null; paint(); } });
+$('#panel').addEventListener('mouseover', (e) => {
+  const t = e.target.closest('[data-tag]'), q = e.target.closest('[data-part]');
+  const hot = t ? t.dataset.tag : null, hotPart = q ? Number(q.dataset.part) : null;
+  if (hot !== S.hot || hotPart !== S.hotPart) { S.hot = hot; S.hotPart = hotPart; paint(); }
+});
+$('#panel').addEventListener('mouseleave', () => { if (S.hot || S.hotPart != null) { S.hot = S.hotPart = null; paint(); } });
 $('#panel').addEventListener('click', (e) => {
-  const b = e.target.closest('[data-act]'); if (!b) return;
+  const b = e.target.closest('[data-act]');
+  if (!b) {   // a click on a part's row points at that part
+    const q = e.target.closest('[data-part]');
+    if (q) { S.part = Number(q.dataset.part) === S.part ? null : Number(q.dataset.part); paint(); renderPanel(true); }
+    return;
+  }
+  // the parts of an assembly: nothing here goes to the server
+  if (['eye', 'solo', 'showall'].includes(b.dataset.act)) {
+    const i = Number(b.dataset.i);
+    if (b.dataset.act === 'showall') S.hidden = new Set();
+    else if (b.dataset.act === 'eye') (S.hidden.has(i) ? S.hidden.delete(i) : S.hidden.add(i));
+    else S.hidden = new Set(S.parts.map((_, k) => k).filter((k) => k !== i));
+    spread(); renderPanel(true);
+    return;
+  }
+  if (b.dataset.act === 'opennote') { open(S.project, b.dataset.name); return; }
   const n = `/p/${S.project}/n/${S.note}`, num = (id) => ($(id).value.trim() === '' ? null : Number($(id).value.replace(',', '.')));
   const a = b.dataset.act;
   if (a === 'tag') act(async () => { busy('building…'); await api(`${n}/tags`, 'POST', { name: $('#tagName').value.trim(), role: $('#tagRole').value, face: S.face }); });
@@ -428,5 +536,6 @@ setInterval(async () => {
 }, 2000);
 window.addEventListener('hashchange', () => { const [p, n] = decodeURIComponent(location.hash.slice(1)).split('/'); if (p && (p !== S.project || (n && n !== S.note))) open(p, n); });
 
+window.monet = { S, groups, camera, scene };   // for looking in from the console, and from scripts/shot.mjs
 resize();
 start().catch((e) => { $('#panel').innerHTML = `<div class="card"><p class="err">${esc(e.message)}</p></div>`; });

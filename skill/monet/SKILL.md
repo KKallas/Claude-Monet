@@ -134,13 +134,55 @@ def build(p=PARAMS):
   rewrites it without running the file. See `references/tags-and-checks.md`.
 - **`build(p=PARAMS)`** returns one build123d solid. Millimetres, Z up.
 - A Note's file name is its name: lowercase letters, digits, underscores.
-- **An assembly is just another Note** that imports other Notes and places them. A file without
-  `build()` is a helper module that Notes import (shared parameters, shared functions).
+- A file without `build()` is a helper module that Notes import (shared parameters, shared
+  functions).
 - Notes run on the server in their own process with a time limit. Use only `build123d`, `math`
   and the project's own files: a Note describes a part, it has no business reading files or
   reaching the network.
 
 `references/build123d.md` has the modelling cheat sheet and the mistakes that cost time.
+
+### Assemblies
+
+An assembly is just another Note: it imports the Notes of its parts, puts them where they belong
+and returns them as one compound with a name on each.
+
+```python
+"""
+Stand: two feet and the rod between them.
+
+Rules
+- the rod sits in both bores
+"""
+from build123d import *
+import rod_foot
+
+PARAMS = dict(span=300.0)
+
+TAGS = {}
+
+
+def build(p=PARAMS):
+    left = Pos(-p["span"] / 2, 0, 0) * rod_foot.build()
+    right = Pos(p["span"] / 2, 0, 0) * rod_foot.build()
+    rod = Pos(0, 0, 11.2) * Rot(0, 90, 0) * Box(16, 16, p["span"] + 45)
+    left.label, right.label, rod.label = "foot_left", "foot_right", "rod"
+    return Compound(children=[left, right, rod], label="stand")
+```
+
+- **Name every child** (`.label`): that name is what the user sees in the canvas's parts list and
+  what you get back. Do not fuse the parts (`+`): fused, they are one solid and no assembly.
+- The canvas shows an assembly with each part in its own colour, a parts list (hide, show only
+  one) and an Explode slider. A project opens on its assembly.
+- For you: the report of an assembly has `parts` (name, volume, size, where it is); `look`
+  paints the parts in their own colours with a legend; `selection` says which `part` the user
+  clicked, with the face in that part's own coordinates.
+- A part that only exists in the assembly (a bought rod, a screw) can be made right there.
+  Anything printed should be a Note of its own, so it has its own checks and exports.
+- Parts that must fit each other should take their numbers from one shared helper module, and
+  be modelled in the frame they have in the assembly when that is simpler than placing them.
+- Checks on an assembly: `solids` equals the number of parts, and its overall size. Whether
+  parts collide is not measured yet: look, with `look` and the section view.
 
 ## Tags and checks
 

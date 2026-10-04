@@ -44,7 +44,7 @@ aside .head { padding: 0 14px; margin-top: 6px; }
 .view canvas { display: block; width: 100%; height: 100%; }
 .bar { position: absolute; left: 10px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; background: rgba(26, 31, 46, .88); border: 1px solid var(--border); border-radius: 6px; padding: 6px; }
 .bar.top { top: 10px; } .bar.bottom { bottom: 10px; }
-.bar input[type=range] { width: 150px; padding: 0; }
+.bar input[type=range] { width: 110px; padding: 0; }
 .bar .sep { width: 1px; align-self: stretch; background: var(--border); }
 .hint { position: absolute; right: 12px; bottom: 10px; color: var(--text-muted); font-size: 11px; text-align: right; pointer-events: none; }
 .busy { position: absolute; top: 12px; right: 12px; color: var(--warn); font-size: 12px; }
@@ -64,7 +64,8 @@ aside .head { padding: 0 14px; margin-top: 6px; }
 .check { padding: 5px 0; border-top: 1px solid var(--border); }
 .check:first-of-type { border-top: 0; }
 .check .why { color: var(--text-muted); font-size: 11.5px; }
-.tag { cursor: pointer; }
+.tag, .part { cursor: pointer; }
+.part.sel { box-shadow: inset 2px 0 var(--accent); padding-left: 8px; margin-left: -8px; }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
 details summary { cursor: pointer; color: var(--text-muted); }
 pre.src { margin: 8px 0 0; max-height: 320px; overflow: auto; background: var(--bg-body); border: 1px solid var(--border); border-radius: 4px; padding: 8px; }

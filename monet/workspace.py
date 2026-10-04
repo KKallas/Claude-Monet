@@ -285,6 +285,10 @@ class Project:
         m = feynman.measurements(r)
         out["measure"] = {k: round(m[k], 3) for k in ("volume_cm3", "area_cm2", "size_x", "size_y", "size_z", "min_z", "max_z")}
         out["measure"].update(solids=fp["solids"], faces=fp["faces"], valid=r.get("valid", True))
+        if len(r.get("parts") or []) > 1:     # an assembly: what it is made of
+            out["parts"] = [{"name": q["name"], "volume_cm3": round(q["volume"] / 1000, 3),
+                             "size": [round(q["bbox"][i + 3] - q["bbox"][i], 2) for i in range(3)],
+                             "at": [round((q["bbox"][i + 3] + q["bbox"][i]) / 2, 2) for i in range(3)]} for q in r["parts"]]
         out["tags"] = {k: {"resolved": t["resolved"], **({"why": t["why"]} if t.get("why") else {}), "measure": t.get("measure", {})}
                        for k, t in r["tags"].items()}
         rows = [{"id": f"tag-{k}", "what": f"tag.{k}.resolved", "ok": bool(t["resolved"]), "value": bool(t["resolved"]), "expect": "= True",
@@ -550,16 +554,20 @@ class Project:
     def status(self) -> dict:
         head = self.head()
         rows = []
-        for name in self.files():
-            src = self.read(name)
-            if not notes.parse(src)["is_note"]:
+        sources = {name: self.read(name) for name in self.files()}
+        note_names = {name for name, src in sources.items() if notes.parse(src)["is_note"]}
+        for name, src in sources.items():
+            if name not in note_names:
                 rows.append({"name": name, "kind": "module"})
                 continue
             r = self.cached(name)
             fresh = self._fresh(r)
             saved_src = (self._vpath(head["n"]) / f"{name}.py") if head else None
+            # an assembly is a Note whose build has several parts; before it was ever built, one that imports
+            # two or more other Notes is taken for one
+            assembly = len(r.get("parts") or []) > 1 if fresh and r["ok"] else len(notes.imports(src) & (note_names - {name})) > 1
             rows.append({
-                "name": name, "kind": "note",
+                "name": name, "kind": "assembly" if assembly else "note",
                 "state": "unbuilt" if not fresh else "error" if not r["ok"] else "built",
                 "saved": bool(head and name in head["notes"]),
                 "changed": not (saved_src and saved_src.exists() and saved_src.read_text() == src),

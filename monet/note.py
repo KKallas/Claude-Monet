@@ -73,3 +73,18 @@ def set_tags(source: str, tags: dict) -> str:
         at = next((n.lineno - 1 for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "build"), len(lines))
         lines[at:at] = block + ["", ""]
     return "\n".join(lines) + "\n"
+
+
+def imports(source: str) -> set:
+    """The modules a Note imports by name (top level only)."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    out = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            out.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            out.add(node.module.split(".")[0])
+    return out

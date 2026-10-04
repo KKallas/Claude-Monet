@@ -58,6 +58,11 @@ def test_parse_reads_a_note_without_running_it():
     assert note.parse("PARAMS = dict(P)\ndef build(): pass\n")["error"] is None      # shared params are fine
 
 
+def test_imports_are_read_from_the_source():
+    assert note.imports("from build123d import *\nimport nest_back, grid_pos_0\nfrom rakis_common import P\n") == {"build123d", "nest_back", "grid_pos_0", "rakis_common"}
+    assert note.imports("def build(:") == set()
+
+
 def test_set_tags_changes_only_the_tags():
     new = note.set_tags(NOTE, {"top": {"kind": "planar_face", "normal": "+Z", "at": 1.5, "through": True, "role": 'say "hi"'}})
     p = note.parse(new)

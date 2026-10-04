@@ -101,6 +101,8 @@ def picture(p, note: str, views: str = "iso,top,front,right", version: str = "dr
         r = p.result(note)
         faces = json.loads((p.out / note / "faces.json").read_text())["faces"]
         highlight = {k: t["faces"] for k, t in r["tags"].items() if t.get("faces")}
+        if not highlight and len(r.get("parts") or []) > 1:    # an assembly: every part in its own colour
+            highlight = {q["name"]: list(range(q["faces"][0], q["faces"][0] + q["faces"][1])) for q in r["parts"]}
     names = tuple(v.strip() for v in views.split(",") if v.strip())
     return render.png(glb, names, faces=faces, highlight=highlight, title=f"{p.name}/{note} ({version})")
 
@@ -108,7 +110,8 @@ def picture(p, note: str, views: str = "iso,top,front,right", version: str = "dr
 def look(c: Caller, project: str, note: str, views: str = "iso,top,front,right", version: str = "draft", tags: bool = True):
     """A picture of the part: look at it, do not assume. views: any of iso, iso_back, iso_under, top, bottom, front,
     back, left, right, comma separated. version: "draft" (as built now) or a saved version number. tags: paint the
-    tagged faces (draft only) with a legend, to see what each tag points at. Over MCP the picture comes with the
+    tagged faces (draft only) with a legend, to see what each tag points at; an assembly without tags is painted
+    part by part instead. Over MCP the picture comes with the
     answer; over HTTP the answer carries its address (`image`, a PNG): fetch that."""
     p = c.ws.project(project)
     png = picture(p, note, views, version, tags)
@@ -119,7 +122,8 @@ def look(c: Caller, project: str, note: str, views: str = "iso,top,front,right",
 
 def selection(c: Caller, project: str) -> dict:
     """What the user is pointing at in the canvas right now: the Note, the face they clicked (its kind, where it is,
-    its size), the tag it already has if any, and the selector that would find it again. Call it when the user says
+    its size), the part it belongs to when the Note is an assembly, the tag it already has if any, and the selector
+    that would find it again. Call it when the user says
     "this face", "here", "that hole"."""
     c.ws.project(project)
     s = _selection.get((c.ws.id, project))
@@ -127,6 +131,8 @@ def selection(c: Caller, project: str) -> dict:
         return {"selected": False, "hint": f"nothing is selected; ask the user to click a face in the canvas: {c.canvas(project)}"}
     out = {"selected": True, "note": s.get("note"), "seconds_ago": round(time.time() - s["at"]), "face": s.get("face"),
            "point": s.get("point"), "tags": s.get("tags", [])}
+    if s.get("part"):      # in an assembly: which part the face belongs to
+        out["part"] = s["part"]
     if s.get("face"):
         out["selector"] = tagging.propose(s["face"])
     return out

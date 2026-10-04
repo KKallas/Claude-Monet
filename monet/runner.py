@@ -24,7 +24,8 @@ EXPORT_LINEAR, EXPORT_ANGULAR = 0.01, 0.2
 
 def versions() -> dict:
     from importlib.metadata import version, PackageNotFoundError
-    out = {}
+    from . import __version__
+    out = {"monet": __version__}      # what a build leaves behind changes with Monet too
     for name in ("build123d", "cadquery-ocp", "cadquery-ocp-novtk"):
         try:
             out[name] = version(name)
@@ -37,59 +38,120 @@ def _vec(v):
     return [round(float(x), 6) for x in (v.X, v.Y, v.Z)]
 
 
-def describe(shape):
-    """Faces as plain data, and one mesh whose triangles are grouped face by face."""
+def leaves(shape, prefix=""):
+    """The parts of what build() returned: the labelled children of a compound, down to those without children of
+    their own. A plain part is its own single leaf."""
+    kids = list(getattr(shape, "children", ()) or ())
+    if not kids:
+        return [(prefix or getattr(shape, "label", "") or "part", shape)]
+    out = []
+    for i, kid in enumerate(kids):
+        name = getattr(kid, "label", "") or f"part_{i + 1}"
+        out += leaves(kid, f"{prefix}/{name}" if prefix else name)
+    return out
+
+
+def parts_of(shape):
+    """[(name, shape)] with unique names. Several loose solids without names are parts too."""
+    found = leaves(shape)
+    if len(found) == 1 and len(found[0][1].solids()) > 1:
+        found = [(f"solid_{i + 1}", s) for i, s in enumerate(found[0][1].solids())]
+    seen, out = {}, []
+    for name, sub in found:
+        seen[name] = seen.get(name, 0) + 1
+        out.append((name if seen[name] == 1 else f"{name}_{seen[name]}", sub))
+    return out
+
+
+def describe(shape, groups):
+    """Faces as plain data, and one mesh whose triangles are grouped face by face, the faces part by part."""
     from build123d import GeomType, Vector
     from OCP.BRepAdaptor import BRepAdaptor_Surface
     shape.mesh(LINEAR, ANGULAR)
-    faces, verts, tris = [], [], []
-    for i, f in enumerate(shape.faces()):
-        v, t = f.tessellate(LINEAR, ANGULAR)
-        bb = f.bounding_box()
-        d = {"i": i, "type": "other", "area": round(f.area, 4), "center": _vec(f.center()),
-             "bbox": [round(x, 4) for x in (bb.min.X, bb.min.Y, bb.min.Z, bb.max.X, bb.max.Y, bb.max.Z)],
-             "tris": [len(tris), len(t)]}
-        if f.geom_type == GeomType.PLANE:
-            d.update(type="plane", normal=_vec(f.normal_at()))
-        elif f.geom_type == GeomType.CYLINDER:
-            cyl = BRepAdaptor_Surface(f.wrapped).Cylinder()
-            loc, way = cyl.Axis().Location(), cyl.Axis().Direction()
-            origin, axis = Vector(loc.X(), loc.Y(), loc.Z()), Vector(way.X(), way.Y(), way.Z())
-            mid = f.position_at(0.5, 0.5)
-            to_axis = (origin + axis * ((mid - origin).dot(axis))) - mid
-            d.update(type="cylinder", axis=_vec(axis), origin=_vec(origin), radius=round(cyl.Radius(), 5),
-                     concave=bool(f.normal_at(mid).dot(to_axis) > 0))
-        faces.append(d)
-        base = len(verts)
-        verts.extend((p.X, p.Y, p.Z) for p in v)
-        tris.extend((a + base, b + base, c + base) for a, b, c in t)
-    return faces, verts, tris
+    faces, verts, tris, parts = [], [], [], []
+    for name, sub in groups:
+        bb = sub.bounding_box()
+        part = {"name": name, "faces": [len(faces), 0], "tris": [len(tris), 0], "volume": round(sub.volume, 3),
+                "bbox": [round(x, 4) for x in (bb.min.X, bb.min.Y, bb.min.Z, bb.max.X, bb.max.Y, bb.max.Z)]}
+        for f in sub.faces():
+            v, t = f.tessellate(LINEAR, ANGULAR)
+            fb = f.bounding_box()
+            d = {"i": len(faces), "type": "other", "area": round(f.area, 4), "center": _vec(f.center()),
+                 "bbox": [round(x, 4) for x in (fb.min.X, fb.min.Y, fb.min.Z, fb.max.X, fb.max.Y, fb.max.Z)],
+                 "tris": [len(tris), len(t)]}
+            if f.geom_type == GeomType.PLANE:
+                d.update(type="plane", normal=_vec(f.normal_at()))
+            elif f.geom_type == GeomType.CYLINDER:
+                cyl = BRepAdaptor_Surface(f.wrapped).Cylinder()
+                loc, way = cyl.Axis().Location(), cyl.Axis().Direction()
+                origin, axis = Vector(loc.X(), loc.Y(), loc.Z()), Vector(way.X(), way.Y(), way.Z())
+                mid = f.position_at(0.5, 0.5)
+                to_axis = (origin + axis * ((mid - origin).dot(axis))) - mid
+                d.update(type="cylinder", axis=_vec(axis), origin=_vec(origin), radius=round(cyl.Radius(), 5),
+                         concave=bool(f.normal_at(mid).dot(to_axis) > 0))
+            faces.append(d)
+            base = len(verts)
+            verts.extend((p.X, p.Y, p.Z) for p in v)
+            tris.extend((a + base, b + base, c + base) for a, b, c in t)
+        part["faces"][1] = len(faces) - part["faces"][0]
+        part["tris"][1] = len(tris) - part["tris"][0]
+        parts.append(part)
+    return faces, verts, tris, parts
 
 
-def edge_segments(shape):
-    """The real edges of the part as line segments, so the preview is drawn like a drawing, not like a mesh."""
+def edge_segments(groups, parts):
+    """The real edges of the part as line segments, so the preview is drawn like a drawing, not like a mesh.
+    Part by part, like the triangles, so a part can be moved or hidden with its edges."""
     from build123d import GeomType
     segs = []
-    for e in shape.edges():
-        if e.geom_type == GeomType.LINE:
-            pts = [e.position_at(0), e.position_at(1)]
-        else:
-            n = max(6, min(48, int(e.length / 1.5)))
-            pts = [e.position_at(k / n) for k in range(n + 1)]
-        segs.extend(((a.X, a.Y, a.Z), (b.X, b.Y, b.Z)) for a, b in zip(pts, pts[1:]))
+    for (_, sub), part in zip(groups, parts):
+        start = len(segs)
+        for e in sub.edges():
+            if e.geom_type == GeomType.LINE:
+                pts = [e.position_at(0), e.position_at(1)]
+            else:
+                n = max(6, min(48, int(e.length / 1.5)))
+                pts = [e.position_at(k / n) for k in range(n + 1)]
+            segs.extend(((a.X, a.Y, a.Z), (b.X, b.Y, b.Z)) for a, b in zip(pts, pts[1:]))
+        part["edges"] = [start, len(segs) - start]
     return segs
 
 
 def write_glb(path: Path, verts, tris, segs):
+    """The preview, written out by hand: one triangle mesh, and the edges as separate line segments, both in exactly
+    the order they were made in (the parts of an assembly are ranges of them)."""
+    import struct
+
     import numpy as np
-    import trimesh
-    scene = trimesh.Scene()
-    mesh = trimesh.Trimesh(np.array(verts, dtype=np.float64), np.array(tris, dtype=np.int64), process=False)
-    mesh.visual = trimesh.visual.ColorVisuals(mesh)
-    scene.add_geometry(mesh, geom_name="part", node_name="part")
-    if segs:
-        scene.add_geometry(trimesh.load_path(np.array(segs, dtype=np.float64)), geom_name="edges", node_name="edges")
-    path.write_bytes(scene.export(file_type="glb"))
+    blobs, views, accessors = [], [], []
+
+    def add(array, target, component, kind):
+        data = array.tobytes()
+        views.append({"buffer": 0, "byteOffset": sum(len(x) for x in blobs), "byteLength": len(data), "target": target})
+        blobs.append(data + b"\x00" * (-len(data) % 4))
+        acc = {"bufferView": len(views) - 1, "componentType": component, "count": len(array), "type": kind}
+        if kind == "VEC3":
+            acc.update(min=array.min(0).tolist(), max=array.max(0).tolist())
+        accessors.append(acc)
+        return len(accessors) - 1
+
+    v = np.asarray(verts, dtype=np.float32).reshape(-1, 3)
+    doc = {"asset": {"version": "2.0", "generator": "monet"}, "scene": 0, "scenes": [{"nodes": [0]}],
+           "nodes": [{"name": "part", "mesh": 0}],
+           "meshes": [{"name": "part", "primitives": [{"attributes": {"POSITION": add(v, 34962, 5126, "VEC3")},
+                                                       "indices": add(np.asarray(tris, dtype=np.uint32).reshape(-1), 34963, 5125, "SCALAR"),
+                                                       "mode": 4}]}]}
+    if len(segs):
+        e = np.asarray(segs, dtype=np.float32).reshape(-1, 3)
+        doc["scenes"][0]["nodes"].append(1)
+        doc["nodes"].append({"name": "edges", "mesh": 1})
+        doc["meshes"].append({"name": "edges", "primitives": [{"attributes": {"POSITION": add(e, 34962, 5126, "VEC3")}, "mode": 1}]})
+    binary = b"".join(blobs)
+    doc.update(buffers=[{"byteLength": len(binary)}], bufferViews=views, accessors=accessors)
+    text = json.dumps(doc, separators=(",", ":")).encode()
+    text += b" " * (-len(text) % 4)
+    path.write_bytes(struct.pack("<4sII", b"glTF", 2, 12 + 8 + len(text) + 8 + len(binary))
+                     + struct.pack("<I4s", len(text), b"JSON") + text + struct.pack("<I4s", len(binary), b"BIN\x00") + binary)
 
 
 def load_note(project_dir: Path, note: str):
@@ -137,7 +199,8 @@ def run(project_dir: Path, note: str, out_dir: Path, exports=()) -> dict:
         result["build_seconds"] = round(time.time() - t0, 2)
         result["fingerprint"] = semmelweis.fingerprint(shape)
         result["valid"] = bool(shape.is_valid)
-        faces, verts, tris = describe(shape)
+        groups = parts_of(shape)
+        faces, verts, tris, parts = describe(shape, groups)
         from build123d import Vector
         solids = shape.solids()
         result["tags"] = tags.resolve(getattr(mod, "TAGS", {}) or {}, faces, result["fingerprint"]["bbox"],
@@ -145,8 +208,9 @@ def run(project_dir: Path, note: str, out_dir: Path, exports=()) -> dict:
         result["params"] = getattr(mod, "PARAMS", {})
         result["doc"] = (mod.__doc__ or "").strip()
         result["triangles"] = len(tris)
-        write_glb(out_dir / "model.glb", verts, tris, edge_segments(shape))
-        (out_dir / "faces.json").write_text(json.dumps({"faces": faces}))
+        write_glb(out_dir / "model.glb", verts, tris, edge_segments(groups, parts))
+        (out_dir / "faces.json").write_text(json.dumps({"faces": faces, "parts": parts}))
+        result["parts"] = [{k: part[k] for k in ("name", "volume", "bbox", "faces")} for part in parts]
         if "stl" in exports:
             from build123d import export_stl
             export_stl(shape, str(out_dir / "model.stl"), tolerance=EXPORT_LINEAR, angular_tolerance=EXPORT_ANGULAR)

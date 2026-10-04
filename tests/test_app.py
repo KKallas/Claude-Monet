@@ -87,6 +87,19 @@ def test_the_person_points_and_tags_and_the_agent_sees_it(client, reg):
     assert "clamp_face" not in client.get(n).json()["tags"]
 
 
+def test_pointing_at_a_part_of_an_assembly(client, reg):
+    w = f"/w/{reg['id']}"
+    described = client.get(f"{w}/api/p/mg400_rakis/n/rakis/faces.json").json()
+    assert len(described["parts"]) == 14
+    part = next(p for p in described["parts"] if p["name"] == "L_back_pos")
+    face = described["faces"][part["faces"][0]]
+    client.post(f"{w}/api/p/mg400_rakis/selection", json={"note": "rakis", "face": face, "point": face["center"], "tags": [], "part": part["name"]})
+    assert client.get(f"{w}/agent/selection", params={"project": "mg400_rakis"}).json()["part"] == "L_back_pos"
+    notes = {n["name"]: n["kind"] for n in client.get(f"{w}/api/p/mg400_rakis").json()["notes"]}
+    assert notes["rakis"] == "assembly"
+    assert len(client.get(f"{w}/agent/check", params={"project": "mg400_rakis", "note": "rakis"}).json()["parts"]) == 14
+
+
 def test_checks_are_the_persons_to_change(client, reg):
     n = f"/w/{reg['id']}/api/p/starter/n/rod_foot"
     assert client.post(f"{n}/checks", json={"what": "size_x", "max": 40, "why": "fits the drawer"}).json()["report"]["green"] is False
