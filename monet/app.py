@@ -385,7 +385,7 @@ def create_app(storage: str | Path, max_users: int = 20, templates: str | Path |
 
     def select(request, ws, body):
         p = ws.project(request.path_params["project"])
-        agent.remember_selection(ws.id, p.name, body if body.get("face") else None)
+        agent.remember_selection(ws.id, p.name, body if body.get("items") or body.get("face") else None)
         return {"ok": True}
 
     # ---- the agent's door, as plain HTTP ------------------------------------------

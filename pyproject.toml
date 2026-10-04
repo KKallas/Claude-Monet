@@ -1,6 +1,6 @@
 [project]
 name = "monet"
-version = "0.2.0"
+version = "0.3.1"
 description = "Impressionist on the surface, exact underneath: CAD by description, checked by rules."
 readme = "README.md"
 license = "AGPL-3.0-or-later"

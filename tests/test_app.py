@@ -100,6 +100,22 @@ def test_pointing_at_a_part_of_an_assembly(client, reg):
     assert len(client.get(f"{w}/agent/check", params={"project": "mg400_rakis", "note": "rakis"}).json()["parts"]) == 14
 
 
+def test_the_agent_sees_a_selection_of_many_things(client, reg):
+    w = f"/w/{reg['id']}"
+    d = client.get(f"{w}/api/p/starter/n/rod_foot/faces.json").json()
+    face = {k: v for k, v in d["faces"][0].items() if k != "tris"}
+    edge = {k: v for k, v in d["edges"][0].items() if k not in ("segs", "p")}
+    items = [{"kind": "face", **face}, {"kind": "edge", **edge}, {"kind": "vertex", "at": d["points"][0]["at"]}, {"kind": "part", "name": "rod_foot"}]
+    client.post(f"{w}/api/p/starter/selection", json={"note": "rod_foot", "mode": "edge", "count": 4, "items": items, "measure": {"length, mm": 45}})
+    sel = client.get(f"{w}/agent/selection", params={"project": "starter"}).json()
+    assert sel["selected"] and sel["mode"] == "edge" and sel["count"] == 4 and sel["measure"] == {"length, mm": 45}
+    assert [i["kind"] for i in sel["items"]] == ["face", "edge", "vertex", "part"]
+    assert sel["items"][0]["selector"]["kind"] == "planar_face" and "selector" not in sel["items"][1]
+    assert sel["items"][1]["type"] == "line" and sel["items"][2]["at"] == d["points"][0]["at"]
+    client.post(f"{w}/api/p/starter/selection", json={})               # cleared in the canvas
+    assert not client.get(f"{w}/agent/selection", params={"project": "starter"}).json()["selected"]
+
+
 def test_checks_are_the_persons_to_change(client, reg):
     n = f"/w/{reg['id']}/api/p/starter/n/rod_foot"
     assert client.post(f"{n}/checks", json={"what": "size_x", "max": 40, "why": "fits the drawer"}).json()["report"]["green"] is False

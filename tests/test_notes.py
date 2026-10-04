@@ -77,3 +77,30 @@ def test_status_says_which_note_is_the_assembly(workspaces):
     assert kinds["rakis"] == "assembly" and kinds["nest_front"] == "note" and kinds["grid_neg_1"] == "note" and kinds["rakis_common"] == "module"
     fresh.report("rakis")                                                # built: told from its parts
     assert {n["name"]: n["kind"] for n in fresh.status()["notes"]}["rakis"] == "assembly"
+
+
+def test_edges_and_points_can_be_pointed_at(ws):
+    """Every edge and corner point of a build is plain data with its number, so the canvas can select it."""
+    project = ws.project("starter")
+    project.report("rod_foot")
+    d = json.loads((project.out / "rod_foot" / "faces.json").read_text())
+    assert len(d["edges"]) == 24 and len(d["points"]) == 16          # a box with a square tunnel through it
+    assert [e["i"] for e in d["edges"]] == list(range(24)) and [v["i"] for v in d["points"]] == list(range(16))
+    assert {e["type"] for e in d["edges"]} == {"line"} and sorted({e["len"] for e in d["edges"]}) == [16.4, 22.4, 45.0]
+    seg = 0
+    for e in d["edges"]:
+        assert e["segs"][0] == seg and e["p"] == 0
+        seg += e["segs"][1]
+    assert seg == d["parts"][0]["edges"][1]
+    assert d["parts"][0]["name"] == "rod_foot"                        # a plain part goes by the name of its Note
+    assert [-22.5, -11.2, 0.0] in [v["at"] for v in d["points"]]
+
+    asm = ws.project("mg400_rakis")
+    asm.report("rakis")
+    a = json.loads((asm.out / "rakis" / "faces.json").read_text())
+    assert [v["i"] for v in a["points"]] == list(range(len(a["points"])))
+    assert {e["type"] for e in a["edges"]} == {"line", "circle", "other"}
+    last = a["parts"][-1]
+    assert all(e["p"] == len(a["parts"]) - 1 for e in a["edges"] if e["segs"][0] >= last["edges"][0])
+    circle = next(e for e in a["edges"] if e["type"] == "circle")
+    assert circle["r"] > 0 and len(circle["c"]) == 3

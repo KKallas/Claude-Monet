@@ -121,16 +121,25 @@ def look(c: Caller, project: str, note: str, views: str = "iso,top,front,right",
 
 
 def selection(c: Caller, project: str) -> dict:
-    """What the user is pointing at in the canvas right now: the Note, the face they clicked (its kind, where it is,
-    its size), the part it belongs to when the Note is an assembly, the tag it already has if any, and the selector
-    that would find it again. Call it when the user says
-    "this face", "here", "that hole"."""
+    """What the user has selected in the canvas right now. They pick points, lines (edges), faces or objects (the
+    parts of an assembly), one or many. `items` lists them: a face with its kind, place, size and the `selector`
+    that would find it again as a tag; an edge with its type, length and ends; a point with its coordinates; an
+    object with its name and box. `measure` is what the canvas worked out from the selection (the distance between
+    two points or two parallel faces, total length, total area). When exactly one face is selected, `face`,
+    `selector` and `part` describe it directly. Call this when the user says "this face", "these edges", "here"."""
     c.ws.project(project)
     s = _selection.get((c.ws.id, project))
     if not s:
-        return {"selected": False, "hint": f"nothing is selected; ask the user to click a face in the canvas: {c.canvas(project)}"}
-    out = {"selected": True, "note": s.get("note"), "seconds_ago": round(time.time() - s["at"]), "face": s.get("face"),
-           "point": s.get("point"), "tags": s.get("tags", [])}
+        return {"selected": False, "hint": f"nothing is selected; ask the user to click in the canvas: {c.canvas(project)}"}
+    items = []
+    for item in (s.get("items") or [])[:100]:
+        item = dict(item)
+        if item.get("kind") == "face" and item.get("type"):
+            item["selector"] = tagging.propose(item)
+        items.append(item)
+    out = {"selected": True, "note": s.get("note"), "seconds_ago": round(time.time() - s["at"]), "mode": s.get("mode", "face"),
+           "count": s.get("count", len(items) or 1), "items": items, "measure": s.get("measure") or {},
+           "face": s.get("face"), "point": s.get("point"), "tags": s.get("tags", [])}
     if s.get("part"):      # in an assembly: which part the face belongs to
         out["part"] = s["part"]
     if s.get("face"):

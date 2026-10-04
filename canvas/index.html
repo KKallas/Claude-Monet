@@ -23,15 +23,23 @@
   </header>
 
   <aside>
-    <p class="head">Notes</p>
-    <div id="notes"></div>
-    <p class="head" style="margin-top:18px">Versions</p>
-    <div id="versions"></div>
+    <section data-card="side-notes">
+      <div class="fold" data-fold="side-notes"><span class="chev"></span><span class="head">Notes</span></div>
+      <div class="body" id="notes"></div>
+    </section>
+    <section data-card="side-versions">
+      <div class="fold" data-fold="side-versions"><span class="chev"></span><span class="head">Versions</span></div>
+      <div class="body" id="versions"></div>
+    </section>
   </aside>
 
   <div class="view" id="view">
     <canvas id="gl"></canvas>
+    <div id="marquee" hidden></div>
     <div class="bar top">
+      <button data-sel="vertex" title="select corner points">Points</button><button data-sel="edge" title="select edges">Lines</button><button data-sel="face" class="on" title="select faces">Faces</button><button data-sel="part" title="select whole objects: the parts of an assembly">Objects</button>
+      <button id="boxTool" title="while on, a plain drag selects with a box instead of turning the view (Shift-drag and Ctrl-drag always do)">Box</button>
+      <span class="sep"></span>
       <button data-cam="fit" title="fit to view">Fit</button>
       <button data-cam="iso">Iso</button><button data-cam="top">Top</button><button data-cam="front">Front</button><button data-cam="right">Right</button>
       <span class="sep"></span>
@@ -56,7 +64,7 @@
       <button id="compareOff">×</button>
     </div>
     <div class="busy" id="busy" hidden>building…</div>
-    <div class="hint">drag: orbit · right-drag: pan · wheel: zoom · click a face to point at it</div>
+    <div class="hint">drag: orbit · right-drag: pan · wheel: zoom<br>click: select · Shift: add · Ctrl: take away · Shift- or Ctrl-drag: box</div>
   </div>
 
   <div class="panel" id="panel"></div>

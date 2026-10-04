@@ -38,12 +38,12 @@ def _vec(v):
     return [round(float(x), 6) for x in (v.X, v.Y, v.Z)]
 
 
-def leaves(shape, prefix=""):
+def leaves(shape, prefix="", unnamed="part"):
     """The parts of what build() returned: the labelled children of a compound, down to those without children of
     their own. A plain part is its own single leaf."""
     kids = list(getattr(shape, "children", ()) or ())
     if not kids:
-        return [(prefix or getattr(shape, "label", "") or "part", shape)]
+        return [(prefix or getattr(shape, "label", "") or unnamed, shape)]
     out = []
     for i, kid in enumerate(kids):
         name = getattr(kid, "label", "") or f"part_{i + 1}"
@@ -51,9 +51,10 @@ def leaves(shape, prefix=""):
     return out
 
 
-def parts_of(shape):
-    """[(name, shape)] with unique names. Several loose solids without names are parts too."""
-    found = leaves(shape)
+def parts_of(shape, note="part"):
+    """[(name, shape)] with unique names. Several loose solids without names are parts too; a plain part goes by
+    the name of its Note."""
+    found = leaves(shape, unnamed=note)
     if len(found) == 1 and len(found[0][1].solids()) > 1:
         found = [(f"solid_{i + 1}", s) for i, s in enumerate(found[0][1].solids())]
     seen, out = {}, []
@@ -99,22 +100,36 @@ def describe(shape, groups):
     return faces, verts, tris, parts
 
 
-def edge_segments(groups, parts):
-    """The real edges of the part as line segments, so the preview is drawn like a drawing, not like a mesh.
-    Part by part, like the triangles, so a part can be moved or hidden with its edges."""
+def edges_and_points(groups, parts):
+    """The real edges of the part as line segments, so the preview is drawn like a drawing, not like a mesh; and
+    each edge and each corner point as plain data, so they can be pointed at. Part by part, like the triangles,
+    so a part can be moved or hidden with its edges."""
     from build123d import GeomType
-    segs = []
-    for (_, sub), part in zip(groups, parts):
+    at = lambda v: [round(v.X, 4), round(v.Y, 4), round(v.Z, 4)]
+    segs, edges, points = [], [], []
+    for index, ((_, sub), part) in enumerate(zip(groups, parts)):
         start = len(segs)
         for e in sub.edges():
+            first, a, b = len(segs), e.position_at(0), e.position_at(1)
+            d = {"i": len(edges), "p": index, "type": "other", "len": round(e.length, 3), "a": at(a), "b": at(b)}
             if e.geom_type == GeomType.LINE:
-                pts = [e.position_at(0), e.position_at(1)]
+                d["type"] = "line"
+                pts = [a, b]
             else:
                 n = max(6, min(48, int(e.length / 1.5)))
                 pts = [e.position_at(k / n) for k in range(n + 1)]
-            segs.extend(((a.X, a.Y, a.Z), (b.X, b.Y, b.Z)) for a, b in zip(pts, pts[1:]))
+                if e.geom_type == GeomType.CIRCLE:
+                    try:
+                        d.update(type="circle", r=round(e.radius, 4), c=at(e.arc_center))
+                    except Exception:   # an arc the kernel will not describe: it stays "other"
+                        pass
+            segs.extend(((p.X, p.Y, p.Z), (q.X, q.Y, q.Z)) for p, q in zip(pts, pts[1:]))
+            d["segs"] = [first, len(segs) - first]
+            edges.append(d)
         part["edges"] = [start, len(segs) - start]
-    return segs
+        base = len(points)
+        points.extend({"i": base + k, "p": index, "at": at(v)} for k, v in enumerate(sub.vertices()))
+    return segs, edges, points
 
 
 def write_glb(path: Path, verts, tris, segs):
@@ -199,7 +214,7 @@ def run(project_dir: Path, note: str, out_dir: Path, exports=()) -> dict:
         result["build_seconds"] = round(time.time() - t0, 2)
         result["fingerprint"] = semmelweis.fingerprint(shape)
         result["valid"] = bool(shape.is_valid)
-        groups = parts_of(shape)
+        groups = parts_of(shape, note)
         faces, verts, tris, parts = describe(shape, groups)
         from build123d import Vector
         solids = shape.solids()
@@ -208,8 +223,9 @@ def run(project_dir: Path, note: str, out_dir: Path, exports=()) -> dict:
         result["params"] = getattr(mod, "PARAMS", {})
         result["doc"] = (mod.__doc__ or "").strip()
         result["triangles"] = len(tris)
-        write_glb(out_dir / "model.glb", verts, tris, edge_segments(groups, parts))
-        (out_dir / "faces.json").write_text(json.dumps({"faces": faces, "parts": parts}))
+        segs, edges, points = edges_and_points(groups, parts)
+        write_glb(out_dir / "model.glb", verts, tris, segs)
+        (out_dir / "faces.json").write_text(json.dumps({"faces": faces, "parts": parts, "edges": edges, "points": points}, separators=(",", ":")))
         result["parts"] = [{k: part[k] for k in ("name", "volume", "bbox", "faces")} for part in parts]
         if "stl" in exports:
             from build123d import export_stl

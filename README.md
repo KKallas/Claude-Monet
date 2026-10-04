@@ -118,9 +118,16 @@ compared and exported.
 ### Canvas: the browser view
 
 - Orbit, section plane and X-ray, to see inside parts (tunnels, pockets, cable channels).
-- **Tagging**: click a face, edge, vertex or whole object and name it ("this face
-  sits on the plywood", "this bore takes the 16 mm rod"). The tag is written into
-  the Note.
+- **Selecting**: points, lines, faces or whole objects, chosen in the toolbar. A click
+  selects, Shift adds, Ctrl (or Cmd) takes away; a drag with Shift or Ctrl held, or any
+  drag with Box on, selects with a box (left to right takes what it touches, right to
+  left only what is wholly inside). The panel says what is selected and what it adds up
+  to (a distance, a length, an area), and the agent sees the same.
+- **Tagging**: select a face and name it ("this face sits on the plywood", "this bore
+  takes the 16 mm rod"). The tag is written into the Note. (Tags of edges, points and
+  whole objects are not there yet.)
+- **Panels fold**: every panel on either side shuts on a click on its head and stays as
+  it was left.
 - **Diff**: model A coloured by its distance to B (what was removed) and B by
   its distance to A (what was added). The colour scale is clamped to the printer's
   tolerance, so only changes that matter for printing show up. Tagged features are
@@ -232,7 +239,8 @@ it wider.
 - Checks that need more geometry than a fingerprint: minimum wall, maximum solid
   thickness, overhangs, interference between the parts of an assembly (in the sample the
   nest's mouse ears overlap their neighbours by about 55 mm³ each; nothing reports it yet).
-- Canvas: Series (versions side by side), tagging edges and vertices, section caps.
+- Canvas: Series (versions side by side), section caps. Edges, points and objects can be
+  selected and measured but not yet tagged.
 - Translation to Fusion / Onshape, and STEP import ("step 0").
 - Profiles are data only: hole and shaft compensation is not applied to geometry yet.
 - The ten-edit experiment below has not been run.

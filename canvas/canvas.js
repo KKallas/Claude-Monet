@@ -3,6 +3,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -20,8 +23,13 @@ async function api(path, method = 'GET', body) {
   return data;
 }
 
+// what is selected: any mix of points, lines, faces and objects, by their number in this build
+const nothing = () => ({ vertex: new Set(), edge: new Set(), face: new Set(), part: new Set() });
+const NAMES = { vertex: ['point', 'points'], edge: ['line', 'lines'], face: ['face', 'faces'], part: ['object', 'objects'] };
+
 // what is on screen
-const S = { state: null, project: null, proj: null, note: null, data: null, faces: [], parts: [], part: null, hotPart: null, hidden: new Set(), face: null, hot: null, rev: null, compare: null, message: '', saveResult: null };
+const S = { state: null, project: null, proj: null, note: null, data: null, faces: [], parts: [], edges: [], points: [], hotPart: null, hidden: new Set(),
+  mode: 'face', sel: nothing(), boxTool: false, point: null, hot: null, rev: null, compare: null, message: '', saveResult: null };
 
 // ---- the 3D view -------------------------------------------------------------------------------------
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);   // millimetres, Z up, as in the Notes
@@ -48,11 +56,17 @@ const box = new THREE.Box3(), size = new THREE.Vector3(), centre = new THREE.Vec
 let radius = 100, meshes = [], shared = null, edgesOn = true, xray = false, sectionOn = false, explode = 0, partColours = true;
 const home = new THREE.Vector3();   // the middle of the assembly as it is put together
 
+// selected lines and points are drawn over everything, thick enough to see
+const selLines = new LineSegments2(new LineSegmentsGeometry(), new LineMaterial({ color: 0xffd23f, linewidth: 3.5, depthTest: false, transparent: true }));
+const selDots = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0xffd23f, size: 11, sizeAttenuation: false, depthTest: false, transparent: true }));
+for (const o of [selLines, selDots]) { o.renderOrder = 10; o.frustumCulled = false; o.visible = false; scene.add(o); }
+
 const material = () => new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0, roughness: 0.8, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 
 function resize() {
   const w = view.clientWidth, h = view.clientHeight;
   renderer.setSize(w, h, false);
+  selLines.material.resolution.set(w, h);
   const half = radius * 1.2, aspect = w / Math.max(1, h);
   Object.assign(camera, { left: -half * aspect, right: half * aspect, top: half, bottom: -half, near: 0.01, far: radius * 40 });
   camera.updateProjectionMatrix();
@@ -111,8 +125,8 @@ function assemble({ mesh, lines }) {
   groups.part.clear();
   if (!mesh) return;
   const g = mesh.geometry;
-  shared = { colour: g.attributes.color, index: g.index.array };
-  const parts = S.parts.length ? S.parts : [{ tris: [0, g.index.count / 3], edges: [0, lines ? lines.geometry.attributes.position.count / 2 : 0] }];
+  shared = { colour: g.attributes.color, index: g.index.array, position: g.attributes.position.array, segs: lines ? lines.geometry.attributes.position.array : new Float32Array(0) };
+  const parts = S.parts.length ? S.parts : [{ tris: [0, g.index.count / 3], edges: [0, shared.segs.length / 6] }];
   parts.forEach((part, i) => {
     const pg = new THREE.BufferGeometry();
     for (const k of ['position', 'normal', 'color']) pg.setAttribute(k, g.attributes[k]);
@@ -134,10 +148,22 @@ function assemble({ mesh, lines }) {
       l.userData.edges = true;
       one.add(l);
     }
+    // the corner points, shown while points are what is being picked
+    const mine = S.points.filter((v) => v.p === i).flatMap((v) => v.at);
+    if (mine.length) {
+      const dg = new THREE.BufferGeometry();
+      dg.setAttribute('position', new THREE.Float32BufferAttribute(mine, 3));
+      const dots = new THREE.Points(dg, new THREE.PointsMaterial({ color: 0x10131b, size: 5, sizeAttenuation: false }));
+      dots.userData.dots = true;
+      one.add(dots);
+    }
     groups.part.add(one);
     meshes.push(m);
   });
 }
+
+const ZERO = new THREE.Vector3();
+const offsetOf = (part) => groups.part.children[part]?.position ?? ZERO;   // where an exploded part has gone
 
 // pull the parts away from the middle of the assembly, each along its own direction
 function spread() {
@@ -146,12 +172,15 @@ function spread() {
     if (b) one.position.set((b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2).sub(home).multiplyScalar(explode);
     one.visible = !S.hidden.has(one.userData.part);
   }
+  showSelection();
 }
 
 function styleAll() {
   for (const [key, g] of Object.entries(groups)) {
     g.traverse((o) => {
-      if (o.userData.edges) { o.visible = edgesOn; o.material.clippingPlanes = sectionOn && key === 'part' ? [cut] : []; return; }
+      if (o.userData.dots) { o.visible = S.mode === 'vertex'; return; }
+      // lines are always drawn while lines are what is being picked
+      if (o.userData.edges) { o.visible = edgesOn || (key === 'part' && S.mode === 'edge'); o.material.clippingPlanes = sectionOn && key === 'part' ? [cut] : []; return; }
       if (!o.isMesh) return;
       const m = o.material;
       m.clippingPlanes = key === 'part' ? (sectionOn ? [cut] : []) : (S.compare?.mode === 'wipe' ? [key === 'a' ? wipeA : wipeB] : []);
@@ -171,22 +200,22 @@ function setSection() {
   wipeA.constant = x; wipeB.constant = -x;
 }
 
-// colour the faces: tagged ones on hover, the one that is pointed at
+// colour the faces: the parts of an assembly, tagged faces on hover, what is selected
 function paint() {
   if (!shared) return;
   const colour = shared.colour, index = shared.index;
   for (let i = 0; i < colour.count; i++) BASE.toArray(colour.array, i * 3);
   const range = (start, count, c) => { for (let k = start * 3; k < (start + count) * 3; k++) c.toArray(colour.array, index[k] * 3); };
   const fill = (ids, c) => { for (const id of ids) { const f = S.faces[id]; if (f) range(f.tris[0], f.tris[1], c); } };
-  if (S.parts.length > 1) {
-    S.parts.forEach((part, i) => {
-      const lit = i === S.part || i === S.hotPart;
-      if (partColours || lit) range(part.tris[0], part.tris[1], new THREE.Color(PARTS[i % PARTS.length]).lerp(new THREE.Color('#ffffff'), lit ? 0.45 : 0));
-    });
-  }
+  const many = S.parts.length > 1;
+  S.parts.forEach((part, i) => {
+    const picked = S.sel.part.has(i), lit = picked || i === S.hotPart;
+    if (many && (partColours || lit)) range(part.tris[0], part.tris[1], new THREE.Color(PARTS[i % PARTS.length]).lerp(picked ? PICK : new THREE.Color('#ffffff'), lit ? 0.5 : 0));
+    else if (picked) range(part.tris[0], part.tris[1], BASE.clone().lerp(PICK, 0.6));
+  });
   const tags = Object.keys(S.data?.tags ?? {});
   tags.forEach((name, n) => { if (S.hot === name || S.hot === '*') fill(S.data.tag_faces?.[name] ?? [], new THREE.Color(PALETTE[n % PALETTE.length])); });
-  if (S.face) fill([S.face.i], PICK);
+  fill(S.sel.face, PICK);
   colour.needsUpdate = true;
 }
 
@@ -195,24 +224,223 @@ function faceOfTriangle(t) {
   while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (S.faces[mid].tris[0] <= t) lo = mid; else hi = mid - 1; }
   return S.faces[lo];
 }
+const partOfFace = (i) => S.parts.findIndex((p) => i >= p.faces[0] && i < p.faces[0] + p.faces[1]);
 
-// a click (not a drag) points at a face
-let down = null;
-canvas.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
-canvas.addEventListener('pointerup', (e) => {
-  if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4 || !meshes.length || S.compare) return;
+// ---- selecting: points, lines, faces, objects ----------------------------------------------------------------
+// A click picks one; Shift adds, Ctrl (or Cmd) takes away. A drag with Shift or Ctrl held, or any drag while the
+// Box tool is on, draws a box: left to right it takes whatever it touches, right to left only what is wholly inside.
+
+// from where a thing is to where it is on the screen (canvas pixels) and how deep (smaller is nearer)
+function projector() {
+  camera.updateMatrixWorld();
+  const e = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).elements;
   const r = canvas.getBoundingClientRect();
-  const ray = new THREE.Raycaster();
-  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  return (x, y, z) => [(e[0] * x + e[4] * y + e[8] * z + e[12] + 1) / 2 * r.width, (1 - (e[1] * x + e[5] * y + e[9] * z + e[13])) / 2 * r.height,
+    e[2] * x + e[6] * y + e[10] * z + e[14]];
+}
+
+function toSegment(px, py, ax, ay, bx, by) {   // how far, and how far along
+  const dx = bx - ax, dy = by - ay, len = dx * dx + dy * dy;
+  const t = len ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len)) : 0;
+  return [Math.hypot(px - ax - t * dx, py - ay - t * dy), t];
+}
+
+function pick(x, y) {
+  const r = canvas.getBoundingClientRect(), ray = new THREE.Raycaster();
+  ray.setFromCamera(new THREE.Vector2((x / r.width) * 2 - 1, -(y / r.height) * 2 + 1), camera);
   const hit = ray.intersectObjects(meshes.filter((m) => m.parent.visible), false).find((h) => !sectionOn || cut.distanceToPoint(h.point) >= 0);
-  S.face = hit ? faceOfTriangle(hit.faceIndex) : null;
-  S.part = hit && S.parts.length > 1 ? hit.object.userData.part : null;
   // where on the part, not where on the screen: an exploded part has been moved
   S.point = hit ? hit.point.clone().sub(hit.object.parent.position).toArray().map((v) => Math.round(v * 100) / 100) : null;
-  paint(); renderPanel(true);
-  const tags = Object.entries(S.data?.tag_faces ?? {}).filter(([, ids]) => S.face && ids.includes(S.face.i)).map(([k]) => k);
-  api(`/p/${S.project}/selection`, 'POST', S.face ? { note: S.note, face: S.face, point: S.point, tags, part: S.parts[S.part]?.name ?? null } : {}).catch(() => {});
+  if (S.mode === 'face') return hit ? { kind: 'face', i: faceOfTriangle(hit.faceIndex).i } : null;
+  if (S.mode === 'part') return hit ? { kind: 'part', i: hit.object.userData.part } : null;
+  // points and lines are too thin to hit: take the nearest one within reach of the cursor that is not behind the surface
+  const to = projector(), front = hit ? to(hit.point.x, hit.point.y, hit.point.z)[2] : Infinity;
+  const slack = 2 / (camera.far - camera.near);   // a millimetre of depth: an edge lies on the faces it bounds
+  let best = null;
+  if (S.mode === 'vertex') {
+    for (const v of S.points) {
+      if (S.hidden.has(v.p)) continue;
+      const o = offsetOf(v.p), [px, py, pz] = to(v.at[0] + o.x, v.at[1] + o.y, v.at[2] + o.z), d = Math.hypot(px - x, py - y);
+      if (d < 10 && pz <= front + slack && (!best || d < best.d)) best = { kind: 'vertex', i: v.i, d };
+    }
+  } else {
+    const s = shared.segs;
+    for (const e of S.edges) {
+      if (S.hidden.has(e.p)) continue;
+      const o = offsetOf(e.p);
+      for (let k = e.segs[0] * 6; k < (e.segs[0] + e.segs[1]) * 6; k += 6) {
+        const a = to(s[k] + o.x, s[k + 1] + o.y, s[k + 2] + o.z), b = to(s[k + 3] + o.x, s[k + 4] + o.y, s[k + 5] + o.z);
+        const [d, t] = toSegment(x, y, a[0], a[1], b[0], b[1]);
+        if (d < 8 && a[2] + (b[2] - a[2]) * t <= front + slack && (!best || d < best.d)) best = { kind: 'edge', i: e.i, d };
+      }
+    }
+  }
+  return best;
+}
+
+function hitsBox(ax, ay, bx, by, x0, y0, x1, y1) {   // does any of the segment lie inside the box (Liang–Barsky)
+  let t0 = 0, t1 = 1;
+  const dx = bx - ax, dy = by - ay;
+  for (const [p, q] of [[-dx, ax - x0], [dx, x1 - ax], [-dy, ay - y0], [dy, y1 - ay]]) {
+    if (p === 0) { if (q < 0) return false; continue; }
+    const t = q / p;
+    if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; } else { if (t < t0) return false; if (t < t1) t1 = t; }
+  }
+  return true;
+}
+
+function boxPick(x0, y0, x1, y1, touching) {
+  const to = projector(), inside = (p) => p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1, out = [];
+  if (S.mode === 'vertex') {
+    for (const v of S.points) {
+      const o = offsetOf(v.p);
+      if (!S.hidden.has(v.p) && inside(to(v.at[0] + o.x, v.at[1] + o.y, v.at[2] + o.z))) out.push({ kind: 'vertex', i: v.i });
+    }
+  } else if (S.mode === 'edge') {
+    const s = shared.segs;
+    for (const e of S.edges) {
+      if (S.hidden.has(e.p)) continue;
+      const o = offsetOf(e.p);
+      let any = false, all = true;
+      for (let k = e.segs[0] * 6; k < (e.segs[0] + e.segs[1]) * 6 && (touching ? !any : all); k += 6) {
+        const a = to(s[k] + o.x, s[k + 1] + o.y, s[k + 2] + o.z), b = to(s[k + 3] + o.x, s[k + 4] + o.y, s[k + 5] + o.z);
+        if (inside(a) && inside(b)) any = true; else { all = false; if (hitsBox(a[0], a[1], b[0], b[1], x0, y0, x1, y1)) any = true; }
+      }
+      if (touching ? any : all) out.push({ kind: 'edge', i: e.i });
+    }
+  } else {
+    // faces and objects: by the corners of their triangles
+    const pos = shared.position, index = shared.index;
+    const test = (start, count, o) => {
+      let any = false, all = true;
+      for (let k = start * 3; k < (start + count) * 3 && (touching ? !any : all); k++) {
+        const v = index[k] * 3;
+        if (inside(to(pos[v] + o.x, pos[v + 1] + o.y, pos[v + 2] + o.z))) any = true; else all = false;
+      }
+      return touching ? any : all;
+    };
+    S.parts.forEach((part, p) => {
+      if (S.hidden.has(p)) return;
+      const o = offsetOf(p);
+      if (S.mode === 'part') { if (test(part.tris[0], part.tris[1], o)) out.push({ kind: 'part', i: p }); return; }
+      for (let i = part.faces[0]; i < part.faces[0] + part.faces[1]; i++) if (test(S.faces[i].tris[0], S.faces[i].tris[1], o)) out.push({ kind: 'face', i });
+    });
+    // a box drawn wholly inside one big face touches it without holding any of its corners
+    const under = touching && pick((x0 + x1) / 2, (y0 + y1) / 2);
+    if (under) out.push(under);
+  }
+  return out;
+}
+
+function select(items, how) {
+  if (!how.add && !how.remove) S.sel = nothing();
+  for (const { kind, i } of items) (how.remove ? S.sel[kind].delete(i) : S.sel[kind].add(i));
+  selectionChanged();
+}
+
+function showSelection() {
+  paint();
+  const lines = [], dots = [];
+  if (shared) {
+    for (const i of S.sel.edge) {
+      const e = S.edges[i]; if (!e) continue;
+      const o = offsetOf(e.p), s = shared.segs;
+      for (let k = e.segs[0] * 6; k < (e.segs[0] + e.segs[1]) * 6; k += 3) lines.push(s[k] + o.x, s[k + 1] + o.y, s[k + 2] + o.z);
+    }
+    for (const i of S.sel.vertex) { const v = S.points[i]; if (v) { const o = offsetOf(v.p); dots.push(v.at[0] + o.x, v.at[1] + o.y, v.at[2] + o.z); } }
+  }
+  selLines.visible = lines.length > 0 && !S.compare;
+  if (lines.length) { selLines.geometry.dispose(); selLines.geometry = new LineSegmentsGeometry().setPositions(lines); }
+  selDots.visible = dots.length > 0 && !S.compare;
+  selDots.geometry.dispose();
+  selDots.geometry = new THREE.BufferGeometry();
+  selDots.geometry.setAttribute('position', new THREE.Float32BufferAttribute(dots, 3));
+}
+
+const count = () => S.sel.vertex.size + S.sel.edge.size + S.sel.face.size + S.sel.part.size;
+// the one face, when a single face is all that is selected: what a tag can be made of
+const theFace = () => (S.sel.face.size === 1 && count() === 1 ? S.faces[[...S.sel.face][0]] : null);
+const partName = (p) => (S.parts.length > 1 ? S.parts[p]?.name ?? null : null);
+const r2 = (v) => Math.round(v * 100) / 100;
+
+// what the selection adds up to: said to the person in the panel and to the agent in selection()
+function measures() {
+  const V = [...S.sel.vertex].map((i) => S.points[i]).filter(Boolean), E = [...S.sel.edge].map((i) => S.edges[i]).filter(Boolean);
+  const F = [...S.sel.face].map((i) => S.faces[i]).filter(Boolean), out = {};
+  if (E.length) out[E.length > 1 ? 'total length, mm' : 'length, mm'] = r2(E.reduce((a, e) => a + e.len, 0));
+  if (E.length === 1 && E[0].type === 'circle') out['diameter, mm'] = r2(2 * E[0].r);
+  if (F.length) out[F.length > 1 ? 'total area, mm²' : 'area, mm²'] = r2(F.reduce((a, f) => a + f.area, 0));
+  if (V.length === 2 && count() === 2) {
+    const d = V[1].at.map((v, k) => v - V[0].at[k]);
+    out['distance, mm'] = r2(Math.hypot(...d));
+    out['dx, dy, dz'] = d.map(r2).join(', ');
+  }
+  if (F.length === 2 && count() === 2 && F.every((f) => f.type === 'plane')) {
+    const n = F[0].normal, dot = n.reduce((a, v, k) => a + v * F[1].normal[k], 0);
+    if (Math.abs(Math.abs(dot) - 1) < 1e-4) out['distance between the faces, mm'] = r2(Math.abs(n.reduce((a, v, k) => a + v * (F[1].center[k] - F[0].center[k]), 0)));
+    else out['angle between the faces, °'] = r2(Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI);
+  }
+  return out;
+}
+
+function selectedItems() {
+  const out = [];
+  for (const i of S.sel.part) { const p = S.parts[i]; if (p) out.push({ kind: 'part', name: p.name, volume: p.volume, bbox: p.bbox }); }
+  for (const i of S.sel.face) { const f = S.faces[i]; if (f) { const { tris, ...rest } = f; out.push({ kind: 'face', ...rest, part: partName(partOfFace(i)) }); } }
+  for (const i of S.sel.edge) { const e = S.edges[i]; if (e) { const { segs, p, ...rest } = e; out.push({ kind: 'edge', ...rest, part: partName(p) }); } }
+  for (const i of S.sel.vertex) { const v = S.points[i]; if (v) out.push({ kind: 'vertex', at: v.at, part: partName(v.p) }); }
+  return out;
+}
+
+function selectionChanged() {
+  showSelection(); renderPanel(true);
+  if (!S.project || !S.note) return;
+  const items = selectedItems(), face = theFace();
+  const tags = Object.entries(S.data?.tag_faces ?? {}).filter(([, ids]) => face && ids.includes(face.i)).map(([k]) => k);
+  // the agent is told what is pointed at: selection() on its side
+  api(`/p/${S.project}/selection`, 'POST', items.length ? { note: S.note, mode: S.mode, count: items.length, items: items.slice(0, 100), measure: measures(),
+    face, point: face ? S.point : null, tags, part: face ? partName(partOfFace(face.i)) : null } : {}).catch(() => {});
+}
+
+let press = null;
+const marquee = $('#marquee');
+view.addEventListener('pointerdown', (e) => {   // before the orbit controls see it: a drag that draws a box must not turn the view
+  if (e.target !== canvas || e.button !== 0) return;
+  const boxing = !S.compare && meshes.length > 0 && (S.boxTool || e.shiftKey || e.ctrlKey || e.metaKey);
+  press = { x: e.clientX, y: e.clientY, boxing, add: e.shiftKey, remove: e.ctrlKey || e.metaKey, moved: false };
+  if (boxing) controls.enabled = false;
+}, true);
+window.addEventListener('pointermove', (e) => {
+  if (!press?.boxing) return;
+  if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4) press.moved = true;
+  if (!press.moved) return;
+  const r = view.getBoundingClientRect();
+  Object.assign(marquee.style, { left: `${Math.min(e.clientX, press.x) - r.left}px`, top: `${Math.min(e.clientY, press.y) - r.top}px`,
+    width: `${Math.abs(e.clientX - press.x)}px`, height: `${Math.abs(e.clientY - press.y)}px` });
+  marquee.classList.toggle('touching', e.clientX >= press.x);
+  marquee.hidden = false;
 });
+window.addEventListener('pointerup', (e) => {
+  if (!press) return;
+  const p = press, r = canvas.getBoundingClientRect();
+  press = null; controls.enabled = true; marquee.hidden = true;
+  if (!meshes.length || S.compare) return;
+  if (p.boxing && p.moved) {
+    select(boxPick(Math.min(e.clientX, p.x) - r.left, Math.min(e.clientY, p.y) - r.top, Math.max(e.clientX, p.x) - r.left, Math.max(e.clientY, p.y) - r.top, e.clientX >= p.x), p);
+  } else if (Math.hypot(e.clientX - p.x, e.clientY - p.y) <= 4 && e.target === canvas) {
+    const one = pick(e.clientX - r.left, e.clientY - r.top);
+    select(one ? [one] : [], p);
+  }
+});
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());   // Ctrl-click on a Mac is a selection, not a menu
+
+function setMode(mode) {
+  S.mode = mode;
+  document.querySelectorAll('[data-sel]').forEach((b) => b.classList.toggle('on', b.dataset.sel === mode));
+  styleAll(); renderPanel();
+}
+document.querySelectorAll('[data-sel]').forEach((b) => { b.onclick = () => setMode(b.dataset.sel); });
+$('#boxTool').onclick = (e) => { S.boxTool = !S.boxTool; e.target.classList.toggle('on', S.boxTool); canvas.style.cursor = S.boxTool ? 'crosshair' : ''; };
 
 (function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
 
@@ -248,17 +476,18 @@ async function compare(a, b = 'draft') {
     await Promise.all([loadInto(groups.a, `${root}/p/${S.project}/n/${S.note}/diff.glb?${q}&side=a&r=${summary.stamp.slice(0, 12)}`),
       loadInto(groups.b, `${root}/p/${S.project}/n/${S.note}/diff.glb?${q}&side=b&r=${summary.stamp.slice(0, 12)}`)]);
     S.compare = { a, b, summary, mode: 'added', mix: 0.5 };
-    S.face = null;
+    S.sel = nothing();
+    showSelection();
     assemblyBar();
     $('#compare').hidden = false;
     $('#compareLabel').textContent = `v${a} → ${b === 'draft' ? 'draft' : 'v' + b}`;
     frame(groups.b, true);
-    setMode('added');
+    compareMode('added');
   } catch (e) { alert(e.message); }
   busy();
   renderPanel(true);
 }
-function setMode(mode) {
+function compareMode(mode) {
   clearInterval(blink);
   S.compare.mode = mode;
   document.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === mode));
@@ -274,9 +503,25 @@ function compareOff() {
   groups.a.clear(); groups.b.clear(); groups.part.visible = true;
   frame(groups.part, true); spread(); assemblyBar(); styleAll(); renderPanel(true);
 }
-document.querySelectorAll('[data-mode]').forEach((b) => { b.onclick = () => setMode(b.dataset.mode); });
+document.querySelectorAll('[data-mode]').forEach((b) => { b.onclick = () => compareMode(b.dataset.mode); });
 $('#mix').oninput = (e) => { S.compare.mix = Number(e.target.value); setSection(); styleAll(); };
 $('#compareOff').onclick = compareOff;
+
+// ---- folding: every panel on the side can be shut, and stays as it was left -----------------------------------
+const FOLDED_AT_FIRST = { source: true };
+let folds = {};
+try { folds = JSON.parse(localStorage.getItem('monet.folds') || '{}'); } catch { /* no storage: nothing is remembered */ }
+const folded = (key) => folds[key] ?? !!FOLDED_AT_FIRST[key];
+function fold(key) {
+  folds[key] = !folded(key);
+  try { localStorage.setItem('monet.folds', JSON.stringify(folds)); } catch { /* as above */ }
+  document.querySelectorAll(`[data-card="${key}"]`).forEach((c) => c.classList.toggle('folded', folds[key]));
+}
+// a card of the panel: a head that folds it (with something to its right) and a body
+const card = (key, head, body, right = '') => `<div class="card ${folded(key) ? 'folded' : ''}" data-card="${key}">
+  <div class="fold" data-fold="${key}"><span class="chev"></span><span class="head">${head}</span><span class="r">${right}</span></div><div class="body">${body}</div></div>`;
+document.querySelectorAll('aside [data-card]').forEach((c) => c.classList.toggle('folded', folded(c.dataset.card)));
+$('aside').addEventListener('click', (e) => { const f = e.target.closest('[data-fold]'); if (f) fold(f.dataset.fold); });
 
 // ---- loading -----------------------------------------------------------------------------------------------
 function busy(text) { $('#busy').hidden = !text; $('#busy').textContent = text || ''; }
@@ -307,9 +552,9 @@ async function open(project, note) {
   S.note = names.includes(note) ? note : (S.proj.notes.find((n) => n.kind === 'assembly')?.name ?? S.proj.notes.find((n) => n.kind === 'note')?.name ?? names[0] ?? null);
   history.replaceState(null, '', `#${project}${S.note ? '/' + S.note : ''}`);
   $('#project').value = project;
-  if (changedNote) { S.face = null; S.saveResult = null; S.part = S.hotPart = null; S.hidden = new Set(); explode = 0; }
+  if (changedNote) { S.sel = nothing(); S.saveResult = null; S.hotPart = null; S.hidden = new Set(); explode = 0; }
   renderSide();
-  if (!S.note) { S.data = null; S.parts = []; assemble({}); assemblyBar(); renderPanel(true); return; }
+  if (!S.note) { S.data = null; S.parts = []; assemble({}); assemblyBar(); showSelection(); renderPanel(true); return; }
   busy('building…');
   try {
     S.data = await api(`/p/${project}/n/${S.note}`);
@@ -318,13 +563,14 @@ async function open(project, note) {
       const stamp = `r=${S.rev}`;
       const [loaded, described] = await Promise.all([loadInto(new THREE.Group(), `${root}/p/${project}/n/${S.note}/model.glb?${stamp}`, true),
         fetch(`${root}/p/${project}/n/${S.note}/faces.json?${stamp}`).then((r) => r.json())]);
-      S.faces = described.faces; S.parts = described.parts ?? [];
-      if (S.part != null && !S.parts[S.part]) S.part = null;
+      // numbers of faces, lines and points only mean something within one build: a rebuilt part starts unselected
+      const same = !changedNote && described.faces.length === S.faces.length && (described.edges ?? []).length === S.edges.length && (described.points ?? []).length === S.points.length;
+      if (!same) S.sel = nothing();
+      S.faces = described.faces; S.parts = described.parts ?? []; S.edges = described.edges ?? []; S.points = described.points ?? [];
       assemble(loaded);
-      if (S.face) S.face = S.faces.find((f) => f.i === S.face.i && f.type === S.face.type) ?? null;
       frame(groups.part, !changedNote);
       spread();
-    } else { S.faces = []; S.parts = []; assemble({}); }
+    } else { S.faces = []; S.parts = []; S.edges = []; S.points = []; S.sel = nothing(); assemble({}); showSelection(); }
     assemblyBar();
     S.proj = await api(`/p/${project}`);
     renderSide();
@@ -336,17 +582,42 @@ async function open(project, note) {
 // ---- the panel -----------------------------------------------------------------------------------------------
 const AX = ['X', 'Y', 'Z'];
 function words(f) {
-  const n = (v) => Math.round(v * 100) / 100;
   if (f.type === 'plane') {
     const i = f.normal.findIndex((v) => Math.abs(v) > 0.9999);
-    return i < 0 ? `flat face, slanted (normal ${f.normal.map(n).join(', ')}), ${n(f.area)} mm²`
-      : `flat face, facing ${f.normal[i] > 0 ? '+' : '−'}${AX[i]}, at ${AX[i].toLowerCase()} = ${n(f.center[i])}, ${n(f.area)} mm²`;
+    return i < 0 ? `flat face, slanted (normal ${f.normal.map(r2).join(', ')}), ${r2(f.area)} mm²`
+      : `flat face, facing ${f.normal[i] > 0 ? '+' : '−'}${AX[i]}, at ${AX[i].toLowerCase()} = ${r2(f.center[i])}, ${r2(f.area)} mm²`;
   }
-  if (f.type === 'cylinder') return `${f.concave ? 'round hole' : 'round boss'}, ⌀ ${n(2 * f.radius)} mm, axis ${f.axis.map(n).join(', ')}`;
-  return `curved face, ${n(f.area)} mm², around ${f.center.map(n).join(', ')}`;
+  if (f.type === 'cylinder') return `${f.concave ? 'round hole' : 'round boss'}, ⌀ ${r2(2 * f.radius)} mm, axis ${f.axis.map(r2).join(', ')}`;
+  return `curved face, ${r2(f.area)} mm², around ${f.center.map(r2).join(', ')}`;
+}
+function edgeWords(e) {
+  if (e.type === 'line') return `straight line, ${r2(e.len)} mm, from ${e.a.map(r2).join(', ')} to ${e.b.map(r2).join(', ')}`;
+  if (e.type === 'circle') return `${Math.abs(e.len - 2 * Math.PI * e.r) < 0.01 ? 'circle' : 'arc'}, ⌀ ${r2(2 * e.r)} mm, ${r2(e.len)} mm long, centre ${e.c.map(r2).join(', ')}`;
+  return `curve, ${r2(e.len)} mm long`;
 }
 const row = (k, v) => `<div class="row"><span class="k">${esc(k)}</span><span class="v">${v}</span></div>`;
 const fmt = (v) => (typeof v === 'number' ? String(Math.round(v * 1000) / 1000) : Array.isArray(v) ? v.map(fmt).join(', ') : esc(v));
+
+function selectionCard() {
+  const n = count(), face = theFace();
+  const lines = [];
+  const named = (p) => (partName(p) ? `<b>${esc(partName(p))}</b>: ` : '');
+  for (const i of S.sel.part) if (S.parts[i]) lines.push(`object <b>${esc(S.parts[i].name)}</b>, ${[0, 1, 2].map((k) => r2(S.parts[i].bbox[k + 3] - S.parts[i].bbox[k])).join(' × ')} mm`);
+  for (const i of S.sel.face) if (S.faces[i]) lines.push(named(partOfFace(i)) + esc(words(S.faces[i])));
+  for (const i of S.sel.edge) if (S.edges[i]) lines.push(named(S.edges[i].p) + esc(edgeWords(S.edges[i])));
+  for (const i of S.sel.vertex) if (S.points[i]) lines.push(`${named(S.points[i].p)}point at ${S.points[i].at.map(r2).join(', ')}`);
+  const kinds = Object.keys(NAMES).filter((k) => S.sel[k].size).map((k) => `${S.sel[k].size} ${NAMES[k][S.sel[k].size > 1 ? 1 : 0]}`).join(', ');
+  const body = n ? `${lines.slice(0, 8).map((l) => `<div class="check">${l}</div>`).join('')}
+      ${lines.length > 8 ? `<p class="muted">and ${lines.length - 8} more</p>` : ''}
+      ${Object.entries(measures()).map(([k, v]) => row(k, `<b>${fmt(v)}</b>`)).join('')}
+      ${face ? `<div class="line"><input id="tagName" placeholder="name it: base, rod_bore…" maxlength="40"><button class="primary" data-act="tag">Tag it</button></div>
+        <div class="line"><input id="tagRole" placeholder="what it is for: sits on the plywood" maxlength="200"></div>
+        <p class="muted">A tag is written into the Note and must survive every rebuild.</p>`
+      : '<p class="muted">Your agent sees this selection. A tag can be made of one face.</p>'}`
+    : `<p class="muted">Click a ${NAMES[S.mode][0]}: your agent can then be told "this ${NAMES[S.mode][0]}". Shift-click adds, Ctrl-click takes away.
+        Drag with Shift or Ctrl held (or with Box on) to select with a box: left to right takes what it touches, right to left only what is wholly inside.</p>`;
+  return card('selection', n ? `Selected · ${kinds}` : `Select · ${NAMES[S.mode][1]}`, body, n ? '<button data-act="clear">Clear</button>' : '');
+}
 
 function renderPanel(force) {
   const panel = $('#panel');
@@ -358,83 +629,79 @@ function renderPanel(force) {
   const r = d.report, cards = [];
   const pill = !d.is_note ? '<span class="pill muted">module</span>' : !r.built ? '<span class="pill err">does not build</span>'
     : r.green ? '<span class="pill ok">green</span>' : '<span class="pill err">red</span>';
-  cards.push(`<div class="card"><div class="row"><h2>${esc(S.note)}</h2><span class="v">${pill}</span></div>
-    ${r && !r.built ? `<p class="err mono">${esc(r.error)}</p>` : ''}${d.doc ? `<pre class="doc">${esc(d.doc)}</pre>` : ''}</div>`);
+  cards.push(card('note', `<h2>${esc(S.note)}</h2>`, `${r && !r.built ? `<p class="err mono">${esc(r.error)}</p>` : ''}${d.doc ? `<pre class="doc">${esc(d.doc)}</pre>` : '<p class="muted">No description.</p>'}`, pill));
 
   if (S.compare) {
     const s = S.compare.summary;
-    cards.push(`<div class="card"><p class="head">Compare v${S.compare.a} → ${S.compare.b === 'draft' ? 'draft' : 'v' + S.compare.b}</p>
+    cards.push(card('compare', `Compare v${S.compare.a} → ${S.compare.b === 'draft' ? 'draft' : 'v' + S.compare.b}`, `
       ${s.same ? `<p class="ok">The same within ${s.tolerance} mm (the printer's tolerance).</p>` : ''}
       ${row('removed, at most', `<span style="color:#e23d2d">${s.removed.max_mm} mm</span>`)}${row('added, at most', `<span style="color:#28a85c">${s.added.max_mm} mm</span>`)}
       ${row('volume', `${s.numbers.volume_cm3[0]} → ${s.numbers.volume_cm3[1]} cm³`)}${row('size', `${fmt(s.numbers.size[0])} → ${fmt(s.numbers.size[1])}`)}
       ${s.tags.map((t) => `<div class="check"><b>${esc(t.tag)}</b><div class="why">${esc(t.change)}</div></div>`).join('') || '<p class="muted">No tagged feature changed.</p>'}
-      <p class="muted">Grey is unchanged; colour starts at ${s.tolerance} mm.</p></div>`);
+      <p class="muted">Grey is unchanged; colour starts at ${s.tolerance} mm.</p>`));
   }
 
   if (d.is_note && r.built && S.parts.length > 1 && !S.compare) {
     const known = new Set(S.proj.notes.filter((n) => n.kind !== 'module').map((n) => n.name));
-    cards.push(`<div class="card"><div class="row"><p class="head" style="margin:0">Assembly · ${S.parts.length} parts</p>
-      <span class="v">${S.hidden.size ? '<button data-act="showall">Show all</button>' : ''}</span></div>
-      ${S.parts.map((q, i) => `<div class="check part ${i === S.part ? 'sel' : ''}" data-part="${i}"><div class="row">
+    cards.push(card('assembly', `Assembly · ${S.parts.length} parts`, `
+      ${S.parts.map((q, i) => `<div class="check part ${S.sel.part.has(i) ? 'sel' : ''}" data-part="${i}"><div class="row">
         <span><span class="swatch" style="background:${PARTS[i % PARTS.length]}"></span><b class="${S.hidden.has(i) ? 'muted' : ''}">${esc(q.name)}</b></span>
         <span class="v muted">${fmt(q.volume / 1000)} cm³</span>
         ${known.has(q.name) ? `<button class="x" data-act="opennote" data-name="${esc(q.name)}" title="open this part's Note">↗</button>` : ''}
         <button class="x" data-act="solo" data-i="${i}" title="show only this part">◎</button>
         <button class="x" data-act="eye" data-i="${i}" title="${S.hidden.has(i) ? 'show' : 'hide'}">${S.hidden.has(i) ? '○' : '●'}</button></div>
         <div class="why mono">${[0, 1, 2].map((k) => fmt(q.bbox[k + 3] - q.bbox[k])).join(' × ')} mm</div></div>`).join('')}
-      <p class="muted">Click a part here or in the view. Explode (above the view) pulls them apart.</p></div>`);
+      <p class="muted">Click a part here or in the view. Explode (above the view) pulls them apart.</p>`, S.hidden.size ? '<button data-act="showall">Show all</button>' : ''));
   }
 
   if (d.is_note && r.built) {
     const m = r.measure;
-    cards.push(`<div class="card"><p class="head">Part</p>${row('size', `${fmt(m.size_x)} × ${fmt(m.size_y)} × ${fmt(m.size_z)} mm`)}
+    if (!S.compare) cards.push(selectionCard());
+    cards.push(card('part', 'Part', `${row('size', `${fmt(m.size_x)} × ${fmt(m.size_y)} × ${fmt(m.size_z)} mm`)}
       ${row('volume', `${fmt(m.volume_cm3)} cm³`)}${row('surface', `${fmt(m.area_cm2)} cm²`)}${row('z', `${fmt(m.min_z)} … ${fmt(m.max_z)}`)}${row('solids', m.solids)}
-      ${Object.entries(d.params).map(([k, v]) => row(k, fmt(v))).join('')}</div>`);
-
-    cards.push(`<div class="card"><p class="head">Pointing at</p>${S.face ? `<p>${S.parts[S.part] ? `<b>${esc(S.parts[S.part].name)}</b>: ` : ''}${esc(words(S.face))}</p>
-      <div class="line"><input id="tagName" placeholder="name it: base, rod_bore…" maxlength="40"><button class="primary" data-act="tag">Tag it</button></div>
-      <div class="line"><input id="tagRole" placeholder="what it is for: sits on the plywood" maxlength="200"></div>
-      <p class="muted">Your agent sees what you point at. A tag is written into the Note and must survive every rebuild.</p>`
-      : '<p class="muted">Click a face. Your agent can then be told "this face", and you can give it a name.</p>'}</div>`);
+      ${Object.entries(d.params).map(([k, v]) => row(k, fmt(v))).join('')}`));
 
     const tags = Object.entries(d.tags);
-    cards.push(`<div class="card"><p class="head">Tags</p>${tags.map(([name, t], n) => {
+    cards.push(card('tags', `Tags · ${tags.length}`, tags.map(([name, t], n) => {
       const res = r.tags[name];
       return `<div class="check tag" data-tag="${esc(name)}"><div class="row"><span><span class="swatch" style="background:${PALETTE[n % PALETTE.length]}"></span><b>${esc(name)}</b>
         ${res?.resolved ? '' : '<span class="err"> not found</span>'}</span><span class="v muted">${esc(t.kind)}</span><button class="x" data-act="untag" data-name="${esc(name)}" title="remove this tag">×</button></div>
         <div class="why">${esc(t.role ?? '')}${res?.why ? ` · ${esc(res.why)}` : ''}</div>
         <div class="why mono">${Object.entries(res?.measure ?? {}).map(([k, v]) => `${k} ${fmt(v)}`).join(' · ')}</div></div>`;
-    }).join('') || '<p class="muted">No tags yet. Click a face and name it.</p>'}</div>`);
+    }).join('') || '<p class="muted">No tags yet. Select one face and name it.</p>'));
 
     const names = [...Object.keys(m), 'fits_bed', ...Object.entries(r.tags).flatMap(([k, t]) => Object.keys(t.measure).map((x) => `tag.${k}.${x}`))];
-    cards.push(`<div class="card"><p class="head">Checks · yours: the agent can add one, never change or remove one</p>
+    const failing = r.checks.filter((c) => !c.ok).length;
+    cards.push(card('checks', `Checks · ${r.checks.length}`, `<p class="muted" style="margin-top:0">Yours: the agent can add one, never change or remove one.</p>
       ${r.checks.map((c) => `<div class="check"><div class="row"><span class="${c.ok ? 'ok' : 'err'}">${c.ok ? '✓' : '✗'} <span class="mono">${esc(c.what)}</span></span>
         <span class="v">${fmt(c.value)} <span class="muted">(${esc(c.expect)})</span></span>${c.by === 'monet' ? '' : `<button class="x" data-act="uncheck" data-id="${esc(c.id)}" title="remove this check">×</button>`}</div>
         <div class="why">${esc(c.why || '')}${c.by === 'agent' ? ' · added by the agent' : ''}${c.note ? ` · ${esc(c.note)}` : ''}</div></div>`).join('')}
       <div class="line"><input id="ckWhat" list="measures" placeholder="what: size_x, tag.bore.width…"><datalist id="measures">${names.map((x) => `<option value="${esc(x)}">`).join('')}</datalist></div>
       <div class="line"><input id="ckMin" placeholder="min" inputmode="decimal"><input id="ckMax" placeholder="max" inputmode="decimal"><input id="ckEq" placeholder="or equals"></div>
-      <div class="line"><input id="ckWhy" placeholder="why: the rule in your words"><button data-act="check">Add</button></div></div>`);
+      <div class="line"><input id="ckWhy" placeholder="why: the rule in your words"><button data-act="check">Add</button></div>`,
+    failing ? `<span class="pill err">${failing} failing</span>` : '<span class="pill ok">all pass</span>'));
 
     const lc = d.load_check, colour = { green: 'ok', yellow: 'warn', red: 'err', new: 'muted' }[lc.status];
-    cards.push(`<div class="card"><div class="row"><p class="head" style="margin:0">Load check</p><span class="v"><span class="pill ${colour}">${esc(lc.status === 'new' ? 'never saved' : lc.status)}</span></span></div>
-      ${lc.status === 'new' ? '' : `<p class="muted">The saved Note, rebuilt just now, compared with what was saved${lc.version ? ` (v${lc.version})` : ''}.</p>`}
+    cards.push(card('load', 'Load check', `
+      ${lc.status === 'new' ? '<p class="muted">Nothing saved yet to compare with.</p>' : `<p class="muted">The saved Note, rebuilt just now, compared with what was saved${lc.version ? ` (v${lc.version})` : ''}.</p>`}
       ${(lc.changes ?? []).map((c) => `<div class="why ${c.level === 'red' ? 'err' : 'warn'}">${esc(c.what)}${c.delta != null ? ` ${c.delta > 0 ? '+' : ''}${c.delta}` : ''}${c.why ? ` · ${esc(c.why)}` : ''}</div>`).join('')}
       ${lc.status === 'red' || lc.status === 'yellow' ? (lc.acknowledged ? `<p class="muted">You looked at this on ${new Date(lc.acknowledged).toLocaleString()}.</p>`
-        : `<div class="line"><span class="muted" style="flex:1">${lc.status === 'red' ? 'The agent may not edit this Note until you have looked.' : 'Within print tolerance; probably a library update.'}</span><button data-act="ack">I have looked</button></div>`) : ''}</div>`);
+        : `<div class="line"><span class="muted" style="flex:1">${lc.status === 'red' ? 'The agent may not edit this Note until you have looked.' : 'Within print tolerance; probably a library update.'}</span><button data-act="ack">I have looked</button></div>`) : ''}`,
+    `<span class="pill ${colour}">${esc(lc.status === 'new' ? 'never saved' : lc.status)}</span>`));
   }
 
   const red = S.saveResult && !S.saveResult.saved ? Object.entries(S.saveResult.red).map(([k, v]) => `<div class="why err"><b>${esc(k)}</b>: ${esc(Array.isArray(v) ? v.join('; ') : v)}</div>`).join('') : '';
-  cards.push(`<div class="card"><p class="head">Save the project as a version</p>
+  cards.push(card('save', 'Save the project as a version', `
     <div class="line" style="margin-top:0"><input id="saveMsg" placeholder="what changed, and why" value="${esc(S.message)}"><button class="primary" data-act="save">Save</button></div>
     ${S.saveResult?.saved ? `<p class="ok">Saved as v${S.saveResult.version}.</p>` : red ? `<p class="err">Nothing is saved on red.</p>${red}` : ''}
-    <p class="muted">Every Note must build and pass its checks. History is your own git folder: your agent commits there after each save.</p></div>`);
+    <p class="muted">Every Note must build and pass its checks. History is your own git folder: your agent commits there after each save.</p>`));
 
   if (d.is_note && r.built) {
     const v = S.compare && S.compare.b !== 'draft' ? `?v=${S.compare.b}` : '';
-    cards.push(`<div class="card"><p class="head">Export ${v ? 'v' + S.compare.b : 'the draft'}</p><div class="line" style="margin-top:0">
-      ${['3mf', 'stl', 'step', 'glb'].map((f) => `<a href="${root}/p/${S.project}/n/${S.note}/export.${f}${v}" download><button>${f.toUpperCase()}</button></a>`).join('')}</div></div>`);
+    cards.push(card('export', `Export ${v ? 'v' + S.compare.b : 'the draft'}`, `<div class="line" style="margin-top:0">
+      ${['3mf', 'stl', 'step', 'glb'].map((f) => `<a href="${root}/p/${S.project}/n/${S.note}/export.${f}${v}" download><button>${f.toUpperCase()}</button></a>`).join('')}</div>`));
   }
-  cards.push(`<div class="card"><details><summary>The Note: ${esc(S.note)}.py</summary><pre class="src mono">${esc(d.source)}</pre></details></div>`);
+  cards.push(card('source', `The Note: ${esc(S.note)}.py`, `<pre class="src mono">${esc(d.source)}</pre>`));
   panel.innerHTML = cards.join('');
 }
 
@@ -449,24 +716,27 @@ $('#panel').addEventListener('mouseover', (e) => {
 $('#panel').addEventListener('mouseleave', () => { if (S.hot || S.hotPart != null) { S.hot = S.hotPart = null; paint(); } });
 $('#panel').addEventListener('click', (e) => {
   const b = e.target.closest('[data-act]');
-  if (!b) {   // a click on a part's row points at that part
-    const q = e.target.closest('[data-part]');
-    if (q) { S.part = Number(q.dataset.part) === S.part ? null : Number(q.dataset.part); paint(); renderPanel(true); }
+  if (!b) {
+    const f = e.target.closest('[data-fold]');
+    if (f) { fold(f.dataset.fold); return; }
+    const q = e.target.closest('[data-part]');   // a click on a part's row selects that part, with Shift and Ctrl as in the view
+    if (q) select([{ kind: 'part', i: Number(q.dataset.part) }], { add: e.shiftKey, remove: e.ctrlKey || e.metaKey || (!e.shiftKey && S.sel.part.has(Number(q.dataset.part)) && count() === 1) });
     return;
   }
+  const a = b.dataset.act;
+  if (a === 'clear') { select([], {}); return; }
   // the parts of an assembly: nothing here goes to the server
-  if (['eye', 'solo', 'showall'].includes(b.dataset.act)) {
+  if (['eye', 'solo', 'showall'].includes(a)) {
     const i = Number(b.dataset.i);
-    if (b.dataset.act === 'showall') S.hidden = new Set();
-    else if (b.dataset.act === 'eye') (S.hidden.has(i) ? S.hidden.delete(i) : S.hidden.add(i));
+    if (a === 'showall') S.hidden = new Set();
+    else if (a === 'eye') (S.hidden.has(i) ? S.hidden.delete(i) : S.hidden.add(i));
     else S.hidden = new Set(S.parts.map((_, k) => k).filter((k) => k !== i));
     spread(); renderPanel(true);
     return;
   }
-  if (b.dataset.act === 'opennote') { open(S.project, b.dataset.name); return; }
+  if (a === 'opennote') { open(S.project, b.dataset.name); return; }
   const n = `/p/${S.project}/n/${S.note}`, num = (id) => ($(id).value.trim() === '' ? null : Number($(id).value.replace(',', '.')));
-  const a = b.dataset.act;
-  if (a === 'tag') act(async () => { busy('building…'); await api(`${n}/tags`, 'POST', { name: $('#tagName').value.trim(), role: $('#tagRole').value, face: S.face }); });
+  if (a === 'tag') act(async () => { busy('building…'); await api(`${n}/tags`, 'POST', { name: $('#tagName').value.trim(), role: $('#tagRole').value, face: theFace() }); });
   if (a === 'untag' && confirm(`Remove the tag "${b.dataset.name}" from the Note? Checks about it will fail.`)) act(() => api(`${n}/tags/${b.dataset.name}`, 'DELETE'));
   if (a === 'uncheck' && confirm(`Remove the check "${b.dataset.id}"?`)) act(() => api(`${n}/checks/${b.dataset.id}`, 'DELETE'));
   if (a === 'check') act(() => {
@@ -531,11 +801,11 @@ async function start(project) {
 
 // follow the agent: when the project moves, look again
 setInterval(async () => {
-  if (!S.project || document.hidden || !$('#busy').hidden) return;
+  if (!S.project || document.hidden || !$('#busy').hidden || press) return;
   try { const { rev } = await api(`/p/${S.project}/rev`); if (rev !== S.rev && !S.compare) await open(S.project, S.note); } catch { /* the server is away; try again */ }
 }, 2000);
 window.addEventListener('hashchange', () => { const [p, n] = decodeURIComponent(location.hash.slice(1)).split('/'); if (p && (p !== S.project || (n && n !== S.note))) open(p, n); });
 
-window.monet = { S, groups, camera, scene };   // for looking in from the console, and from scripts/shot.mjs
+window.monet = { S, groups, camera, scene, select, pick, boxPick };   // for looking in from the console, and from scripts/shot.mjs
 resize();
 start().catch((e) => { $('#panel').innerHTML = `<div class="card"><p class="err">${esc(e.message)}</p></div>`; });

@@ -76,9 +76,13 @@ Follow this for every change. Each step exists because skipping it has burned so
    `load_check`: green means the saved part still rebuilds to exactly what was saved. Yellow
    (within print tolerance, usually a library update): tell the user and continue. **Red: stop.**
    Do not edit; ask the user to look at it in the canvas and acknowledge. Only they can.
-2. **Find out what they mean.** When the user says "this face", "here", "that hole", call
-   `selection`: it returns the face they clicked, what it is, and a selector that would find it
-   again.
+2. **Find out what they mean.** When the user says "this face", "these edges", "here", "that
+   hole", call `selection`. In the canvas they select points, lines (edges), faces or whole
+   objects, one or many, and you get them as `items`: a face with its kind, place, size and a
+   `selector` that would find it again as a tag; an edge with its type, length and ends; a point
+   with its coordinates; an object (a part of an assembly) with its name. `measure` carries what
+   the canvas worked out: the distance between two points or two parallel faces, total length,
+   total area. Coordinates are the part's own, in millimetres.
 3. **Edit the Note** in the local folder, then send the whole file with `write_note`. The answer
    is the report: does it build, does every tag still find its feature, does every check pass.
 4. **Look at it.** Call `look` and study the picture; "it ran without errors" is not success. Use
@@ -175,8 +179,8 @@ def build(p=PARAMS):
 - The canvas shows an assembly with each part in its own colour, a parts list (hide, show only
   one) and an Explode slider. A project opens on its assembly.
 - For you: the report of an assembly has `parts` (name, volume, size, where it is); `look`
-  paints the parts in their own colours with a legend; `selection` says which `part` the user
-  clicked, with the face in that part's own coordinates.
+  paints the parts in their own colours with a legend; every item of `selection` says which
+  `part` it belongs to, and whole parts can be selected as objects.
 - A part that only exists in the assembly (a bought rod, a screw) can be made right there.
   Anything printed should be a Note of its own, so it has its own checks and exports.
 - Parts that must fit each other should take their numbers from one shared helper module, and

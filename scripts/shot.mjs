@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // A screenshot of a page of the running server from a headless Chrome: for checking the canvas without a
 // person at the screen (after adam-designer's scripts/shot.mjs).
-//   node scripts/shot.mjs http://localhost:8000/w/<id>#project/note out.png [width height] [--wait ms] [--click 'css'] [--mouse 'css x,y'] [--eval 'js']…
-// --click is the element's own click(); --mouse is a real press and release at (x,y) inside the element (its
-// middle when no point is given); --eval's value is printed. Steps run in the order given, a moment apart.
+//   node scripts/shot.mjs http://localhost:8000/w/<id>#project/note out.png [width height] [--wait ms] [--click 'css'] [--mouse 'css x,y [shift|ctrl|meta|alt]'] [--drag 'css x1,y1 x2,y2 [shift|ctrl|meta|alt]'] [--eval 'js']…
+// --click is the element's own click(); --mouse is a real press and release at (x,y) inside the element; --drag a
+// real press at (x1,y1), a few moves and a release at (x2,y2): a box select. Both take modifier keys. --eval's value
+// is printed. Steps run in the order given, a moment apart.
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,7 +13,7 @@ import { join } from 'node:path';
 const args = process.argv.slice(2);
 const steps = [];
 for (let i = 0; i < args.length;) {
-  if (/^--(click|eval|mouse|wait)$/.test(args[i])) steps.push({ kind: args[i].slice(2), text: args.splice(i, 2)[1] });
+  if (/^--(click|eval|mouse|drag|wait)$/.test(args[i])) steps.push({ kind: args[i].slice(2), text: args.splice(i, 2)[1] });
   else i++;
 }
 const [url, out = 'shot.png', width = '1500', height = '900'] = args;
@@ -56,12 +57,18 @@ for (const step of steps) {
   if (step.kind === 'click') {
     const ok = await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(step.text)}); if (!e) return false; e.click(); return true; })()`);
     if (!ok) console.error(`nothing matches ${step.text}`);
-  } else if (step.kind === 'mouse') {
-    const [sel, point] = step.text.split(/\s+(?=[\d.]+,[\d.]+$)/);
+  } else if (step.kind === 'mouse' || step.kind === 'drag') {
+    const [sel, ...rest] = step.text.split(/\s+/);
+    const points = rest.filter((w) => /^[\d.]+,[\d.]+$/.test(w)).map((w) => w.split(',').map(Number));
+    const modifiers = rest.reduce((m, k) => m | ({ alt: 1, ctrl: 2, meta: 4, shift: 8 }[k] ?? 0), 0);
     const at = await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })()`);
     if (!at) { console.error(`nothing matches ${sel}`); continue; }
-    const [dx, dy] = point ? point.split(',').map(Number) : [at.w / 2, at.h / 2];
-    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: at.x + dx, y: at.y + dy, button: 'left', buttons: type === 'mousePressed' ? 1 : 0, clickCount: 1 });
+    const [x1, y1] = points[0] ?? [at.w / 2, at.h / 2], [x2, y2] = points[1] ?? [x1, y1];
+    const ev = (type, x, y) => send('Input.dispatchMouseEvent', { type, x: at.x + x, y: at.y + y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1, modifiers });
+    await ev('mouseMoved', x1, y1);
+    await ev('mousePressed', x1, y1);
+    if (points[1]) for (let i = 1; i <= 4; i++) { await ev('mouseMoved', x1 + ((x2 - x1) * i) / 4, y1 + ((y2 - y1) * i) / 4); await sleep(30); }
+    await ev('mouseReleased', x2, y2);
   } else console.log(`  eval → ${JSON.stringify(await evaluate(`(async () => { ${step.text} })()`))}`);
   await sleep(1200);
 }

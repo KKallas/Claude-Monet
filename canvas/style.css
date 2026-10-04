@@ -31,7 +31,24 @@ aside, .panel { background: var(--bg-surface); overflow-y: auto; }
 aside { border-right: 1px solid var(--border); padding: 10px 0; }
 .panel { border-left: 1px solid var(--border); padding: 10px; }
 .head { font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin: 0 0 8px; }
-aside .head { padding: 0 14px; margin-top: 6px; }
+aside section { margin-bottom: 14px; }
+aside .fold { padding: 2px 14px 6px; }
+
+/* folding: any panel on the side shuts on a click on its head, and stays as it was left */
+.fold { display: flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }
+.fold .head { flex: 1; margin: 0; }
+.fold .head h2 { text-transform: none; letter-spacing: 0; }
+.fold .r { flex: none; }
+.fold:hover .head, .fold:hover .chev { color: var(--text); }
+.chev { width: 11px; color: var(--text-muted); font-size: 14px; line-height: 1; }
+.chev::before { content: '▾'; }
+.folded > .fold .chev::before { content: '▸'; }
+.folded > .body { display: none; }
+.card > .body { margin-top: 9px; }
+
+/* the box of a box select: dashed when it takes what it touches, solid when only what is wholly inside */
+#marquee { position: absolute; border: 1px solid var(--accent); background: rgba(212, 131, 47, .10); pointer-events: none; z-index: 2; }
+#marquee.touching { border-style: dashed; }
 .item { display: flex; align-items: center; gap: 8px; padding: 5px 14px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .item:hover { background: var(--bg-elevated); }
 .item.sel { background: var(--bg-elevated); color: var(--text-bright); box-shadow: inset 2px 0 var(--accent); }
@@ -42,7 +59,7 @@ aside .head { padding: 0 14px; margin-top: 6px; }
 /* the view */
 .view { position: relative; overflow: hidden; background: radial-gradient(ellipse at 50% 35%, #232a3d, #10131b); }
 .view canvas { display: block; width: 100%; height: 100%; }
-.bar { position: absolute; left: 10px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; background: rgba(26, 31, 46, .88); border: 1px solid var(--border); border-radius: 6px; padding: 6px; }
+.bar { position: absolute; left: 10px; max-width: calc(100% - 20px); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; background: rgba(26, 31, 46, .88); border: 1px solid var(--border); border-radius: 6px; padding: 6px; }
 .bar.top { top: 10px; } .bar.bottom { bottom: 10px; }
 .bar input[type=range] { width: 110px; padding: 0; }
 .bar .sep { width: 1px; align-self: stretch; background: var(--border); }
