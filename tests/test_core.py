@@ -222,6 +222,44 @@ def test_whatever_is_selected_can_become_a_tag():
         tags.propose_many([])
 
 
+def test_arcs_and_ovals_in_a_sketch_and_one_curve_named_by_itself():
+    plane = {"origin": [0, 0, 10], "normal": [0, 0, 1], "x": [1, 0, 0]}
+    quarter = 0.41421356237
+    rounded = {"type": "polyline", "closed": True, "points": [[-10, -5], [8, -5, quarter], [10, -3], [10, 5], [-10, 5]]}
+    oval = {"type": "ellipse", "center": [0, 0], "rx": 6, "ry": 3, "rotation": 30}
+    kept = tags.clean_sketch({"plane": plane, "curves": [rounded, oval, {"type": "polyline", "points": [[0, 0], [5, 0, 1]]}]})["curves"]
+    assert kept[0]["points"][1] == [8.0, -5.0, 0.414213562] and kept[1] == {"type": "ellipse", "center": [0.0, 0.0], "rx": 6.0, "ry": 3.0, "rotation": 30.0}
+    assert kept[2]["points"] == [[0.0, 0.0], [5.0, 0.0]]                             # the last point of an open line bulges to nothing
+    assert tags.curve_length(rounded) == pytest.approx(60 - 4 + 3.14159265, abs=1e-4)      # a 20 x 10 outline, one corner r 2
+    assert tags.curve_length({"type": "ellipse", "center": [0, 0], "rx": 5, "ry": 5}) == pytest.approx(31.4159, abs=1e-3)
+    for bad in ({"type": "ellipse", "center": [0, 0], "rx": 0, "ry": 1}, {"type": "polyline", "points": [[0, 0, "x"], [1, 1]]}, {"type": "polyline", "points": [[0, 0, 1, 2], [1, 1]]}):
+        with pytest.raises(ValueError):
+            tags.clean_sketch({"plane": plane, "curves": [bad]})
+    T = {"s": {"kind": "sketch", "plane": plane, "curves": [rounded, oval]},
+         "edge": {"kind": "sketch_curve", "sketch": "s", "curve": rounded},
+         "moved": {"kind": "sketch_curve", "sketch": "s", "curve": {**oval, "rx": 7}},
+         "lost": {"kind": "sketch_curve", "sketch": "nope", "curve": oval},
+         "both": {"kind": "group", "of": [{"kind": "sketch_curve", "sketch": "s", "curve": rounded}, {"kind": "sketch_curve", "sketch": "s", "curve": oval}]}}
+    r = tags.resolve(T, [], [0, 0, 0, 1, 1, 1])
+    assert r["s"]["measure"] == {"curves": 2, "closed": 2}
+    assert r["edge"]["resolved"] and r["edge"]["curves"] == ["s:0"] and r["edge"]["measure"] == {"length": 59.142, "closed": True}
+    assert not r["moved"]["resolved"] and "no such curve any more" in r["moved"]["why"] and "there is no sketch" in r["lost"]["why"]
+    assert r["both"]["resolved"] and r["both"]["curves"] == ["s:0", "s:1"]
+    assert tags.propose_item({"kind": "curve", "sketch": "s", "index": 1, "curve": oval}) == {"kind": "sketch_curve", "sketch": "s", "curve": {**oval, "center": [0.0, 0.0], "rx": 6.0, "ry": 3.0, "rotation": 30.0}}
+
+
+def test_what_the_sketch_tools_do_to_curves():
+    """canvas/sketch2d.js (offset, trim, fillet, the oval) has its own tests, in node."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on this machine")
+    done = subprocess.run([node, "--test", str(Path(__file__).parent / "sketch2d.test.mjs")], capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stdout[-2000:]
+
+
 def test_the_measuring_geometry_of_the_canvas():
     """canvas/measure.js has its own tests, in node: run them from here so one command covers everything."""
     import shutil

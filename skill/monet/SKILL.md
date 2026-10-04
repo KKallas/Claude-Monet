@@ -200,10 +200,13 @@ assembly, or several of these under one name (a `group`). A group of two paralle
 points also measures the `distance` between them, which is how a dimension gets a name that a
 check can hold.
 
-A **sketch** is a tag too: the user draws lines, rectangles and circles on a face of the part
-(the Sketch area of the canvas) and names the drawing, with a `role` saying what they want done
-with it ("cut 3 deep"). Read it from `TAGS` like any tag; `references/tags-and-checks.md` has
-its format and a `sketch_face()` helper that turns it into build123d geometry to extrude or cut.
+A **sketch** is a tag too: the user draws lines, rectangles, circles and ovals on a plane of the
+part (the Sketch area of the canvas) and names the drawing, with a `role` saying what they want
+done with it ("cut 3 deep"). They can also name one line of a sketch by itself (a `sketch_curve`
+tag) when the instruction is about that line. Read these from `TAGS` like any tag;
+`references/tags-and-checks.md` has the format and a `sketch_face()` helper that turns a sketch,
+or chosen curves of it, into build123d geometry to extrude or cut. Planes the user made to draw
+on are tags of kind `plane`: leave them be.
 
 A **check** is a measurement and the range it must stay in, for example
 `tag.rod_bore.width` between 16.2 and 16.4. Checks belong to the user:

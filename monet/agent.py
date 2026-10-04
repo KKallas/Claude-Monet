@@ -122,9 +122,10 @@ def look(c: Caller, project: str, note: str, views: str = "iso,top,front,right",
 
 def selection(c: Caller, project: str) -> dict:
     """What the user has selected in the canvas right now. They pick points, lines (edges), faces or objects (the
-    parts of an assembly), one or many. `items` lists them: a face with its kind, place, size and the `selector`
-    that would find it again as a tag; an edge with its type, length and ends; a point with its coordinates; an
-    object with its name and box. `measure` is what the canvas worked out from the selection (the distance between
+    parts of an assembly) and the lines of their sketches, one or many. `items` lists them: a face with its kind,
+    place and size; an edge with its type, length and ends; a point with its coordinates; an object with its name and
+    box; a sketch line (kind "curve") with the sketch it belongs to, the curve itself, its plane and the sketch's
+    role. Each has the `selector` that would find it again as a tag. `measure` is what the canvas worked out from the selection (the distance between
     two points or two parallel faces, total length, total area). When exactly one face is selected, `face`,
     `selector` and `part` describe it directly. Call this when the user says "this face", "these edges", "here"."""
     c.ws.project(project)
@@ -134,8 +135,10 @@ def selection(c: Caller, project: str) -> dict:
     items = []
     for item in (s.get("items") or [])[:100]:
         item = dict(item)
-        if item.get("kind") == "face" and item.get("type"):
-            item["selector"] = tagging.propose(item)
+        try:      # how each thing would be found again, were it made a tag
+            item["selector"] = tagging.propose_item(item)
+        except (KeyError, TypeError, ValueError):
+            pass
         items.append(item)
     out = {"selected": True, "note": s.get("note"), "seconds_ago": round(time.time() - s["at"]), "mode": s.get("mode", "face"),
            "count": s.get("count", len(items) or 1), "items": items, "measure": s.get("measure") or {},

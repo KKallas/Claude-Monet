@@ -299,7 +299,7 @@ def create_app(storage: str | Path, max_users: int = 20, templates: str | Path |
             r = p.cached(name) or {}
             out["params"] = r.get("params") or parsed["params"]     # as the build saw them: a Note may share a module's
             out["tag_faces"] = {k: t.get("faces", []) for k, t in (r.get("tags") or {}).items()}
-            out["tag_hits"] = {k: {kind: t.get(kind, []) for kind in ("faces", "edges", "points", "parts")} for k, t in (r.get("tags") or {}).items()}
+            out["tag_hits"] = {k: {kind: t.get(kind, []) for kind in ("faces", "edges", "points", "parts", "curves")} for k, t in (r.get("tags") or {}).items()}
             out["checks"] = p.checks(name)
             out["versions"] = p.versions(name)
             out["load_check"] = p.load_check(name) if p.saved(name) else {"status": "new", "changes": []}
@@ -361,6 +361,25 @@ def create_app(storage: str | Path, max_users: int = 20, templates: str | Path |
             selector["role"] = str(body["role"]).strip()[:200]
         current = notes.parse(p.read(name))["tags"]
         return p.set_tags(name, {**current, tag: selector})
+
+    def move_plane(request, ws, body):
+        """A plane's distance off its face, changed afterwards. What was drawn on the plane goes with it."""
+        p, name = note_of(request, ws)
+        which = request.path_params["plane"]
+        current = notes.parse(p.read(name))["tags"]
+        plane = current.get(which)
+        if not plane or plane.get("kind") != "plane":
+            raise Problem(f"no plane {which!r} on {name}", 404)
+        offset = body.get("offset")
+        if not isinstance(offset, (int, float)) or isinstance(offset, bool) or abs(offset) > 1e5:
+            raise Problem("the offset is a number of millimetres")
+        by = float(offset) - float(plane.get("offset") or 0)
+        plane["plane"] = {**plane["plane"], "origin": [round(o + by * n, 3) for o, n in zip(plane["plane"]["origin"], plane["plane"]["normal"])]}
+        plane["offset"] = round(float(offset), 3)
+        for tag in current.values():
+            if tag.get("kind") == "sketch" and tag.get("plane_name") == which:
+                tag["plane"] = dict(plane["plane"])
+        return p.set_tags(name, current)
 
     def delete_tag(request, ws, _body):
         p, name = note_of(request, ws)
@@ -484,6 +503,7 @@ def create_app(storage: str | Path, max_users: int = 20, templates: str | Path |
         Route(n + "/fingerprint.json", api(fingerprint)),
         Route(n + "/tags", api(put_tag), methods=["POST"]),
         Route(n + "/tags/{tag}", api(delete_tag), methods=["DELETE"]),
+        Route(n + "/planes/{plane}", api(move_plane), methods=["PUT"]),
         Route(n + "/checks", api(add_check), methods=["POST"]),
         Route(n + "/checks/{check}", api(put_check), methods=["PUT", "DELETE"]),
         Route(n + "/ack", api(acknowledge), methods=["POST"]),

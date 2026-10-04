@@ -17,7 +17,8 @@ lowercase letters, digits, underscores. Coordinates are millimetres in the part'
 | `object` | `name`: the label of a part of an assembly | that part | `volume_cm3`, `size`, `at` (its middle) |
 | `group` | `of`: a list of selectors of the kinds above | all of them, under one name; found only when every member is | `count`, `area` (faces), `length` (edges), and `distance` when it is made of two points, two parallel flat faces, or a point and a flat face |
 | `sketch` | `plane`: `{origin, normal, x}`; `curves`: what the user drew on it; `on`: the selector of the face it lies on, if any; `plane_name`: which plane it was drawn on | found as long as that face is (always, on a plane through the origin) | `curves`, `closed` |
-| `plane` | `plane`: `{origin, normal, x}`; `on`: the selector of the face it was put on; `offset`: mm off that face | a plane the user made to draw on; found as long as that face is | `offset` |
+| `plane` | `plane`: `{origin, normal, x}`; `on`: the selector of the face it was put on (or `base`: the ready plane it is a copy of); `offset`: mm off that | a plane the user made to draw on; found as long as that face is | `offset` |
+| `sketch_curve` | `sketch`: the name of a sketch tag; `curve`: one of its curves, as drawn | that curve; no longer found when it is redrawn or removed | `length`, `closed` |
 
 How they behave:
 
@@ -54,28 +55,52 @@ face, `normal` out of the face, `x` the direction of the drawing's u axis; v is 
 
 | curve | fields |
 |---|---|
-| `polyline` | `points`: `[[u, v], ...]`, `closed`: true when it comes back to its start |
+| `polyline` | `points`: `[[u, v], ...]`, `closed`: true when it comes back to its start. A point may be `[u, v, bulge]`: the stretch from it to the next point is then an arc, `bulge = tan(angle / 4)`, positive when the arc turns left (as in DXF). Fillets and trimmed circles are kept this way |
 | `rect` | `at`: `[u, v]` of one corner, `size`: `[w, h]` |
 | `circle` | `center`: `[u, v]`, `r` |
+| `ellipse` | `center`: `[u, v]`, `rx`, `ry`, `rotation`: degrees, of the `rx` axis from +u |
+
+The user can also name one curve of a sketch by itself (a `sketch_curve` tag: `sketch` is the
+sketch's name, `curve` the curve as drawn), for when the instruction is about that line and not
+the whole drawing: "cut along `slot_line`", "this circle is the bolt hole".
 
 The `role` says what the user wants done with it ("cut 3 deep", "raise a boss 5 high"). To use
 one in `build()`:
 
 ```python
-def sketch_face(tag):
-    """The closed curves of a sketch tag as a build123d sketch on its plane."""
+def sketch_wire(c):
+    """One curve of a sketch as build123d edges, on the sketch plane that is current (inside BuildLine)."""
+    pts = c["points"]
+    n = len(pts)
+    for i in range(n if c.get("closed") else n - 1):
+        p, q = pts[i], pts[(i + 1) % n]
+        bulge = p[2] if len(p) > 2 else 0
+        if abs(bulge) < 1e-9:
+            Line((p[0], p[1]), (q[0], q[1]))
+        else:   # the point half way round the arc: off the middle of the chord, to its right when the arc turns left
+            dx, dy = q[0] - p[0], q[1] - p[1]
+            mid = ((p[0] + q[0]) / 2 + bulge * dy / 2, (p[1] + q[1]) / 2 - bulge * dx / 2)
+            ThreePointArc((p[0], p[1]), mid, (q[0], q[1]))
+
+
+def sketch_face(tag, only=None):
+    """The closed curves of a sketch tag as a build123d sketch on its plane. only: a list of curves to use
+    instead of all of them (for example [TAGS["slot_line"]["curve"]])."""
     pl = Plane(origin=tag["plane"]["origin"], x_dir=tag["plane"]["x"], z_dir=tag["plane"]["normal"])
     with BuildSketch(pl) as sk:
-        for c in tag["curves"]:
+        for c in only or tag["curves"]:
             if c["type"] == "rect":
                 with Locations((c["at"][0] + c["size"][0] / 2, c["at"][1] + c["size"][1] / 2)):
                     Rectangle(*c["size"])
             elif c["type"] == "circle":
                 with Locations(tuple(c["center"])):
                     Circle(c["r"])
+            elif c["type"] == "ellipse":
+                with Locations(Location((c["center"][0], c["center"][1], 0), (0, 0, c.get("rotation", 0)))):
+                    Ellipse(c["rx"], c["ry"])
             elif c.get("closed"):
                 with BuildLine():
-                    Polyline(*[tuple(p) for p in c["points"]], close=True)
+                    sketch_wire(c)
                 make_face()
     return sk.sketch
 
@@ -83,6 +108,9 @@ def sketch_face(tag):
 #   extrude(sketch_face(TAGS["pocket"]), amount=-3, mode=Mode.SUBTRACT)     a pocket, 3 deep
 #   extrude(sketch_face(TAGS["pad"]), amount=5)                             a boss, 5 high
 ```
+
+An open line has no inside, so `sketch_face` leaves it out: use it as a path or a place (where a
+slot runs, where a rib stands) and build that feature from its points.
 
 That is the quick way and it keeps the user's drawing as the source of the shape. When the shape
 is really a rule ("a 20 x 8 slot centred on the bore"), write it as geometry from `PARAMS` instead

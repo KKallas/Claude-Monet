@@ -26,11 +26,19 @@
   </header>
 
   <aside>
+    <section data-card="side-planes" data-rooms="sketch">
+      <div class="fold" data-fold="side-planes"><span class="chev"></span><span class="head">Planes</span></div>
+      <div class="body" id="planesList"></div>
+    </section>
+    <section data-card="side-sketches" data-rooms="sketch">
+      <div class="fold" data-fold="side-sketches"><span class="chev"></span><span class="head">Sketches</span></div>
+      <div class="body" id="sketchList"></div>
+    </section>
     <section data-card="side-notes">
       <div class="fold" data-fold="side-notes"><span class="chev"></span><span class="head">Notes</span></div>
       <div class="body" id="notes"></div>
     </section>
-    <section data-card="side-versions">
+    <section data-card="side-versions" data-rooms="part assembly">
       <div class="fold" data-fold="side-versions"><span class="chev"></span><span class="head">Versions</span></div>
       <div class="body" id="versions"></div>
     </section>
@@ -43,7 +51,11 @@
     <div id="planeLabels"></div>
     <div class="bar top">
       <span class="tools" data-rooms="sketch" data-sketching>
-        <button data-tool="line" title="a line, point by point: click the first point again to close it, Enter to end it open">Line</button><button data-tool="rect" title="a rectangle: two opposite corners">Rectangle</button><button data-tool="circle" title="a circle: its centre, then a point on it">Circle</button>
+        <button data-tool="line" title="a line, point by point: click the first point again to close it, Enter to end it open">Line</button><button data-tool="rect" title="a rectangle: two opposite corners">Rectangle</button><button data-tool="circle" title="a circle: its centre, then a point on it">Circle</button><button data-tool="oval" title="an oval: the two ends of one axis, at any angle, then how far the other axis reaches">Oval</button>
+        <span class="sep"></span>
+        <button data-tool="offset" title="a copy of a curve, a set distance off it, on the side you point at">Offset</button><button data-tool="trim" title="take away a stretch of a curve, up to where other curves cross it">Trim</button><button data-tool="fillet" title="round a corner between two straight lines">Fillet</button>
+        <span class="muted" id="sketchValueLabel" hidden>by</span><input id="sketchValue" value="2" inputmode="decimal" title="millimetres: the distance of an offset, the radius of a fillet" hidden>
+        <button id="sketchUndo" title="back to before the last change (Ctrl+Z)">Undo</button>
         <span class="sep"></span>
         <button id="sketchSnap" class="on" title="points line up with the part's corners and land on the 1 mm grid (hold Shift for free)">Snap</button>
       </span>

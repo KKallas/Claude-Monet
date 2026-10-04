@@ -8,7 +8,8 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { angle, closest } from './measure.js';
 import { MATERIALS, STYLES, createLook } from './look.js';
-import { basis, createSketcher, frameOf, outline, strokes } from './sketch.js';
+import { EDITING, basis, createSketcher, describe as curveWords, frameOf, outline, strokes } from './sketch.js';
+import { lengthOf } from './sketch2d.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -27,8 +28,14 @@ async function api(path, method = 'GET', body) {
 }
 
 // what is selected: any mix of points, lines, faces and objects, by their number in this build
-const nothing = () => ({ vertex: new Set(), edge: new Set(), face: new Set(), part: new Set() });
-const NAMES = { vertex: ['point', 'points'], edge: ['line', 'lines'], face: ['face', 'faces'], part: ['object', 'objects'] };
+const nothing = () => ({ vertex: new Set(), edge: new Set(), face: new Set(), part: new Set(), curve: new Set() });
+const NAMES = { vertex: ['point', 'points'], edge: ['line', 'lines'], face: ['face', 'faces'], part: ['object', 'objects'], curve: ['sketch line', 'sketch lines'] };
+// a line of a sketch is told by "sketch:number"; this gives the curve, the sketch's plane to place it, and its points in the world
+function curveOf(id) {
+  const cut = id.lastIndexOf(':'), sketchName = id.slice(0, cut), index = Number(id.slice(cut + 1));
+  const tag = S.data?.tags?.[sketchName], curve = tag?.kind === 'sketch' ? tag.curves?.[index] : null;
+  return curve ? { sketch: sketchName, index, curve, tag, points: outline(curve, basis(tag.plane)) } : null;
+}
 
 // what is on screen
 const S = { state: null, project: null, proj: null, note: null, data: null, faces: [], parts: [], edges: [], points: [], hotPart: null, hidden: new Set(),
@@ -85,7 +92,7 @@ scene.add(sheets);
 const READY = [['front', [0, -1, 0], 0x5b8cff], ['top', [0, 0, 1], 0x4cc38a], ['left', [-1, 0, 0], 0xff6b6b]];
 function planes() {
   const out = READY.map(([name, n, colour]) => ({ name, label: name[0].toUpperCase() + name.slice(1), plane: frameOf(n, [0, 0, 0]), colour, ready: true }));
-  for (const [name, t] of Object.entries(S.data?.tags ?? {})) if (t.kind === 'plane' && t.plane) out.push({ name, label: name, plane: t.plane, on: t.on ?? null, colour: 0xd4832f });
+  for (const [name, t] of Object.entries(S.data?.tags ?? {})) if (t.kind === 'plane' && t.plane) out.push({ name, label: name, plane: t.plane, on: t.on ?? null, offset: t.offset ?? 0, base: t.base ?? null, colour: 0xd4832f });
   return out;
 }
 let shown = [];      // the planes as drawn: with where their sheet is, for clicking on it and for its label
@@ -375,6 +382,17 @@ function pick(x, y, mode = S.mode) {
         if (d < 8 && a[2] + (b[2] - a[2]) * t <= front + slack && (!best || d < best.d)) best = { kind: 'edge', i: e.i, d };
       }
     }
+    // what was drawn on the part is drawn over it: nothing hides it
+    for (const [name, tag] of Object.entries(S.data?.tags ?? {})) {
+      if (tag.kind !== 'sketch') continue;
+      (tag.curves ?? []).forEach((_, index) => {
+        const pts = curveOf(`${name}:${index}`).points.map((q) => to(q[0], q[1], q[2]));
+        for (let k = 0; k + 1 < pts.length; k++) {
+          const [d] = toSegment(x, y, pts[k][0], pts[k][1], pts[k + 1][0], pts[k + 1][1]);
+          if (d < 8 && (!best || d <= best.d)) best = { kind: 'curve', i: `${name}:${index}`, d };
+        }
+      });
+    }
   }
   return best;
 }
@@ -408,6 +426,13 @@ function boxPick(x0, y0, x1, y1, touching) {
         if (inside(a) && inside(b)) any = true; else { all = false; if (hitsBox(a[0], a[1], b[0], b[1], x0, y0, x1, y1)) any = true; }
       }
       if (touching ? any : all) out.push({ kind: 'edge', i: e.i });
+    }
+    for (const [name, tag] of Object.entries(S.data?.tags ?? {})) {
+      if (tag.kind !== 'sketch') continue;
+      (tag.curves ?? []).forEach((_, index) => {
+        const ins = curveOf(`${name}:${index}`).points.map((q) => inside(to(q[0], q[1], q[2])));
+        if (touching ? ins.some(Boolean) : ins.every(Boolean)) out.push({ kind: 'curve', i: `${name}:${index}` });
+      });
     }
   } else {
     // faces and objects: by the corners of their triangles
@@ -449,6 +474,7 @@ function showSelection() {
       for (let k = e.segs[0] * 6; k < (e.segs[0] + e.segs[1]) * 6; k += 3) lines.push(s[k] + o.x, s[k + 1] + o.y, s[k + 2] + o.z);
     }
     for (const i of S.sel.vertex) { const v = S.points[i]; if (v) { const o = offsetOf(v.p); dots.push(v.at[0] + o.x, v.at[1] + o.y, v.at[2] + o.z); } }
+    for (const id of S.sel.curve) { const c = curveOf(id); if (c) for (let k = 0; k + 1 < c.points.length; k++) lines.push(...c.points[k], ...c.points[k + 1]); }
   }
   selLines.visible = lines.length > 0 && !S.compare;
   if (lines.length) { selLines.geometry.dispose(); selLines.geometry = new LineSegmentsGeometry().setPositions(lines); }
@@ -459,7 +485,7 @@ function showSelection() {
   showMeasure(); showTag();
 }
 
-const count = () => S.sel.vertex.size + S.sel.edge.size + S.sel.face.size + S.sel.part.size;
+const count = () => S.sel.vertex.size + S.sel.edge.size + S.sel.face.size + S.sel.part.size + S.sel.curve.size;
 // the one face, when a single face is all that is selected
 const theFace = () => (S.sel.face.size === 1 && count() === 1 ? S.faces[[...S.sel.face][0]] : null);
 const partName = (p) => (S.parts.length > 1 ? S.parts[p]?.name ?? null : null);
@@ -496,6 +522,12 @@ function thing(kind, i) {
     if (f.type === 'cylinder') facts.push([f.concave ? 'hole diameter' : 'diameter', `${r3(2 * f.radius)} mm`], ['axis', axisOf(f.axis)?.[1] ?? f.axis.map(r3).join(', ')]);
     return { kind, part: partOfFace(i), triangles: triangles(f.tris[0], f.tris[1]), facts,
       dir: f.type === 'plane' ? { normal: f.normal } : f.type === 'cylinder' ? { line: f.axis } : null };
+  }
+  if (kind === 'curve') {
+    const c = curveOf(i); if (!c) return null;
+    const segments = c.points.slice(1).map((q, k) => [c.points[k], q]);
+    return { kind, part: 0, segments, facts: [['length', `${r3(lengthOf(c.curve))} mm`]],
+      dir: c.points.length === 2 ? { line: c.points[1].map((v, k) => v - c.points[0][k]) } : null };
   }
   const q = S.parts[i];
   return q && { kind, part: i, triangles: triangles(q.tris[0], q.tris[1]),
@@ -589,6 +621,7 @@ function showTag() {
     for (let k = e.segs[0] * 6; k < (e.segs[0] + e.segs[1]) * 6; k += 3) lines.push(g[k] + o.x, g[k + 1] + o.y, g[k + 2] + o.z);
   }
   for (const i of hits.points) { const v = S.points[i]; if (v) { const o = offsetOf(v.p); dots.push(v.at[0] + o.x, v.at[1] + o.y, v.at[2] + o.z); } }
+  for (const id of hits.curves ?? []) { const c = curveOf(id); if (c) for (let k = 0; k + 1 < c.points.length; k++) lines.push(...c.points[k], ...c.points[k + 1]); }
   if (lines.length) {
     const l = new LineSegments2(new LineSegmentsGeometry().setPositions(lines), new LineMaterial({ color: colour, linewidth: 4, depthTest: false, transparent: true }));
     l.material.resolution.set(view.clientWidth, view.clientHeight);
@@ -608,6 +641,7 @@ function selectedItems() {
   for (const i of S.sel.face) { const f = S.faces[i]; if (f) { const { tris, ...rest } = f; out.push({ kind: 'face', ...rest, part: partName(partOfFace(i)) }); } }
   for (const i of S.sel.edge) { const e = S.edges[i]; if (e) { const { segs, p, ...rest } = e; out.push({ kind: 'edge', ...rest, part: partName(p) }); } }
   for (const i of S.sel.vertex) { const v = S.points[i]; if (v) out.push({ kind: 'vertex', at: v.at, part: partName(v.p) }); }
+  for (const id of S.sel.curve) { const c = curveOf(id); if (c) out.push({ kind: 'curve', sketch: c.sketch, index: c.index, curve: c.curve, plane: c.tag.plane, role: c.tag.role ?? '' }); }
   return out;
 }
 
@@ -690,9 +724,13 @@ function roomBar() {
   document.querySelectorAll('[data-rooms]').forEach((el) => el.classList.toggle('away', !el.dataset.rooms.split(' ').includes(S.room)));
   document.querySelectorAll('[data-sketching]').forEach((el) => el.classList.toggle('away', S.room !== 'sketch' || !sketch.state.active));
   document.querySelectorAll('[data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === sketch.state.tool));
+  const sized = sketch.state.tool === 'offset' || sketch.state.tool === 'fillet';
+  $('#sketchValue').hidden = $('#sketchValueLabel').hidden = !sized;
+  $('#sketchValueLabel').textContent = sketch.state.tool === 'fillet' ? 'radius' : 'by';
+  renderSketchSide();
   $('#sketchSnap').classList.toggle('on', sketch.state.snap);
   $('.hint').innerHTML = S.room === 'sketch' ? (sketch.state.active
-    ? 'click: place a point · click the first point: close · Enter: end the line · Esc: drop it · Backspace: step back<br>lines up with corners (pink) and the 1 mm grid · Shift: free · right-drag: move the page · wheel: zoom'
+    ? 'click: place a point · click the first point: close · Enter: end the line · Esc: drop it · Backspace: step back · Ctrl+Z: undo<br>lines up with corners (pink) and the 1 mm grid · Shift: free · right-drag: move the page · wheel: zoom'
     : 'click a plane, or a flat face of the part, to draw on it<br>drag: orbit · right-drag: pan · wheel: zoom')
     : 'drag: orbit · right-drag: pan · wheel: zoom<br>click: select · Shift: add · Ctrl: take away · Shift- or Ctrl-drag: box';
   canvas.style.cursor = S.room === 'sketch' ? 'crosshair' : S.boxTool ? 'crosshair' : '';
@@ -742,6 +780,8 @@ async function goRoom(room) {
 document.querySelectorAll('[data-room]').forEach((b) => { b.onclick = () => goRoom(b.dataset.room); });
 document.querySelectorAll('[data-tool]').forEach((b) => { b.onclick = () => sketch.setTool(b.dataset.tool); });
 $('#sketchSnap').onclick = () => { sketch.state.snap = !sketch.state.snap; roomBar(); };
+$('#sketchValue').oninput = (e) => sketch.setValue(Number(e.target.value.replace(',', '.')));
+$('#sketchUndo').onclick = () => sketch.undo();
 
 (function loop() {
   requestAnimationFrame(loop);
@@ -849,7 +889,22 @@ function busy(text) { $('#busy').hidden = !text; $('#busy').textContent = text |
 const state = (n) => (n.kind === 'module' ? '' : n.state === 'error' ? 'red' : n.state === 'unbuilt' ? '' : n.changed ? 'yellow' : 'green');
 const order = { assembly: 0, note: 1, module: 2 };
 
+function renderSketchSide() {
+  const hex = (c) => `#${c.toString(16).padStart(6, '0')}`, sk = sketch.state;
+  const built = S.data?.is_note && S.data.report?.built;
+  $('#planesList').innerHTML = !built ? '<div class="item muted">open a part that builds</div>' : planes().map((q) => `<div class="item plane ${sk.active && sk.planeName === q.name ? 'sel' : ''}" data-plane="${esc(q.name)}" title="draw on this plane">
+      <span class="dot" style="background:${hex(q.colour)}"></span><span class="grow">${esc(q.label)}</span>
+      ${q.ready ? `<button class="x" data-act="planecopy" data-name="${esc(q.name)}" title="a new plane like this one, a distance off it">+</button>`
+        : `<input class="off" data-offset="${esc(q.name)}" value="${fmt(q.offset ?? 0)}" inputmode="decimal" title="how far off ${q.base ? esc(q.base) : 'its face'} this plane lies, mm: change it and what is drawn on it moves with it" ${sk.active ? 'disabled' : ''}>
+           <button class="x" data-act="untag" data-name="${esc(q.name)}" title="remove this plane">×</button>`}</div>`).join('');
+  const sketches = Object.entries(S.data?.tags ?? {}).filter(([, t]) => t.kind === 'sketch');
+  $('#sketchList').innerHTML = sketches.map(([name, t]) => `<div class="item ${sk.active && sk.editing === name ? 'sel' : ''}" data-sketch="${esc(name)}" title="${esc(t.role ?? '')}\nclick: open it to draw on">
+      <span class="dot"></span><span class="grow">${esc(name)} <small>${(t.curves ?? []).length} · ${esc(t.plane_name ?? 'on a face')}</small></span>
+      <button class="x" data-act="untag" data-name="${esc(name)}" title="remove this sketch">×</button></div>`).join('') || '<div class="item muted">none yet</div>';
+}
+
 function renderSide() {
+  renderSketchSide();
   // Assembly shows the assemblies; Part and Sketch show the parts (and the modules they share)
   const mine = S.proj.notes.filter((n) => (S.room === 'assembly' ? n.kind === 'assembly' : n.kind !== 'assembly'));
   const sorted = [...mine].sort((a, b) => order[a.kind] - order[b.kind] || a.name.localeCompare(b.name));
@@ -863,6 +918,33 @@ function renderSide() {
   }).join('') || '<div class="item muted">nothing saved yet</div>';
 }
 $('#notes').onclick = (e) => { const el = e.target.closest('[data-note]'); if (el) open(S.project, el.dataset.note); };
+const tagsUrl = () => `/p/${S.project}/n/${S.note}`;
+async function redo(fn) { try { busy('building…'); await fn(); await open(S.project, S.note); } catch (e) { alert(e.message); busy(); } }
+$('aside').addEventListener('click', (e) => {
+  if (e.target.closest('input')) return;
+  const b = e.target.closest('[data-act]');
+  if (b?.dataset.act === 'untag') { if (confirm(`Remove "${b.dataset.name}" from the Note?`)) redo(() => api(`${tagsUrl()}/tags/${b.dataset.name}`, 'DELETE')); return; }
+  if (b?.dataset.act === 'planecopy') {      // a plane like Front, Top or Left, off it: 10 mm to begin with, the number is there to change
+    const base = planes().find((q) => q.name === b.dataset.name), n = base.plane.normal;
+    let k = 1; while (S.data.tags[`${base.name}_${k}`]) k++;
+    const plane = { ...base.plane, origin: base.plane.origin.map((v, i) => v + n[i] * 10) };
+    redo(() => api(`${tagsUrl()}/tags`, 'POST', { name: `${base.name}_${k}`, plane: { plane, offset: 10, base: base.name } }));
+    return;
+  }
+  const busyDrawing = sketch.state.active && (sketch.state.curves.length || sketch.state.draft);
+  const pl = e.target.closest('[data-plane]'), sk = e.target.closest('[data-sketch]');
+  if ((pl || sk) && busyDrawing) return notice('save or cancel this sketch first');
+  if (pl) { const q = planes().find((x) => x.name === pl.dataset.plane); if (q) { sketch.end(); startSketch({ plane: q.plane, planeName: q.name, on: q.on }); } }
+  else if (sk) { sketch.end(); startSketch({ tag: S.data.tags[sk.dataset.sketch], name: sk.dataset.sketch }); }
+});
+$('aside').addEventListener('change', (e) => {      // a plane's distance off its face, changed afterwards
+  const name = e.target.dataset.offset;
+  if (!name) return;
+  const offset = Number(e.target.value.replace(',', '.'));
+  if (!Number.isFinite(offset)) { alert('the offset is a number of millimetres'); return; }
+  redo(() => api(`${tagsUrl()}/planes/${name}`, 'PUT', { offset }));
+});
+$('aside').addEventListener('mouseover', (e) => { const pl = e.target.closest('[data-plane]')?.dataset.plane ?? null; if (pl !== S.hotPlane) { S.hotPlane = pl; showPlanes(pl); } });
 $('#versions').onclick = (e) => { const el = e.target.closest('[data-version]'); if (el && S.data?.is_note) compare(el.dataset.version); };
 
 async function open(project, note) {
@@ -900,6 +982,7 @@ async function open(project, note) {
       // numbers of faces, lines and points only mean something within one build: a rebuilt part starts unselected
       const same = !changedNote && described.faces.length === S.faces.length && (described.edges ?? []).length === S.edges.length && (described.points ?? []).length === S.points.length;
       if (!same) { S.sel = nothing(); S.inspect = null; }
+      for (const id of [...S.sel.curve]) if (!curveOf(id)) S.sel.curve.delete(id);
       S.faces = described.faces; S.parts = described.parts ?? []; S.edges = described.edges ?? []; S.points = described.points ?? [];
       assemble(loaded);
       frame(groups.part, !changedNote);
@@ -941,6 +1024,7 @@ function selectionCard() {
   for (const i of S.sel.face) if (S.faces[i]) lines.push(named(partOfFace(i)) + esc(words(S.faces[i])));
   for (const i of S.sel.edge) if (S.edges[i]) lines.push(named(S.edges[i].p) + esc(edgeWords(S.edges[i])));
   for (const i of S.sel.vertex) if (S.points[i]) lines.push(`${named(S.points[i].p)}point at ${S.points[i].at.map(r2).join(', ')}`);
+  for (const id of S.sel.curve) { const c = curveOf(id); if (c) lines.push(`sketch <b>${esc(c.sketch)}</b>: ${esc(curveWords(c.curve))}`); }
   const kinds = Object.keys(NAMES).filter((k) => S.sel[k].size).map((k) => `${S.sel[k].size} ${NAMES[k][S.sel[k].size > 1 ? 1 : 0]}`).join(', ');
   const what = S.measuring ? 'point, line or face' : NAMES[S.mode][0];
   const body = n ? `${lines.slice(0, 8).map((l) => `<div class="check">${l}</div>`).join('')}
@@ -961,34 +1045,30 @@ function selectionCard() {
 }
 
 function sketchCards() {
-  const sk = sketch.state, tags = Object.entries(S.data?.tags ?? {}).filter(([, t]) => t.kind === 'sketch');
+  const sk = sketch.state;
   if (!sk.active) {
-    return card('sketch', 'Sketch', `<p class="muted" style="margin-top:0">A drawing on a face of <b>${esc(S.note)}</b>: lines, rectangles and circles, in millimetres.
+    return card('sketch', 'Sketch', `<p class="muted" style="margin-top:0">A drawing on <b>${esc(S.note)}</b>: lines, rectangles, circles and ovals, in millimetres.
         It is kept as a tag, and your agent makes the shape of it: "cut the pocket sketch 3 deep", "raise a boss from this circle".</p>
-      <p><b>Choose where to draw</b>: a plane below (or its sheet in the view), or click a flat face of the part.</p>
-      <p class="head" style="margin-top:12px">Planes</p>
-      ${planes().map((q) => `<div class="check plane" data-plane="${esc(q.name)}"><div class="row"><span><span class="swatch" style="background:#${q.colour.toString(16).padStart(6, '0')}"></span><b>${esc(q.label)}</b></span>
-        <span class="v muted">${q.ready ? 'through the origin' : 'on a face'}</span>
-        ${q.ready ? '' : `<button class="x" data-act="untag" data-name="${esc(q.name)}" title="remove this plane">×</button>`}</div></div>`).join('')}
-      <p class="muted">More planes: in Part, select one flat face and press New plane.</p>
-      <p class="head" style="margin-top:12px">Sketches</p>
-      ${tags.map(([name, t]) => `<div class="check"><div class="row"><span><b>${esc(name)}</b></span><span class="v muted">${(t.curves ?? []).length} curves</span>
-        <button class="x" data-act="editsketch" data-name="${esc(name)}" title="open this sketch">✎</button>
-        <button class="x" data-act="untag" data-name="${esc(name)}" title="remove this sketch">×</button></div><div class="why">${esc(t.role ?? '')}</div></div>`).join('')
-        || '<p class="muted">No sketches on this part yet.</p>'}`);
+      <p><b>Choose where to draw</b>: a plane on the left (or its sheet in the view), or click a flat face of the part.</p>
+      <p class="muted">Front, Top and Left go through the part's origin. <b>+</b> beside one makes a plane a distance off it; in Part, a flat face
+        and New plane puts one on that face. The distance of such a plane can be changed at any time, and what is drawn on it moves with it.</p>`);
   }
   const n = sk.plane.normal, ax = axisOf(n), at = ax ? `${ax[1].toLowerCase()} = ${r3(basis(sk.plane).normal.dot(basis(sk.plane).origin))}` : '';
+  const how = { line: 'click point after point; the first point again closes it, Enter ends it open', rect: 'click two opposite corners', circle: 'click the centre, then a point on the circle',
+    oval: 'click the two ends of one axis, then how far the other reaches', offset: 'point beside a curve, on the side the copy should lie, and click', trim: 'click the stretch to take away: it goes up to where other curves cross it',
+    fillet: 'click a corner between two straight lines' }[sk.tool];
   return card('sketch', sk.editing ? `Sketch · ${esc(sk.editing)}` : 'New sketch', `
     ${sk.planeName ? row('on the plane', `<b>${esc(sk.planeName)}</b>`) : ''}
     ${row(sk.planeName ? 'which is' : 'on the face', ax ? `facing ${ax}, at ${at}` : `normal ${n.map(r2).join(', ')}`)}
-    ${row('u, v', ax ? 'the part\'s own coordinates on this face' : 'from the point of the plane nearest the origin')}
+    <p class="muted"><b>${esc(sk.tool[0].toUpperCase() + sk.tool.slice(1))}</b>: ${how}.</p>
+    ${sk.message ? `<p class="err">${esc(sk.message)}</p>` : ''}
     ${sk.curves.map((c, i) => `<div class="check"><div class="row"><span>${esc(sketch.describe(c))}</span><button class="x" data-act="uncurve" data-i="${i}" title="remove">×</button></div></div>`).join('')
-      || '<p class="muted">Nothing drawn yet. Pick Line, Rectangle or Circle above the view and click on the plane.</p>'}
-    ${sk.draft ? `<p class="warn">Drawing a ${sk.draft.type === 'rect' ? 'rectangle' : sk.draft.type}: ${sk.draft.type === 'line' ? `${sk.draft.points.length} points; click the first to close, Enter to end` : 'click the second point'}.</p>` : ''}
+      || '<p class="muted">Nothing drawn yet.</p>'}
+    ${sk.draft ? `<p class="warn">Drawing: ${sk.draft.points.length} point${sk.draft.points.length > 1 ? 's' : ''} placed. Esc drops it.</p>` : ''}
     <div class="line"><input id="sketchName" placeholder="name it: pocket, slot, boss…" maxlength="40" value="${esc(S.sketchName)}" ${sk.editing ? 'readonly' : ''}></div>
     <div class="line"><input id="sketchRole" placeholder="what to do with it: cut 3 deep, raise 5…" maxlength="200" value="${esc(S.sketchRole)}"></div>
-    <div class="line"><span style="flex:1"></span><button data-act="sketchcancel">Cancel</button><button class="primary" data-act="sketchsave" ${sk.curves.length ? '' : 'disabled'}>Save sketch</button></div>
-    <p class="muted">Saved as a tag in the Note. It holds as long as this face is still there.</p>`);
+    <div class="line"><button data-act="sketchundo" ${sk.history.length || sk.draft ? '' : 'disabled'} title="Ctrl+Z">Undo</button><span style="flex:1"></span><button data-act="sketchcancel">Cancel</button><button class="primary" data-act="sketchsave" ${sk.curves.length ? '' : 'disabled'}>Save sketch</button></div>
+    <p class="muted">Saved as a tag in the Note. In Part its lines can be selected one by one (Lines) and named, to tell your agent what to do with each.</p>`);
 }
 
 function renderPanel(force) {
@@ -1114,8 +1194,6 @@ $('#panel').addEventListener('mouseover', (e) => {
   const t = e.target.closest('[data-tag]'), q = e.target.closest('[data-part]');
   const hot = t ? t.dataset.tag : null, hotPart = q ? Number(q.dataset.part) : null;
   if (hot !== S.hot || hotPart !== S.hotPart) { S.hot = hot; S.hotPart = hotPart; paint(); showTag(); }
-  const pl = e.target.closest('[data-plane]')?.dataset.plane ?? null;
-  if (pl !== S.hotPlane) { S.hotPlane = pl; showPlanes(pl); }
 });
 $('#panel').addEventListener('mouseleave', () => { if (S.hot || S.hotPart != null) { S.hot = S.hotPart = null; paint(); showTag(); } });
 $('#panel').addEventListener('click', (e) => {
@@ -1123,8 +1201,6 @@ $('#panel').addEventListener('click', (e) => {
   if (!b) {
     const f = e.target.closest('[data-fold]');
     if (f) { fold(f.dataset.fold); return; }
-    const pl = e.target.closest('[data-plane]');   // a plane in the Sketch panel: draw on it
-    if (pl) { const q = planes().find((x) => x.name === pl.dataset.plane); if (q) startSketch({ plane: q.plane, planeName: q.name, on: q.on }); return; }
     const t = e.target.closest('[data-tag]');     // a click on a tag holds it: it stays lit, through the part, until clicked again
     if (t) { S.tagSel = S.tagSel === t.dataset.tag ? null : t.dataset.tag; paint(); showTag(); renderPanel(true); return; }
     const q = e.target.closest('[data-part]');   // a click on a part's row selects that part, with Shift and Ctrl as in the view
@@ -1155,6 +1231,7 @@ $('#panel').addEventListener('click', (e) => {
   }
   if (a === 'editsketch') { startSketch({ tag: S.data.tags[b.dataset.name], name: b.dataset.name }); return; }
   if (a === 'uncurve') { sketch.remove(Number(b.dataset.i)); return; }
+  if (a === 'sketchundo') { sketch.undo(); return; }
   if (a === 'sketchcancel') { leaveSketch(); return; }
   if (a === 'sketchsave') {
     const name = S.sketchName.trim(), drawing = sketch.drawing(), face = sketch.state.face;

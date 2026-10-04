@@ -21,6 +21,7 @@ Kinds
   points, two parallel flat faces or a point and a flat face it measures the distance between them)
 - sketch: plane {origin, normal, x} and curves drawn on it by the user, optionally `on` a face selector
 - plane: plane {origin, normal, x}: a plane the user made to draw on, `on` a face (and `offset` mm off it)
+- sketch_curve: one curve of a sketch: sketch (the sketch's tag name) and curve (the curve itself, as drawn)
 """
 import math
 import re
@@ -302,7 +303,7 @@ def _group(tag, faces, ctx):
     if not members:
         raise ValueError("a group needs `of`: the selectors it is made of")
     out = {"resolved": all(m["resolved"] for m in members)}
-    for key in ("faces", "edges", "points", "parts"):
+    for key in ("faces", "edges", "points", "parts", "curves"):
         ids = sorted({i for m in members for i in m.get(key, [])})
         if ids or key == "faces":
             out[key] = ids
@@ -330,7 +331,7 @@ def _sketch(tag, faces, ctx):
     plane = tag.get("plane") or {}
     if len(plane.get("origin", [])) != 3 or len(plane.get("normal", [])) != 3 or len(plane.get("x", [])) != 3:
         raise ValueError("a sketch needs a plane with origin, normal and x, each [x, y, z]")
-    out = {"resolved": True, "faces": [], "measure": {"curves": len(curves), "closed": sum(1 for c in curves if c.get("closed") or c.get("type") in ("circle", "rect"))}}
+    out = {"resolved": True, "faces": [], "measure": {"curves": len(curves), "closed": sum(1 for c in curves if c.get("closed") or c.get("type") in ("circle", "rect", "ellipse"))}}
     if tag.get("on"):
         fn = KINDS.get(tag["on"].get("kind"))
         on = fn(tag["on"], faces, ctx) if fn and fn not in (_group, _sketch, _plane) else None
@@ -355,9 +356,62 @@ def _plane(tag, faces, ctx):
     return out
 
 
+def curve_length(c: dict) -> float:
+    """How long a curve of a sketch is, in mm."""
+    kind = c.get("type")
+    if kind == "rect":
+        return 2 * (c["size"][0] + c["size"][1])
+    if kind == "circle":
+        return 2 * math.pi * c["r"]
+    if kind == "ellipse":      # Ramanujan: good to a few parts in a million for any shape a person draws
+        a, b = c["rx"], c["ry"]
+        h = ((a - b) / (a + b)) ** 2
+        return math.pi * (a + b) * (1 + 3 * h / (10 + math.sqrt(4 - 3 * h)))
+    pts = c.get("points") or []
+    total = 0.0
+    for i in range(len(pts) if c.get("closed") and len(pts) > 2 else len(pts) - 1):
+        p, q = pts[i], pts[(i + 1) % len(pts)]
+        d = math.dist(p[:2], q[:2])
+        bulge = p[2] if len(p) > 2 else 0
+        angle = 4 * math.atan(bulge)
+        total += d if abs(bulge) < 1e-9 or d < 1e-9 else abs(angle) * d / (2 * math.sin(abs(angle) / 2))
+    return total
+
+
+def _same_curve(a: dict, b: dict) -> bool:
+    def flat(c):
+        return [round(float(x), 3) for x in _numbers_in(c)]
+    return a.get("type") == b.get("type") and bool(a.get("closed")) == bool(b.get("closed")) and flat(a) == flat(b)
+
+
+def _numbers_in(v):
+    if isinstance(v, dict):
+        for k in sorted(v):
+            yield from _numbers_in(v[k])
+    elif isinstance(v, (list, tuple)):
+        for x in v:
+            yield from _numbers_in(x)
+    elif isinstance(v, (int, float)) and not isinstance(v, bool):
+        yield v
+
+
+def _sketch_curve(tag, _faces, ctx):
+    """One curve of a sketch, named for itself: the line to cut along, the circle to make a boss of. It is told by
+    what it is, not by its number in the sketch: redraw it elsewhere and this tag no longer finds it."""
+    sketch = (ctx.get("tags") or {}).get(tag.get("sketch"))
+    if not sketch or sketch.get("kind") != "sketch":
+        return {"resolved": False, "faces": [], "measure": {}, "why": f"there is no sketch {tag.get('sketch')!r}"}
+    want = tag.get("curve") or {}
+    for i, c in enumerate(sketch.get("curves") or []):
+        if _same_curve(c, want):
+            return {"resolved": True, "faces": [], "curves": [f"{tag['sketch']}:{i}"],
+                    "measure": {"length": round(curve_length(c), 3), "closed": bool(c.get("closed") or c.get("type") in ("circle", "rect", "ellipse"))}}
+    return {"resolved": False, "faces": [], "measure": {}, "why": f"the sketch {tag['sketch']!r} has no such curve any more"}
+
+
 KINDS = {"planar_face": _planar_face, "square_hole": _square_hole, "round_hole": _cylinder(True),
          "boss": _cylinder(False), "face_at": _face_at, "point": _point, "edge": _edge, "object": _object,
-         "group": _group, "sketch": _sketch, "plane": _plane}
+         "group": _group, "sketch": _sketch, "plane": _plane, "sketch_curve": _sketch_curve}
 
 
 def resolve(tags: dict, faces: list, box: list, inside=None, edges=(), points=(), parts=()) -> dict:
@@ -365,7 +419,7 @@ def resolve(tags: dict, faces: list, box: list, inside=None, edges=(), points=()
     whether a point is in material (the runner passes the solid's own test); edges, points and parts are the
     other things a tag can name, as the runner describes them."""
     ctx = {"box": box, "inside": inside, "edges": list(edges), "points": list(points),
-           "parts": [{**q, "i": n} for n, q in enumerate(parts)]}
+           "parts": [{**q, "i": n} for n, q in enumerate(parts)], "tags": tags or {}}
     out = {}
     for name, tag in (tags or {}).items():
         try:
@@ -414,6 +468,8 @@ def propose_item(item: dict) -> dict:
         return {"kind": "edge", "a": [round(x, 3) for x in item["a"]], "b": [round(x, 3) for x in item["b"]]}
     if kind == "part":
         return {"kind": "object", "name": item["name"]}
+    if kind == "curve":
+        return {"kind": "sketch_curve", "sketch": item["sketch"], "curve": _clean_curve(item["curve"])}
     return propose(item)
 
 
@@ -444,37 +500,59 @@ def clean_plane(spec: dict) -> dict:
     offset = spec.get("offset") or 0
     if not isinstance(offset, (int, float)) or isinstance(offset, bool) or not math.isfinite(offset):
         raise ValueError("an offset is a number of millimetres")
-    return {"plane": _clean_frame(spec.get("plane")), "offset": round(float(offset), 3)}
+    out = {"plane": _clean_frame(spec.get("plane")), "offset": round(float(offset), 3)}
+    if spec.get("base") in ("front", "top", "left"):      # a copy of one of the ready planes, moved off it
+        out["base"] = spec["base"]
+    return out
+
+
+def _clean_curve(c: dict) -> dict:
+    vec = _vec
+    kind = c.get("type") if isinstance(c, dict) else None
+    if kind == "rect":
+        size = vec(c.get("size"), 2)
+        if min(size) <= 0:
+            raise ValueError("a rectangle needs a width and a height")
+        return {"type": "rect", "at": vec(c.get("at"), 2), "size": size}
+    if kind == "circle":
+        r = c.get("r")
+        if not isinstance(r, (int, float)) or isinstance(r, bool) or r <= 0:
+            raise ValueError("a circle needs a radius")
+        return {"type": "circle", "center": vec(c.get("center"), 2), "r": round(float(r), 3)}
+    if kind == "ellipse":
+        rx, ry, rotation = vec([c.get("rx"), c.get("ry"), c.get("rotation") or 0], 3)
+        if rx <= 0 or ry <= 0:
+            raise ValueError("an oval needs two radii")
+        return {"type": "ellipse", "center": vec(c.get("center"), 2), "rx": rx, "ry": ry, "rotation": rotation}
+    if kind == "polyline":
+        points = []
+        for q in c.get("points") or []:
+            # [u, v], or [u, v, bulge]: the stretch from here to the next point is an arc, tan(angle / 4), left positive
+            if not isinstance(q, (list, tuple)) or len(q) not in (2, 3):
+                raise ValueError(f"a point is [u, v] or [u, v, bulge], not {q!r}")
+            u, v = vec(q[:2], 2)
+            bulge = q[2] if len(q) == 3 else 0
+            if not isinstance(bulge, (int, float)) or isinstance(bulge, bool) or not math.isfinite(bulge) or abs(bulge) > 1000:
+                raise ValueError(f"a bulge is a number, not {bulge!r}")
+            points.append([u, v, round(float(bulge), 9)] if abs(bulge) > 1e-9 else [u, v])
+        if not 2 <= len(points) <= 2000:
+            raise ValueError("a line needs 2 to 2000 points")
+        closed = bool(c.get("closed")) and len(points) > 2
+        if not closed and len(points[-1]) == 3:
+            points[-1] = points[-1][:2]
+        return {"type": "polyline", "points": points, "closed": closed}
+    raise ValueError(f"a curve is a polyline, a rect, a circle or an ellipse, not {kind!r}")
 
 
 def clean_sketch(sketch: dict) -> dict:
     """A drawing as it is kept in a tag: checked, and rounded to a micron. Raises ValueError on one that is not."""
-    vec = _vec
     out = {"plane": _clean_frame(sketch.get("plane")), "curves": []}
     if isinstance(sketch.get("plane_name"), str) and re.match(r"^[a-z][a-z0-9_]{0,39}$", sketch["plane_name"]):
         out["plane_name"] = sketch["plane_name"]       # which plane it was drawn on, for the reader
     curves = sketch.get("curves") or []
     if len(curves) > 200:
         raise ValueError("a sketch holds at most 200 curves")
-    for c in curves:
-        kind = c.get("type")
-        if kind == "rect":
-            size = vec(c.get("size"), 2)
-            if min(size) <= 0:
-                raise ValueError("a rectangle needs a width and a height")
-            out["curves"].append({"type": "rect", "at": vec(c.get("at"), 2), "size": size})
-        elif kind == "circle":
-            r = c.get("r")
-            if not isinstance(r, (int, float)) or r <= 0:
-                raise ValueError("a circle needs a radius")
-            out["curves"].append({"type": "circle", "center": vec(c.get("center"), 2), "r": round(float(r), 3)})
-        elif kind == "polyline":
-            points = [vec(q, 2) for q in c.get("points") or []]
-            if not 2 <= len(points) <= 2000:
-                raise ValueError("a line needs 2 to 2000 points")
-            out["curves"].append({"type": "polyline", "points": points, "closed": bool(c.get("closed")) and len(points) > 2})
-        else:
-            raise ValueError(f"a curve is a polyline, a rect or a circle, not {kind!r}")
+    out["curves"] = [_clean_curve(c) for c in curves]
     if isinstance(sketch.get("on"), dict) and sketch["on"].get("kind") in KINDS and sketch["on"]["kind"] not in ("group", "sketch", "plane"):
         out["on"] = sketch["on"]
     return out

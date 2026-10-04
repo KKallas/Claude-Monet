@@ -110,7 +110,7 @@ def test_the_agent_sees_a_selection_of_many_things(client, reg):
     sel = client.get(f"{w}/agent/selection", params={"project": "starter"}).json()
     assert sel["selected"] and sel["mode"] == "edge" and sel["count"] == 4 and sel["measure"] == {"length, mm": 45}
     assert [i["kind"] for i in sel["items"]] == ["face", "edge", "vertex", "part"]
-    assert sel["items"][0]["selector"]["kind"] == "planar_face" and "selector" not in sel["items"][1]
+    assert [i["selector"]["kind"] for i in sel["items"]] == ["planar_face", "edge", "point", "object"]      # how each would be found again
     assert sel["items"][1]["type"] == "line" and sel["items"][2]["at"] == d["points"][0]["at"]
     client.post(f"{w}/api/p/starter/selection", json={})               # cleared in the canvas
     assert not client.get(f"{w}/agent/selection", params={"project": "starter"}).json()["selected"]
@@ -133,7 +133,7 @@ def test_a_tag_of_several_things_and_a_check_on_what_lies_between(client, reg):
     assert client.post(f"{n}/checks", json={"what": "tag.height.distance", "min": 22.3, "max": 22.5, "why": "fits under the shelf"}).json()["report"]["green"]
     edge = {k: v for k, v in d["edges"][0].items() if k not in ("segs", "p")}
     mixed = client.post(f"{n}/tags", json={"name": "corner_edge", "items": [{"kind": "edge", **edge}, {"kind": "vertex", "at": d["points"][0]["at"]}]}).json()
-    assert mixed["green"] and client.get(n).json()["tag_hits"]["corner_edge"] == {"faces": [], "edges": [0], "points": [0], "parts": []}
+    assert mixed["green"] and client.get(n).json()["tag_hits"]["corner_edge"] == {"faces": [], "edges": [0], "points": [0], "parts": [], "curves": []}
     assert client.post(f"{n}/tags", json={"name": "nothing", "items": []}).status_code == 400
     for name in ("height", "corner_edge"):
         client.delete(f"{n}/tags/{name}")
@@ -173,7 +173,25 @@ def test_a_plane_on_a_face_and_a_sketch_on_that_plane(client, reg):
     label = client.get(n).json()["tags"]["label"]
     assert label["plane_name"] == "label_plane" and label["on"] == tag["on"] and label["plane"]["origin"] == [0.0, 0.0, 27.4]
     assert client.post(f"{n}/tags", json={"name": "bad", "plane": {"plane": {"origin": [0, 0, 0]}}}).status_code == 400
-    for name in ("label", "label_plane"):
+    # the distance of the plane off its face, changed afterwards: what was drawn on it goes with it
+    moved = client.put(f"{n}/planes/label_plane", json={"offset": 8}).json()
+    assert moved["green"] and moved["tags"]["label_plane"]["measure"] == {"offset": 8.0}
+    after = client.get(n).json()["tags"]
+    assert after["label_plane"]["plane"]["origin"] == [0.0, 0.0, 30.4] and after["label"]["plane"]["origin"] == [0.0, 0.0, 30.4]
+    assert after["label"]["curves"] == label["curves"]
+    assert client.put(f"{n}/planes/nope", json={"offset": 1}).status_code == 404 and client.put(f"{n}/planes/label_plane", json={"offset": "far"}).status_code == 400
+    # a plane like Top, a distance off it: no face under it
+    copy = client.post(f"{n}/tags", json={"name": "top_1", "plane": {"plane": {"origin": [0, 0, 10], "normal": [0, 0, 1], "x": [1, 0, 0]}, "offset": 10, "base": "top"}}).json()
+    assert copy["green"] and client.get(n).json()["tags"]["top_1"] == {"kind": "plane", "plane": {"origin": [0.0, 0.0, 10.0], "normal": [0.0, 0.0, 1.0], "x": [1.0, 0.0, 0.0]}, "offset": 10.0, "base": "top"}
+    # one line of the sketch, named by itself, and seen by the agent as something selected
+    one = client.post(f"{n}/tags", json={"name": "label_edge", "role": "engrave along it", "items": [{"kind": "curve", "sketch": "label", "index": 0, "curve": label["curves"][0]}]}).json()
+    assert one["green"] and one["tags"]["label_edge"] == {"resolved": True, "measure": {"length": 28.0, "closed": True}}
+    assert client.get(n).json()["tag_hits"]["label_edge"]["curves"] == ["label:0"]
+    client.post(f"{w}/api/p/starter/selection", json={"note": "rod_foot", "mode": "edge", "items": [{"kind": "curve", "sketch": "label", "index": 0, "curve": label["curves"][0], "role": ""}]})
+    item = client.get(f"{w}/agent/selection", params={"project": "starter"}).json()["items"][0]
+    assert item["kind"] == "curve" and item["selector"]["kind"] == "sketch_curve" and item["selector"]["sketch"] == "label"
+    client.post(f"{w}/api/p/starter/selection", json={})
+    for name in ("label_edge", "label", "label_plane", "top_1"):
         client.delete(f"{n}/tags/{name}")
 
 

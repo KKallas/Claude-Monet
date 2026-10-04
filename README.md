@@ -143,9 +143,14 @@ parts goes to Part, starting a drawing goes to Sketch.
   A tag picked in the panel shows through the part, like a hologram.
 - **Planes**: every part has three ready, through its origin: Front, Top and Left. With one
   flat face selected in Part, New plane puts another on that face (or a typed distance off
-  it); it stays with the part as a tag.
-- **Sketching**: choose a plane (or a flat face) and draw on it: lines, rectangles, circles, in
-  millimetres, lining up with the part's corners and a 1 mm grid. The drawing is saved as a tag with what
+  it); + beside a ready plane makes one a distance off that. A plane stays with the part as a
+  tag, and its distance can be changed at any time: what is drawn on it moves with it.
+- **Sketching**: choose a plane on the left (or a flat face) and draw on it: lines,
+  rectangles, circles and ovals, in millimetres, lining up with the part's corners and a 1 mm
+  grid. Offset copies a curve a set distance off it; Trim takes a stretch away up to where
+  other curves cross it; Fillet rounds a corner. Undo goes back.
+- **Sketch lines in Part**: what was drawn stays in sight on the part, and each line can be
+  selected and named by itself ("cut along this one"), for the agent to act on. The drawing is saved as a tag with what
   you want done with it ("cut 3 deep"); your agent turns it into geometry.
 - **Panels fold**: every panel on either side shuts on a click on its head and stays as
   it was left.
@@ -235,7 +240,8 @@ canvas/       the browser view (three.js), no build step:
               canvas.js      the page: the three areas, selection, panels, compare
               measure.js     shortest distances and angles (plain arrays; tested in node)
               look.js        the styles and materials, printed PLA
-              sketch.js      drawing on a face
+              sketch.js      drawing on a plane
+              sketch2d.js    what the sketch tools do to curves: offset, trim, fillet (tested in node)
 profiles/     printer and material profiles
 notes/        templates a new workspace starts with: starter, mg400_rakis
 skill/monet/  the skill for Claude: how to work in Monet (also served as /skill.zip and by guide())
@@ -260,13 +266,14 @@ it wider.
 ## What is missing
 
 - Tag kinds: flat faces, square and round holes, bosses, edges, points, objects, groups,
-  planes and sketches. No slots or patterns yet; a curved face is only found by a point near it.
+  planes, sketches and single sketch lines. No slots or patterns yet; a curved face is only found by a point near it.
 - Checks that need more geometry than a fingerprint: minimum wall, maximum solid
   thickness, overhangs, interference between the parts of an assembly (in the sample the
   nest's mouse ears overlap their neighbours by about 55 mm³ each; nothing reports it yet).
 - Canvas: Series (versions side by side), section caps, screen-space reflections (Adam
-  Designer has them on WebGPU). A sketch cannot be edited point by point yet: remove a curve
-  and draw it again. Arcs and dimensions in a sketch. Measuring whole objects against each
+  Designer has them on WebGPU). A sketch's points cannot be dragged yet: remove a curve
+  and draw it again. Dimensions and constraints in a sketch. Offsetting an outline that has
+  arcs turns them into short lines. Measuring whole objects against each
   other is approximate.
 - Translation to Fusion / Onshape, and STEP import ("step 0").
 - Profiles are data only: hole and shaft compensation is not applied to geometry yet.
