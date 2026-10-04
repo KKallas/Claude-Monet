@@ -8,7 +8,7 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { angle, closest } from './measure.js';
 import { MATERIALS, STYLES, createLook } from './look.js';
-import { basis, createSketcher, outline, strokes } from './sketch.js';
+import { basis, createSketcher, frameOf, outline, strokes } from './sketch.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -78,6 +78,62 @@ scene.add(holo);
 // the sketches of the part: what the user drew on its faces, always in sight
 const drawn = new THREE.Group();
 scene.add(drawn);
+// the planes of the part, shown where one is chosen to draw on: Front, Top and Left through its origin are always
+// there; the others are planes the user put on faces (tags of kind "plane")
+const sheets = new THREE.Group();
+scene.add(sheets);
+const READY = [['front', [0, -1, 0], 0x5b8cff], ['top', [0, 0, 1], 0x4cc38a], ['left', [-1, 0, 0], 0xff6b6b]];
+function planes() {
+  const out = READY.map(([name, n, colour]) => ({ name, label: name[0].toUpperCase() + name.slice(1), plane: frameOf(n, [0, 0, 0]), colour, ready: true }));
+  for (const [name, t] of Object.entries(S.data?.tags ?? {})) if (t.kind === 'plane' && t.plane) out.push({ name, label: name, plane: t.plane, on: t.on ?? null, colour: 0xd4832f });
+  return out;
+}
+let shown = [];      // the planes as drawn: with where their sheet is, for clicking on it and for its label
+function showPlanes(lit = null) {
+  for (const o of sheets.children) { o.geometry.dispose(); o.material.dispose(); }
+  sheets.clear();
+  shown = [];
+  const labels = $('#planeLabels');
+  const choosing = S.room === 'sketch' && !sketch.state.active && shared && !S.compare;
+  if (!choosing) { labels.innerHTML = ''; return; }
+  for (const q of planes()) {
+    // a sheet a little larger than the part is, seen square on to this plane
+    const b = basis(q.plane), lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+    for (const v of S.points) {
+      const d = new THREE.Vector3(...v.at).sub(b.origin), uv = [d.dot(b.x), d.dot(b.y)];
+      for (const k of [0, 1]) { lo[k] = Math.min(lo[k], uv[k]); hi[k] = Math.max(hi[k], uv[k]); }
+    }
+    if (!S.points.length) { lo.fill(-40); hi.fill(40); }
+    const margin = Math.max(4, 0.12 * Math.max(hi[0] - lo[0], hi[1] - lo[1]));
+    const half = [(hi[0] - lo[0]) / 2 + margin, (hi[1] - lo[1]) / 2 + margin];
+    const c = b.origin.clone().addScaledVector(b.x, (lo[0] + hi[0]) / 2).addScaledVector(b.y, (lo[1] + hi[1]) / 2);
+    const corner = (u, v) => c.clone().addScaledVector(b.x, u * half[0]).addScaledVector(b.y, v * half[1]);
+    const cs = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute([cs[0], cs[1], cs[2], cs[0], cs[2], cs[3]].flatMap((p) => p.toArray()), 3));
+    const sheet = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: q.colour, transparent: true, opacity: q.name === lit ? 0.3 : 0.09, side: THREE.DoubleSide, depthWrite: false, toneMapped: false }));
+    const rim = strokes([[...cs, cs[0]].map((p) => p.toArray())], q.colour, q.name === lit ? 3 : 1.5, 0.9);
+    rim.material.depthTest = true;
+    rim.material.resolution.set(view.clientWidth, view.clientHeight);
+    sheets.add(sheet, rim);
+    shown.push({ ...q, b, centre: c, half, at: cs[3] });
+  }
+  labels.innerHTML = shown.map((q, i) => `<span data-i="${i}" style="color:#${q.colour.toString(16).padStart(6, '0')}">${esc(q.label)}</span>`).join('');
+}
+function planeUnder(x, y) {      // the plane whose sheet is under the cursor: the nearest one
+  const r = canvas.getBoundingClientRect(), ray = new THREE.Raycaster();
+  ray.setFromCamera(new THREE.Vector2((x / r.width) * 2 - 1, -(y / r.height) * 2 + 1), camera);
+  let best = null;
+  for (const q of shown) {
+    const hit = ray.ray.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(q.b.normal, q.b.origin), new THREE.Vector3());
+    if (!hit) continue;
+    const d = hit.clone().sub(q.centre);
+    if (Math.abs(d.dot(q.b.x)) > q.half[0] || Math.abs(d.dot(q.b.y)) > q.half[1]) continue;
+    const far = hit.distanceTo(ray.ray.origin);
+    if (!best || far < best.far) best = { ...q, far };
+  }
+  return best;
+}
 const sketch = createSketcher({ scene, camera, controls, canvas, view, corners: () => S.points.map((v) => v.at), changed: () => { roomBar(); showSketches(); renderPanel(true); } });
 
 // compared versions are always drawn plainly: their colours are the distance map
@@ -108,7 +164,7 @@ function dress() {
 function resize() {
   const w = view.clientWidth, h = view.clientHeight;
   renderer.setSize(w, h, false);
-  for (const o of [selLines, dimLine, ...holo.children, ...drawn.children]) o.material.resolution?.set(w, h);
+  for (const o of [selLines, dimLine, ...holo.children, ...drawn.children, ...sheets.children]) o.material.resolution?.set(w, h);
   sketch.resize();
   const half = radius * 1.2, aspect = w / Math.max(1, h);
   Object.assign(camera, { left: -half * aspect, right: half * aspect, top: half, bottom: -half, near: 0.01, far: radius * 40 });
@@ -489,6 +545,18 @@ function showSketches() {
   drawn.clear();
   if (!S.data?.tags || S.compare) return;
   Object.entries(S.data.tags).forEach(([name, t], n) => {
+    if (t.kind === 'plane' && t.plane && (name === S.hot || name === S.tagSel) && !(S.room === 'sketch')) {
+      // a plane held in the panel: its outline, around the middle of the part
+      const pb = basis(t.plane), box3 = new THREE.Box3();
+      for (const v of S.points) box3.expandByPoint(new THREE.Vector3(...v.at));
+      const mid = box3.getCenter(new THREE.Vector3()), h = Math.max(...box3.getSize(new THREE.Vector3()).toArray()) * 0.62 + 8;
+      const c = mid.addScaledVector(pb.normal, -pb.normal.dot(mid.clone().sub(pb.origin)));
+      const k = (u, v) => c.clone().addScaledVector(pb.x, u * h).addScaledVector(pb.y, v * h).toArray();
+      const l = strokes([[k(-1, -1), k(1, -1), k(1, 1), k(-1, 1), k(-1, -1)]], PALETTE[n % PALETTE.length], 3, 0.95);
+      l.material.resolution.set(view.clientWidth, view.clientHeight);
+      drawn.add(l);
+      return;
+    }
     if (t.kind !== 'sketch' || !t.plane || (sketch.state.active && sketch.state.editing === name)) return;
     const b = basis(t.plane), lit = name === S.hot || name === S.tagSel;
     const l = strokes((t.curves ?? []).map((c) => outline(c, b)), PALETTE[n % PALETTE.length], lit ? 4 : 2, sketch.state.active ? 0.35 : 0.9);
@@ -583,8 +651,9 @@ window.addEventListener('pointerup', (e) => {
   } else if (Math.hypot(e.clientX - p.x, e.clientY - p.y) <= 4 && e.target === canvas) {
     const x = e.clientX - r.left, y = e.clientY - r.top;
     if (S.room === 'sketch') {      // no sketch under way: a click on a flat face starts one there
-      const one = pick(x, y, 'face');
+      const one = pick(x, y, 'face'), sheet = one ? null : planeUnder(x, y);
       if (one && S.faces[one.i].type === 'plane') startSketch({ face: S.faces[one.i] });
+      else if (sheet) startSketch({ plane: sheet.plane, planeName: sheet.name, on: sheet.on });
     } else if (S.measuring && !p.add && !p.remove) {
       // measuring: a point if one is near, else a line, else the face (or the object, when objects are being picked)
       const one = pick(x, y, 'vertex') ?? pick(x, y, 'edge') ?? pick(x, y, S.mode === 'part' ? 'part' : 'face');
@@ -624,9 +693,11 @@ function roomBar() {
   $('#sketchSnap').classList.toggle('on', sketch.state.snap);
   $('.hint').innerHTML = S.room === 'sketch' ? (sketch.state.active
     ? 'click: place a point · click the first point: close · Enter: end the line · Esc: drop it · Backspace: step back<br>lines up with corners (pink) and the 1 mm grid · Shift: free · right-drag: move the page · wheel: zoom'
-    : 'click a flat face to draw on it')
+    : 'click a plane, or a flat face of the part, to draw on it<br>drag: orbit · right-drag: pan · wheel: zoom')
     : 'drag: orbit · right-drag: pan · wheel: zoom<br>click: select · Shift: add · Ctrl: take away · Shift- or Ctrl-drag: box';
   canvas.style.cursor = S.room === 'sketch' ? 'crosshair' : S.boxTool ? 'crosshair' : '';
+  $('.bar.top').classList.toggle('away', S.room === 'sketch' && !sketch.state.active);      // nothing in it while a plane is chosen
+  showPlanes();
 }
 function startSketch(what) {
   S.room = 'sketch';
@@ -676,6 +747,10 @@ $('#sketchSnap').onclick = () => { sketch.state.snap = !sketch.state.snap; roomB
   requestAnimationFrame(loop);
   controls.update();
   renderer.render(scene, camera);
+  for (const el of $('#planeLabels').children) {      // the name of each plane, at a corner of its sheet
+    spot.copy(shown[Number(el.dataset.i)].at).project(camera);
+    el.style.transform = `translate(${(spot.x + 1) / 2 * view.clientWidth + 4}px, ${(1 - spot.y) / 2 * view.clientHeight + 2}px)`;
+  }
   if (S.inspect?.dim?.mid && !label.hidden) {     // the length of the measured line, beside its middle
     spot.copy(S.inspect.dim.mid).project(camera);
     label.style.transform = `translate(${(spot.x + 1) / 2 * view.clientWidth + 10}px, ${(1 - spot.y) / 2 * view.clientHeight - 12}px)`;
@@ -873,7 +948,10 @@ function selectionCard() {
       <div class="measured">${(S.inspect?.rows ?? []).map(([k, v, big]) => (k ? row(k, big ? `<b class="big">${esc(v)}</b>` : esc(v)) : `<p class="muted">${esc(v)}</p>`)).join('')}</div>
       <div class="line"><input id="tagName" placeholder="name ${n > 1 ? 'them' : 'it'}: base, rod_bore, width…" maxlength="40"><button class="primary" data-act="tag">Tag ${n > 1 ? 'them' : 'it'}</button></div>
       <div class="line"><input id="tagRole" placeholder="what it is for: sits on the plywood" maxlength="200"></div>
-      ${S.room === 'part' && theFace()?.type === 'plane' ? '<div class="line"><span class="muted" style="flex:1">Or draw on this face:</span><button data-act="sketchhere">Sketch on it</button></div>' : ''}
+      ${S.room === 'part' && theFace()?.type === 'plane' ? `<div class="line"><span class="muted" style="flex:1">Or draw here:</span>
+        <input id="planeOffset" placeholder="off it, mm" inputmode="decimal" style="flex:0 0 86px" title="how far off the face the new plane lies (empty: on it)">
+        <button data-act="planehere" title="a plane on this face that stays with the part: draw on it now and again later">New plane</button>
+        <button data-act="sketchhere" title="draw straight on this face">Sketch on it</button></div>` : ''}
       <p class="muted">${n > 1 ? 'Several things under one name: the tag holds as long as every one of them is still there.' : 'A tag is written into the Note and must survive every rebuild.'}
         ${n === 2 && S.inspect?.dim ? ' Two points or two parallel faces also give the tag their distance, which a check can hold.' : ''} Your agent sees this selection.</p>`
     : `<p class="muted">Click a ${what}: your agent can then be told "this ${NAMES[S.mode][0]}". Shift-click adds, Ctrl-click takes away.
@@ -887,7 +965,13 @@ function sketchCards() {
   if (!sk.active) {
     return card('sketch', 'Sketch', `<p class="muted" style="margin-top:0">A drawing on a face of <b>${esc(S.note)}</b>: lines, rectangles and circles, in millimetres.
         It is kept as a tag, and your agent makes the shape of it: "cut the pocket sketch 3 deep", "raise a boss from this circle".</p>
-      <p><b>Click a flat face</b> in the view to draw on it.</p>
+      <p><b>Choose where to draw</b>: a plane below (or its sheet in the view), or click a flat face of the part.</p>
+      <p class="head" style="margin-top:12px">Planes</p>
+      ${planes().map((q) => `<div class="check plane" data-plane="${esc(q.name)}"><div class="row"><span><span class="swatch" style="background:#${q.colour.toString(16).padStart(6, '0')}"></span><b>${esc(q.label)}</b></span>
+        <span class="v muted">${q.ready ? 'through the origin' : 'on a face'}</span>
+        ${q.ready ? '' : `<button class="x" data-act="untag" data-name="${esc(q.name)}" title="remove this plane">×</button>`}</div></div>`).join('')}
+      <p class="muted">More planes: in Part, select one flat face and press New plane.</p>
+      <p class="head" style="margin-top:12px">Sketches</p>
       ${tags.map(([name, t]) => `<div class="check"><div class="row"><span><b>${esc(name)}</b></span><span class="v muted">${(t.curves ?? []).length} curves</span>
         <button class="x" data-act="editsketch" data-name="${esc(name)}" title="open this sketch">✎</button>
         <button class="x" data-act="untag" data-name="${esc(name)}" title="remove this sketch">×</button></div><div class="why">${esc(t.role ?? '')}</div></div>`).join('')
@@ -895,7 +979,8 @@ function sketchCards() {
   }
   const n = sk.plane.normal, ax = axisOf(n), at = ax ? `${ax[1].toLowerCase()} = ${r3(basis(sk.plane).normal.dot(basis(sk.plane).origin))}` : '';
   return card('sketch', sk.editing ? `Sketch · ${esc(sk.editing)}` : 'New sketch', `
-    ${row('on the face', ax ? `facing ${ax}, at ${at}` : `normal ${n.map(r2).join(', ')}`)}
+    ${sk.planeName ? row('on the plane', `<b>${esc(sk.planeName)}</b>`) : ''}
+    ${row(sk.planeName ? 'which is' : 'on the face', ax ? `facing ${ax}, at ${at}` : `normal ${n.map(r2).join(', ')}`)}
     ${row('u, v', ax ? 'the part\'s own coordinates on this face' : 'from the point of the plane nearest the origin')}
     ${sk.curves.map((c, i) => `<div class="check"><div class="row"><span>${esc(sketch.describe(c))}</span><button class="x" data-act="uncurve" data-i="${i}" title="remove">×</button></div></div>`).join('')
       || '<p class="muted">Nothing drawn yet. Pick Line, Rectangle or Circle above the view and click on the plane.</p>'}
@@ -1029,6 +1114,8 @@ $('#panel').addEventListener('mouseover', (e) => {
   const t = e.target.closest('[data-tag]'), q = e.target.closest('[data-part]');
   const hot = t ? t.dataset.tag : null, hotPart = q ? Number(q.dataset.part) : null;
   if (hot !== S.hot || hotPart !== S.hotPart) { S.hot = hot; S.hotPart = hotPart; paint(); showTag(); }
+  const pl = e.target.closest('[data-plane]')?.dataset.plane ?? null;
+  if (pl !== S.hotPlane) { S.hotPlane = pl; showPlanes(pl); }
 });
 $('#panel').addEventListener('mouseleave', () => { if (S.hot || S.hotPart != null) { S.hot = S.hotPart = null; paint(); showTag(); } });
 $('#panel').addEventListener('click', (e) => {
@@ -1036,6 +1123,8 @@ $('#panel').addEventListener('click', (e) => {
   if (!b) {
     const f = e.target.closest('[data-fold]');
     if (f) { fold(f.dataset.fold); return; }
+    const pl = e.target.closest('[data-plane]');   // a plane in the Sketch panel: draw on it
+    if (pl) { const q = planes().find((x) => x.name === pl.dataset.plane); if (q) startSketch({ plane: q.plane, planeName: q.name, on: q.on }); return; }
     const t = e.target.closest('[data-tag]');     // a click on a tag holds it: it stays lit, through the part, until clicked again
     if (t) { S.tagSel = S.tagSel === t.dataset.tag ? null : t.dataset.tag; paint(); showTag(); renderPanel(true); return; }
     const q = e.target.closest('[data-part]');   // a click on a part's row selects that part, with Shift and Ctrl as in the view
@@ -1046,6 +1135,24 @@ $('#panel').addEventListener('click', (e) => {
   if (a === 'clear') { select([], {}); return; }
   if (a === 'lookreset') { setLook({ color: null }); return; }
   if (a === 'sketchhere') { startSketch({ face: theFace() }); return; }
+  if (a === 'planehere') {      // a plane on the selected face (or off it), kept with the part as a tag; then draw on it
+    const face = theFace(), off = Number(($('#planeOffset').value || '0').replace(',', '.'));
+    if (!Number.isFinite(off)) { alert('the offset is a number of millimetres'); return; }
+    const plane = frameOf(face.normal, face.center.map((v, k) => v + face.normal[k] * off));
+    let name = $('#tagName').value.trim();
+    if (!name) { let k = 1; while (S.data.tags[`plane_${k}`]) k++; name = `plane_${k}`; }
+    const role = $('#tagRole').value;
+    (async () => {
+      try {
+        busy('building…');
+        await api(`/p/${S.project}/n/${S.note}/tags`, 'POST', { name, role, plane: { plane, offset: off }, face });
+        await open(S.project, S.note);
+        const made = S.data.tags[name];
+        startSketch({ plane: made.plane, planeName: name, on: made.on });
+      } catch (err) { alert(err.message); busy(); }
+    })();
+    return;
+  }
   if (a === 'editsketch') { startSketch({ tag: S.data.tags[b.dataset.name], name: b.dataset.name }); return; }
   if (a === 'uncurve') { sketch.remove(Number(b.dataset.i)); return; }
   if (a === 'sketchcancel') { leaveSketch(); return; }
@@ -1144,6 +1251,6 @@ setInterval(async () => {
 }, 2000);
 window.addEventListener('hashchange', () => { const [p, n] = decodeURIComponent(location.hash.slice(1)).split('/'); if (p && (p !== S.project || (n && n !== S.note))) open(p, n); });
 
-window.monet = { S, groups, camera, scene, holo, drawn, look, sketch, select, pick, boxPick, goRoom };   // for looking in from the console, and from scripts/shot.mjs
+window.monet = { S, groups, camera, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom };   // for looking in from the console, and from scripts/shot.mjs
 resize();
 start().catch((e) => { $('#panel').innerHTML = `<div class="card"><p class="err">${esc(e.message)}</p></div>`; });

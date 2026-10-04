@@ -158,6 +158,25 @@ def test_a_sketch_becomes_a_tag_on_its_face(client, reg):
     client.delete(f"{n}/tags/pocket")
 
 
+def test_a_plane_on_a_face_and_a_sketch_on_that_plane(client, reg):
+    w = f"/w/{reg['id']}"
+    n = f"{w}/api/p/starter/n/rod_foot"
+    top = next({k: v for k, v in f.items() if k != "tris"} for f in client.get(f"{n}/faces.json").json()["faces"]
+               if f["type"] == "plane" and f["normal"][2] > 0.99 and abs(f["center"][2] - 22.4) < 0.01)
+    frame = {"origin": [0, 0, 27.4], "normal": [0, 0, 1], "x": [1, 0, 0]}
+    report = client.post(f"{n}/tags", json={"name": "label_plane", "plane": {"plane": frame, "offset": 5}, "face": top}).json()
+    assert report["green"] and report["tags"]["label_plane"] == {"resolved": True, "measure": {"offset": 5.0}}
+    tag = client.get(n).json()["tags"]["label_plane"]
+    assert tag["kind"] == "plane" and tag["offset"] == 5.0 and tag["on"] == {"kind": "planar_face", "normal": "+Z", "at": 22.4}
+    drawing = {"plane": tag["plane"], "plane_name": "label_plane", "on": tag["on"], "curves": [{"type": "rect", "at": [-5, -2], "size": [9, 5]}]}
+    assert client.post(f"{n}/tags", json={"name": "label", "sketch": drawing}).json()["green"]
+    label = client.get(n).json()["tags"]["label"]
+    assert label["plane_name"] == "label_plane" and label["on"] == tag["on"] and label["plane"]["origin"] == [0.0, 0.0, 27.4]
+    assert client.post(f"{n}/tags", json={"name": "bad", "plane": {"plane": {"origin": [0, 0, 0]}}}).status_code == 400
+    for name in ("label", "label_plane"):
+        client.delete(f"{n}/tags/{name}")
+
+
 def test_what_a_part_is_made_of(client, reg):
     w = f"/w/{reg['id']}"
     looks = client.put(f"{w}/api/p/starter/looks", json={"names": ["rod_foot"], "material": "aluminium", "color": "#AA3311"}).json()["looks"]

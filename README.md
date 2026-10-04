@@ -141,8 +141,11 @@ parts goes to Part, starting a drawing goes to Sketch.
   them together ("these two faces are the width"). The tag is written into the Note. Two
   faces or two points tagged together also carry their distance, which a check can hold.
   A tag picked in the panel shows through the part, like a hologram.
-- **Sketching**: pick a flat face and draw on it: lines, rectangles, circles, in millimetres,
-  lining up with the part's corners and a 1 mm grid. The drawing is saved as a tag with what
+- **Planes**: every part has three ready, through its origin: Front, Top and Left. With one
+  flat face selected in Part, New plane puts another on that face (or a typed distance off
+  it); it stays with the part as a tag.
+- **Sketching**: choose a plane (or a flat face) and draw on it: lines, rectangles, circles, in
+  millimetres, lining up with the part's corners and a 1 mm grid. The drawing is saved as a tag with what
   you want done with it ("cut 3 deep"); your agent turns it into geometry.
 - **Panels fold**: every panel on either side shuts on a click on its head and stays as
   it was left.
@@ -256,8 +259,8 @@ it wider.
 
 ## What is missing
 
-- Tag kinds: flat faces, square and round holes, bosses, edges, points, objects, groups and
-  sketches. No slots or patterns yet; a curved face is only found by a point near it.
+- Tag kinds: flat faces, square and round holes, bosses, edges, points, objects, groups,
+  planes and sketches. No slots or patterns yet; a curved face is only found by a point near it.
 - Checks that need more geometry than a fingerprint: minimum wall, maximum solid
   thickness, overhangs, interference between the parts of an assembly (in the sample the
   nest's mouse ears overlap their neighbours by about 55 mm³ each; nothing reports it yet).

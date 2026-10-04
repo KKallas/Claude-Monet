@@ -194,6 +194,23 @@ def test_a_sketch_is_checked_before_it_is_kept():
             tags.clean_sketch(bad)
 
 
+def test_a_plane_put_on_a_face_stays_with_it():
+    frame = {"origin": [0, 0, 27.4], "normal": [0, 0, 1], "x": [1, 0, 0]}
+    assert tags.clean_plane({"plane": frame, "offset": 5, "junk": 1}) == {"plane": {k: [float(x) for x in v] for k, v in frame.items()}, "offset": 5.0}
+    for bad in ({}, {"plane": {**frame, "normal": [0, 0, 2]}}, {"plane": {**frame, "x": [0, 0, 1]}}, {"plane": frame, "offset": "far"}):
+        with pytest.raises(ValueError):
+            tags.clean_plane(bad)
+    plane = {"kind": "plane", "plane": frame, "offset": 5, "on": {"kind": "planar_face", "normal": "+Z", "at": 22.4}}
+    assert find(plane) == {"resolved": True, "faces": [1], "measure": {"offset": 5.0}}
+    gone = find({**plane, "on": {"kind": "planar_face", "normal": "+Z", "at": 40}})
+    assert not gone["resolved"] and "the face this plane was put on is not found" in gone["why"]
+    assert find({"kind": "plane", "plane": frame})["resolved"]                       # a free plane
+    assert "bad tag" in find({"kind": "group", "of": [plane]})["why"]                # not a thing to group
+    # a sketch remembers which plane it was drawn on
+    kept = tags.clean_sketch({"plane": frame, "plane_name": "plane_1", "curves": []})
+    assert kept["plane_name"] == "plane_1" and "plane_name" not in tags.clean_sketch({"plane": frame, "plane_name": "Not A Name", "curves": []})
+
+
 def test_whatever_is_selected_can_become_a_tag():
     items = [{"kind": "vertex", "at": [1, 2, 3]}, {"kind": "edge", "type": "circle", "c": [0, 0, 0], "r": 3, "a": [3, 0, 0], "b": [3, 0, 0]},
              {"kind": "edge", "type": "line", "a": [0, 0, 0], "b": [1, 0, 0]}, {"kind": "part", "name": "foot"}, {"kind": "face", **BLOCK["faces"][1]}]

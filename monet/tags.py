@@ -20,8 +20,10 @@ Kinds
 - group: of [selector, ...] (several features under one name: found when all of them are; with two
   points, two parallel flat faces or a point and a flat face it measures the distance between them)
 - sketch: plane {origin, normal, x} and curves drawn on it by the user, optionally `on` a face selector
+- plane: plane {origin, normal, x}: a plane the user made to draw on, `on` a face (and `offset` mm off it)
 """
 import math
+import re
 
 TOL = 0.05          # mm: how far a feature may sit from where its tag says
 PLANE_DEG = 1.0     # degrees between a face normal and the tag's normal
@@ -294,7 +296,7 @@ def _group(tag, faces, ctx):
     members = []
     for sel in tag.get("of") or []:
         fn = KINDS.get(sel.get("kind"))
-        if fn is None or fn is _group:
+        if fn is None or fn in (_group, _sketch, _plane):
             raise ValueError(f"a group is made of plain selectors, not {sel.get('kind')!r}")
         members.append(fn(sel, faces, ctx) or {"resolved": False, "faces": []})
     if not members:
@@ -331,16 +333,31 @@ def _sketch(tag, faces, ctx):
     out = {"resolved": True, "faces": [], "measure": {"curves": len(curves), "closed": sum(1 for c in curves if c.get("closed") or c.get("type") in ("circle", "rect"))}}
     if tag.get("on"):
         fn = KINDS.get(tag["on"].get("kind"))
-        on = fn(tag["on"], faces, ctx) if fn and fn not in (_group, _sketch) else None
+        on = fn(tag["on"], faces, ctx) if fn and fn not in (_group, _sketch, _plane) else None
         if not on or not on["resolved"]:
             return {**out, "resolved": False, "why": "the face this was drawn on is not found" + (f": {on['why']}" if on and on.get("why") else "")}
         out["faces"] = on["faces"]
     return out
 
 
+def _plane(tag, faces, ctx):
+    """A plane the user put on a face, to draw on. It is found as long as that face is still there."""
+    plane = tag.get("plane") or {}
+    if len(plane.get("origin", [])) != 3 or len(plane.get("normal", [])) != 3 or len(plane.get("x", [])) != 3:
+        raise ValueError("a plane needs origin, normal and x, each [x, y, z]")
+    out = {"resolved": True, "faces": [], "measure": {"offset": float(tag.get("offset") or 0)}}
+    if tag.get("on"):
+        fn = KINDS.get(tag["on"].get("kind"))
+        on = fn(tag["on"], faces, ctx) if fn and fn not in (_group, _sketch, _plane) else None
+        if not on or not on["resolved"]:
+            return {**out, "resolved": False, "why": "the face this plane was put on is not found" + (f": {on['why']}" if on and on.get("why") else "")}
+        out["faces"] = on["faces"]
+    return out
+
+
 KINDS = {"planar_face": _planar_face, "square_hole": _square_hole, "round_hole": _cylinder(True),
          "boss": _cylinder(False), "face_at": _face_at, "point": _point, "edge": _edge, "object": _object,
-         "group": _group, "sketch": _sketch}
+         "group": _group, "sketch": _sketch, "plane": _plane}
 
 
 def resolve(tags: dict, faces: list, box: list, inside=None, edges=(), points=(), parts=()) -> dict:
@@ -408,15 +425,34 @@ def propose_many(items: list) -> dict:
     return selectors[0] if len(selectors) == 1 else {"kind": "group", "of": selectors}
 
 
+def _vec(v, n):
+    if not isinstance(v, (list, tuple)) or len(v) != n or not all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in v):
+        raise ValueError(f"expected {n} numbers, got {v!r}")
+    return [round(float(x), 3) for x in v]
+
+
+def _clean_frame(plane) -> dict:
+    plane = plane if isinstance(plane, dict) else {}
+    out = {k: _vec(plane.get(k), 3) for k in ("origin", "normal", "x")}
+    if abs(math.hypot(*out["normal"]) - 1) > 0.01 or abs(math.hypot(*out["x"]) - 1) > 0.01 or abs(_dot(out["normal"], out["x"])) > 0.01:
+        raise ValueError("a plane's normal and x are unit vectors at right angles")
+    return out
+
+
+def clean_plane(spec: dict) -> dict:
+    """A plane as it is kept in a tag. Raises ValueError on one that is not a plane."""
+    offset = spec.get("offset") or 0
+    if not isinstance(offset, (int, float)) or isinstance(offset, bool) or not math.isfinite(offset):
+        raise ValueError("an offset is a number of millimetres")
+    return {"plane": _clean_frame(spec.get("plane")), "offset": round(float(offset), 3)}
+
+
 def clean_sketch(sketch: dict) -> dict:
     """A drawing as it is kept in a tag: checked, and rounded to a micron. Raises ValueError on one that is not."""
-    def vec(v, n):
-        if not isinstance(v, (list, tuple)) or len(v) != n or not all(isinstance(x, (int, float)) and math.isfinite(x) for x in v):
-            raise ValueError(f"expected {n} numbers, got {v!r}")
-        return [round(float(x), 3) for x in v]
-
-    plane = sketch.get("plane") or {}
-    out = {"plane": {k: vec(plane.get(k), 3) for k in ("origin", "normal", "x")}, "curves": []}
+    vec = _vec
+    out = {"plane": _clean_frame(sketch.get("plane")), "curves": []}
+    if isinstance(sketch.get("plane_name"), str) and re.match(r"^[a-z][a-z0-9_]{0,39}$", sketch["plane_name"]):
+        out["plane_name"] = sketch["plane_name"]       # which plane it was drawn on, for the reader
     curves = sketch.get("curves") or []
     if len(curves) > 200:
         raise ValueError("a sketch holds at most 200 curves")
@@ -439,6 +475,6 @@ def clean_sketch(sketch: dict) -> dict:
             out["curves"].append({"type": "polyline", "points": points, "closed": bool(c.get("closed")) and len(points) > 2})
         else:
             raise ValueError(f"a curve is a polyline, a rect or a circle, not {kind!r}")
-    if isinstance(sketch.get("on"), dict) and sketch["on"].get("kind") in KINDS and sketch["on"]["kind"] not in ("group", "sketch"):
+    if isinstance(sketch.get("on"), dict) and sketch["on"].get("kind") in KINDS and sketch["on"]["kind"] not in ("group", "sketch", "plane"):
         out["on"] = sketch["on"]
     return out

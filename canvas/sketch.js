@@ -78,7 +78,7 @@ export function createSketcher(host) {
   tip.id = 'sketchTip';
   tip.hidden = true;
   view.appendChild(tip);
-  const sk = { active: false, plane: null, face: null, on: null, editing: null, curves: [], tool: 'line', draft: null, cursor: null, guides: [], grid: 1, snap: true };
+  const sk = { active: false, plane: null, planeName: null, face: null, on: null, editing: null, curves: [], tool: 'line', draft: null, cursor: null, guides: [], grid: 1, snap: true };
   let b = null, candidates = [], before = null, extent = 100;
 
   const mmPerPx = () => (camera.top - camera.bottom) / camera.zoom / view.clientHeight;
@@ -188,11 +188,13 @@ export function createSketcher(host) {
   const api = {
     state: sk,
     describe,
-    /** Start drawing: on a face {normal, center, bbox} (a new sketch), or on the plane of a sketch there already is. */
-    begin({ face = null, tag = null, name = null }) {
-      sk.plane = tag ? tag.plane : frameOf(face.normal, face.center);
+    /** Start drawing: on a plane (one of the part's, with its name), on a face {normal, center} directly, or on the
+     * plane of a sketch there already is (tag, name). */
+    begin({ face = null, tag = null, name = null, plane = null, planeName = null, on = null }) {
+      sk.plane = tag ? tag.plane : plane ?? frameOf(face.normal, face.center);
       sk.curves = tag ? JSON.parse(JSON.stringify(tag.curves ?? [])) : [];
-      sk.on = tag?.on ?? null; sk.face = face; sk.editing = name; sk.role = tag?.role ?? '';
+      sk.on = tag?.on ?? on ?? null; sk.face = face; sk.editing = name; sk.role = tag?.role ?? '';
+      sk.planeName = tag?.plane_name ?? planeName ?? null;
       sk.draft = null; sk.cursor = null; sk.guides = []; sk.active = true;
       b = basis(sk.plane);
       candidates = host.corners().map((p) => toPlane(new THREE.Vector3(...p)));
@@ -226,7 +228,7 @@ export function createSketcher(host) {
     setTool(tool) { sk.tool = tool; sk.draft = null; draw(); host.changed(); },
     remove(i) { sk.curves.splice(i, 1); draw(); host.changed(); },
     /** What the drawing is, to be saved in the tag. */
-    drawing() { return { plane: sk.plane, curves: sk.curves, ...(sk.on ? { on: sk.on } : {}) }; },
+    drawing() { return { plane: sk.plane, curves: sk.curves, ...(sk.on ? { on: sk.on } : {}), ...(sk.planeName ? { plane_name: sk.planeName } : {}) }; },
     // the pointer, while a sketch is being drawn: a click places a point; right-drag and the wheel still move the page
     down(e) { if (e.button === 0) { e.stopPropagation(); press(e); } },
     move(e) { sk.cursor = under(e); draw(); say(e); },

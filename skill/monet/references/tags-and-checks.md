@@ -16,7 +16,8 @@ lowercase letters, digits, underscores. Coordinates are millimetres in the part'
 | `edge` | `a` and `b`: its two ends (a line or a curve); or `center` and `radius` (a circle, or the arcs that make one) | that edge | line: `length`, `a`, `b`; circle: `radius`, `diameter`, `length`, `center` |
 | `object` | `name`: the label of a part of an assembly | that part | `volume_cm3`, `size`, `at` (its middle) |
 | `group` | `of`: a list of selectors of the kinds above | all of them, under one name; found only when every member is | `count`, `area` (faces), `length` (edges), and `distance` when it is made of two points, two parallel flat faces, or a point and a flat face |
-| `sketch` | `plane`: `{origin, normal, x}`; `curves`: what the user drew on it; `on`: the selector of the face it was drawn on | found as long as that face is | `curves`, `closed` |
+| `sketch` | `plane`: `{origin, normal, x}`; `curves`: what the user drew on it; `on`: the selector of the face it lies on, if any; `plane_name`: which plane it was drawn on | found as long as that face is (always, on a plane through the origin) | `curves`, `closed` |
+| `plane` | `plane`: `{origin, normal, x}`; `on`: the selector of the face it was put on; `offset`: mm off that face | a plane the user made to draw on; found as long as that face is | `offset` |
 
 How they behave:
 
@@ -42,8 +43,12 @@ How they behave:
 
 ### Sketches
 
-A `sketch` tag is a drawing the user made in the canvas on a face of the part: their way of showing
-you a shape and a place instead of describing it. `plane` is where it lies (`origin` a point on the
+A `sketch` tag is a drawing the user made in the canvas: their way of showing you a shape and a
+place instead of describing it. They draw on a plane: one of the three every part has through
+its origin (`front`: the XZ plane seen from -Y, u = +X, v = +Z; `top`: the XY plane seen from
+above, u = +X, v = +Y; `left`: the YZ plane seen from -X, u = -Y, v = +Z), a plane they put on a
+face (a `plane` tag, possibly offset off the face), or a flat face directly. `plane_name` says
+which, when it was a named plane; the `plane` inside the sketch is always complete on its own. `plane` is where it lies (`origin` a point on the
 face, `normal` out of the face, `x` the direction of the drawing's u axis; v is `normal × x`).
 `curves` are in millimetres on that plane, as `[u, v]`:
 

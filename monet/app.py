@@ -339,7 +339,11 @@ def create_app(storage: str | Path, max_users: int = 20, templates: str | Path |
         if not re.match(r"^[a-z][a-z0-9_]{0,39}$", tag):
             raise Problem("a tag name is lowercase letters, digits and underscores")
         try:
-            if body.get("sketch"):      # a drawing made on a face: the plane, the curves, and the face it lies on
+            if body.get("plane"):       # a plane put on a face, to draw on
+                selector = {"kind": "plane", **tagging.clean_plane(body["plane"])}
+                if body.get("face"):
+                    selector["on"] = tagging.propose(body["face"])
+            elif body.get("sketch"):    # a drawing made on a plane: the plane, the curves, and the face it lies on
                 selector = {"kind": "sketch", **tagging.clean_sketch(body["sketch"])}
                 if "on" not in selector and body.get("face"):
                     selector["on"] = tagging.propose(body["face"])
