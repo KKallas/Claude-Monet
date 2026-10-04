@@ -195,9 +195,23 @@ that sits on the table". Every tag must still find its feature after every rebui
 not turns the Note red. When you move a feature on purpose, update the tag's `at` in the same
 edit. When the user tags a face in the canvas it is written into `TAGS` for you: keep it.
 
+Anything the user can select can be a tag: a face, an edge, a corner point, a whole object of an
+assembly, or several of these under one name (a `group`). A group of two parallel faces or two
+points also measures the `distance` between them, which is how a dimension gets a name that a
+check can hold.
+
+A **sketch** is a tag too: the user draws lines, rectangles and circles on a face of the part
+(the Sketch area of the canvas) and names the drawing, with a `role` saying what they want done
+with it ("cut 3 deep"). Read it from `TAGS` like any tag; `references/tags-and-checks.md` has
+its format and a `sketch_face()` helper that turns it into build123d geometry to extrude or cut.
+
 A **check** is a measurement and the range it must stay in, for example
 `tag.rod_bore.width` between 16.2 and 16.4. Checks belong to the user:
 
+- The canvas has three areas the user moves between: **Sketch** (drawing on a face), **Part**
+  (one object: selecting, measuring, tagging, its material) and **Assembly** (objects put
+  together). The link from `status(project)` opens the project; a part and an assembly are both
+  just Notes to you.
 - You can **add** checks with `add_check`, and you should: when a Note has rules in its docstring
   that no check covers, propose a check for each and tell the user what you added.
 - You cannot change or remove a check, and you must not work around one (for example by

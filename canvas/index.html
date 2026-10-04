@@ -17,6 +17,9 @@
     <b>MONET</b>
     <select id="project" title="project"></select>
     <button id="newProject" title="new project">+</button>
+    <span class="rooms" title="three places to work: a drawing on a face, one part, the parts put together">
+      <button data-room="sketch">Sketch</button><button data-room="part">Part</button><button data-room="assembly">Assembly</button>
+    </span>
     <span class="sp"></span>
     <span class="muted" id="wsName"></span>
     <button class="primary" id="connect">Connect your agent</button>
@@ -36,14 +39,23 @@
   <div class="view" id="view">
     <canvas id="gl"></canvas>
     <div id="marquee" hidden></div>
+    <div id="dim" hidden></div>
     <div class="bar top">
-      <button data-sel="vertex" title="select corner points">Points</button><button data-sel="edge" title="select edges">Lines</button><button data-sel="face" class="on" title="select faces">Faces</button><button data-sel="part" title="select whole objects: the parts of an assembly">Objects</button>
+      <span class="tools" data-rooms="sketch" data-sketching>
+        <button data-tool="line" title="a line, point by point: click the first point again to close it, Enter to end it open">Line</button><button data-tool="rect" title="a rectangle: two opposite corners">Rectangle</button><button data-tool="circle" title="a circle: its centre, then a point on it">Circle</button>
+        <span class="sep"></span>
+        <button id="sketchSnap" class="on" title="points line up with the part's corners and land on the 1 mm grid (hold Shift for free)">Snap</button>
+      </span>
+      <span class="tools" data-rooms="part assembly">
+      <button data-sel="vertex" title="select corner points">Points</button><button data-sel="edge" title="select edges">Lines</button><button data-sel="face" class="on" title="select faces">Faces</button><button data-sel="part" data-rooms="assembly" title="select whole objects: the parts of an assembly">Objects</button>
+      <button id="measure" title="measure: click one thing, then another, of any kind. The shortest distance between them is drawn in the view">Measure</button>
       <button id="boxTool" title="while on, a plain drag selects with a box instead of turning the view (Shift-drag and Ctrl-drag always do)">Box</button>
       <span class="sep"></span>
       <button data-cam="fit" title="fit to view">Fit</button>
       <button data-cam="iso">Iso</button><button data-cam="top">Top</button><button data-cam="front">Front</button><button data-cam="right">Right</button>
       <span class="sep"></span>
-      <button id="edges" class="on" title="show the edges of the part">Edges</button>
+      <select id="style" title="how the part is drawn: with its materials, plainly shaded, or as lines with the hidden ones left out"></select>
+      <button id="edges" class="on" title="draw the edges of the part over it">Edges</button>
       <button id="xray" title="see through the part">X-ray</button>
       <button id="section" title="cut the part with a plane to see inside">Section</button>
       <select id="sectionAxis" hidden><option>X</option><option>Y</option><option selected>Z</option></select>
@@ -52,6 +64,7 @@
       <button id="partColours" class="on" title="every part of the assembly in a colour of its own" hidden>Parts</button>
       <span class="muted" id="explodeLabel" hidden>Explode</span>
       <input type="range" id="explode" min="0" max="1.5" step="0.01" value="0" title="pull the parts of the assembly apart" hidden>
+      </span>
     </div>
     <div class="bar bottom" id="compare" hidden>
       <span id="compareLabel" class="muted"></span>

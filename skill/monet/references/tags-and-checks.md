@@ -12,6 +12,11 @@ lowercase letters, digits, underscores. Coordinates are millimetres in the part'
 | `round_hole` | `axis`, `at` (as above), `diameter` | the cylindrical hole on that axis | `diameter`, `at`, `length`, `through` |
 | `boss` | `axis`, `at`, `diameter` | a cylindrical pin or post (convex) | `diameter`, `at`, `length` |
 | `face_at` | `point`: `[x, y, z]` | the face nearest that point: a fallback for curved surfaces | `area`, `type` |
+| `point` | `at`: `[x, y, z]` | the corner of the part at that place | `at` |
+| `edge` | `a` and `b`: its two ends (a line or a curve); or `center` and `radius` (a circle, or the arcs that make one) | that edge | line: `length`, `a`, `b`; circle: `radius`, `diameter`, `length`, `center` |
+| `object` | `name`: the label of a part of an assembly | that part | `volume_cm3`, `size`, `at` (its middle) |
+| `group` | `of`: a list of selectors of the kinds above | all of them, under one name; found only when every member is | `count`, `area` (faces), `length` (edges), and `distance` when it is made of two points, two parallel flat faces, or a point and a flat face |
+| `sketch` | `plane`: `{origin, normal, x}`; `curves`: what the user drew on it; `on`: the selector of the face it was drawn on | found as long as that face is | `curves`, `closed` |
 
 How they behave:
 
@@ -26,8 +31,59 @@ How they behave:
 - If nothing is at `at`, a hole of the given `size`/`diameter` elsewhere is reported with
   `moved: [du, dv]` and the tag is *not resolved*. Either the feature moved by mistake, or you
   moved it on purpose and must update `at`.
-- `selection()` returns a ready `selector` for whatever the user clicked. Use it as the tag and
+- `selection()` returns a ready `selector` for every face the user selected. Use it as the tag and
   add a `role`.
+- **A group is how a dimension gets a name.** Two parallel faces tagged together as
+  `"width": {"kind": "group", "of": [face, face]}` measure `tag.width.distance`, and a check on that
+  number holds the dimension whatever else changes. The user makes such a tag by selecting the two
+  things in the canvas and naming them; you can write one too.
+- A circular `edge` whose radius changed is still found (by its centre) and reports the new
+  `radius`, so a check on the diameter is what fails, as with `square_hole`.
+
+### Sketches
+
+A `sketch` tag is a drawing the user made in the canvas on a face of the part: their way of showing
+you a shape and a place instead of describing it. `plane` is where it lies (`origin` a point on the
+face, `normal` out of the face, `x` the direction of the drawing's u axis; v is `normal × x`).
+`curves` are in millimetres on that plane, as `[u, v]`:
+
+| curve | fields |
+|---|---|
+| `polyline` | `points`: `[[u, v], ...]`, `closed`: true when it comes back to its start |
+| `rect` | `at`: `[u, v]` of one corner, `size`: `[w, h]` |
+| `circle` | `center`: `[u, v]`, `r` |
+
+The `role` says what the user wants done with it ("cut 3 deep", "raise a boss 5 high"). To use
+one in `build()`:
+
+```python
+def sketch_face(tag):
+    """The closed curves of a sketch tag as a build123d sketch on its plane."""
+    pl = Plane(origin=tag["plane"]["origin"], x_dir=tag["plane"]["x"], z_dir=tag["plane"]["normal"])
+    with BuildSketch(pl) as sk:
+        for c in tag["curves"]:
+            if c["type"] == "rect":
+                with Locations((c["at"][0] + c["size"][0] / 2, c["at"][1] + c["size"][1] / 2)):
+                    Rectangle(*c["size"])
+            elif c["type"] == "circle":
+                with Locations(tuple(c["center"])):
+                    Circle(c["r"])
+            elif c.get("closed"):
+                with BuildLine():
+                    Polyline(*[tuple(p) for p in c["points"]], close=True)
+                make_face()
+    return sk.sketch
+
+# in build(), after the body exists:
+#   extrude(sketch_face(TAGS["pocket"]), amount=-3, mode=Mode.SUBTRACT)     a pocket, 3 deep
+#   extrude(sketch_face(TAGS["pad"]), amount=5)                             a boss, 5 high
+```
+
+That is the quick way and it keeps the user's drawing as the source of the shape. When the shape
+is really a rule ("a 20 x 8 slot centred on the bore"), write it as geometry from `PARAMS` instead
+and say so: a drawing has no intent in it, a rule does. Either way keep the tag unless the user
+asks to drop it: it is theirs.
+
 
 ## Checks
 

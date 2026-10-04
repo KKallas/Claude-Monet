@@ -35,6 +35,7 @@ from . import feynman, note as notes, runner, semmelweis
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{16}$")
 PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 EXPORTS = {"stl": "model/stl", "3mf": "model/3mf", "step": "model/step", "glb": "model/gltf-binary"}
+MATERIALS = ("pla", "pom", "aluminium")      # what the canvas can render a part as (canvas/look.js)
 BUILD_TIMEOUT = int(os.environ.get("MONET_BUILD_TIMEOUT", "180"))
 BUILD_MEMORY_MB = int(os.environ.get("MONET_BUILD_MEMORY_MB", "0"))     # address space, MB; 0 = no such limit
 MAX_SOURCE = 200_000
@@ -209,6 +210,31 @@ class Project:
     @property
     def material(self) -> dict | None:
         return self.ws.all.profile("materials", self.settings.get("material", ""))
+
+    def set_look(self, names: list, material: str | None = None, color: str | None = "") -> dict:
+        """What Notes (or the parts of an assembly, by name) are made of and their colour: how the canvas renders
+        them. color None goes back to the material's own; "" leaves it as it is."""
+        if material is not None and material not in MATERIALS:
+            raise Problem(f"materials are: {', '.join(MATERIALS)}")
+        if color and not re.match(r"^#[0-9a-fA-F]{6}$", color):
+            raise Problem("a colour is #rrggbb")
+        with self.lock:
+            settings = self.settings
+            looks = settings.setdefault("looks", {})
+            for name in names:
+                if not re.match(r"^[A-Za-z0-9_./-]{1,80}$", str(name)):
+                    raise Problem(f"{name!r} is not the name of a Note or a part")
+                entry = dict(looks.get(name, {}))
+                if material is not None:
+                    entry["material"] = material
+                if color is None:
+                    entry.pop("color", None)
+                elif color:
+                    entry["color"] = color.lower()
+                looks[name] = entry
+            (self.dir / "monet.json").write_text(json.dumps(settings, indent=1) + "\n")
+            self.touch()
+            return looks
 
     @property
     def tolerance(self) -> float:
@@ -573,4 +599,5 @@ class Project:
                 "changed": not (saved_src and saved_src.exists() and saved_src.read_text() == src),
             })
         return {"project": self.name, "rev": self.rev, "printer": self.settings.get("printer"), "material": self.settings.get("material"),
+                "looks": self.settings.get("looks", {}),
                 "version": head["n"] if head else None, "notes": rows}

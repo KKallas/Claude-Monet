@@ -281,6 +281,10 @@ def create_app(storage: str | Path, max_users: int = 20, templates: str | Path |
         p = ws.project(request.path_params["project"])
         return {**p.status(), "versions": p.versions(), "tolerance": p.tolerance}
 
+    def looks(request, ws, body):
+        p = ws.project(request.path_params["project"])
+        return {"looks": p.set_look(list(body.get("names") or []), body.get("material"), body.get("color", ""))}
+
     def rev(request, ws, _body):
         return {"rev": ws.project(request.path_params["project"]).rev}
 
@@ -295,6 +299,7 @@ def create_app(storage: str | Path, max_users: int = 20, templates: str | Path |
             r = p.cached(name) or {}
             out["params"] = r.get("params") or parsed["params"]     # as the build saw them: a Note may share a module's
             out["tag_faces"] = {k: t.get("faces", []) for k, t in (r.get("tags") or {}).items()}
+            out["tag_hits"] = {k: {kind: t.get(kind, []) for kind in ("faces", "edges", "points", "parts")} for k, t in (r.get("tags") or {}).items()}
             out["checks"] = p.checks(name)
             out["versions"] = p.versions(name)
             out["load_check"] = p.load_check(name) if p.saved(name) else {"status": "new", "changes": []}
@@ -333,10 +338,21 @@ def create_app(storage: str | Path, max_users: int = 20, templates: str | Path |
         tag = str(body.get("name", "")).strip()
         if not re.match(r"^[a-z][a-z0-9_]{0,39}$", tag):
             raise Problem("a tag name is lowercase letters, digits and underscores")
-        face = body.get("face")
-        selector = tagging.propose(face) if face else dict(body.get("selector") or {})
+        try:
+            if body.get("sketch"):      # a drawing made on a face: the plane, the curves, and the face it lies on
+                selector = {"kind": "sketch", **tagging.clean_sketch(body["sketch"])}
+                if "on" not in selector and body.get("face"):
+                    selector["on"] = tagging.propose(body["face"])
+            elif body.get("items"):     # whatever is selected: one thing, or several as a group
+                selector = tagging.propose_many(body["items"])
+            elif body.get("face"):
+                selector = tagging.propose(body["face"])
+            else:
+                selector = dict(body.get("selector") or {})
+        except (KeyError, TypeError, ValueError) as e:
+            raise Problem(f"that cannot be made a tag: {e}")
         if not selector.get("kind"):
-            raise Problem("click a face first")
+            raise Problem("select something first")
         if body.get("role"):
             selector["role"] = str(body["role"]).strip()[:200]
         current = notes.parse(p.read(name))["tags"]
@@ -454,6 +470,7 @@ def create_app(storage: str | Path, max_users: int = 20, templates: str | Path |
         Route("/w/{wid}/api/projects", api(new_project), methods=["POST"]),
         Route("/w/{wid}/api/p/{project}", api(project)),
         Route("/w/{wid}/api/p/{project}/rev", api(rev)),
+        Route("/w/{wid}/api/p/{project}/looks", api(looks), methods=["PUT"]),
         Route("/w/{wid}/api/p/{project}/save", api(save), methods=["POST"]),
         Route("/w/{wid}/api/p/{project}/selection", api(select), methods=["POST"]),
         Route(n, api(get_note)),

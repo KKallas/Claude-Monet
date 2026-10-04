@@ -119,6 +119,104 @@ def test_propose_describes_a_clicked_face():
     assert tags.propose(hole) == {"kind": "round_hole", "axis": "Z", "at": [10, 5], "diameter": 6.0}
 
 
+# what the runner says of a 10 x 10 x 22.4 block with a round bore: two faces, two edges, two corners, one part
+BLOCK = dict(
+    faces=[plane(0, (0, 0, -1), (0, 0, 0), (-5, -5, 0, 5, 5, 0)), plane(1, (0, 0, 1), (0, 0, 22.4), (-5, -5, 22.4, 5, 5, 22.4))],
+    edges=[{"i": 0, "p": 0, "type": "line", "len": 10.0, "a": [-5, -5, 0], "b": [5, -5, 0]},
+           {"i": 1, "p": 0, "type": "circle", "len": 18.85, "a": [3, 0, 0], "b": [3, 0, 0], "r": 3.0, "c": [0, 0, 0]}],
+    points=[{"i": 0, "p": 0, "at": [-5, -5, 0]}, {"i": 1, "p": 0, "at": [5, 5, 22.4]}],
+    parts=[{"name": "foot", "volume": 2240.0, "bbox": [-5, -5, 0, 5, 5, 22.4], "faces": [0, 2]}])
+
+
+def find(tag):
+    return tags.resolve({"t": tag}, BLOCK["faces"], [-5, -5, 0, 5, 5, 22.4], edges=BLOCK["edges"], points=BLOCK["points"], parts=BLOCK["parts"])["t"]
+
+
+def test_points_edges_and_objects_can_be_tagged():
+    assert find({"kind": "point", "at": [-5, -5, 0]}) == {"resolved": True, "faces": [], "points": [0], "measure": {"at": [-5, -5, 0]}}
+    gone = find({"kind": "point", "at": [9, 9, 9]})
+    assert not gone["resolved"] and gone["measure"]["moved"] == pytest.approx(14.5451) and "nearest" in gone["why"]
+    line = find({"kind": "edge", "a": [5, -5, 0], "b": [-5, -5, 0]})                  # either way round
+    assert line["resolved"] and line["edges"] == [0] and line["measure"]["length"] == 10.0
+    circle = find({"kind": "edge", "center": [0, 0, 0], "radius": 3.0})
+    assert circle["resolved"] and circle["measure"]["diameter"] == 6.0
+    # the bore made bigger is still the bore: found, and it says its size, so a check can fail on the number
+    assert find({"kind": "edge", "center": [0, 0, 0], "radius": 2.5})["measure"]["radius"] == 3.0
+    assert not find({"kind": "edge", "a": [0, 0, 0], "b": [1, 1, 1]})["resolved"]
+    body = find({"kind": "object", "name": "foot"})
+    assert body["parts"] == [0] and body["measure"] == {"volume_cm3": 2.24, "size": [10, 10, 22.4], "at": [0.0, 0.0, 11.2]}
+    assert not find({"kind": "object", "name": "nobody"})["resolved"]
+
+
+def test_a_group_is_found_when_all_of_it_is_and_measures_between_two():
+    height = find({"kind": "group", "of": [{"kind": "planar_face", "normal": "-Z", "at": 0}, {"kind": "planar_face", "normal": "+Z", "at": 22.4}]})
+    assert height["resolved"] and height["faces"] == [0, 1] and height["measure"] == {"count": 2, "area": 200.0, "distance": 22.4}
+    diagonal = find({"kind": "group", "of": [{"kind": "point", "at": [-5, -5, 0]}, {"kind": "point", "at": [5, 5, 22.4]}]})
+    assert diagonal["measure"]["distance"] == pytest.approx(26.4908)
+    above = find({"kind": "group", "of": [{"kind": "point", "at": [5, 5, 22.4]}, {"kind": "planar_face", "normal": "-Z", "at": 0}]})
+    assert above["measure"]["distance"] == pytest.approx(22.4)
+    broken = find({"kind": "group", "of": [{"kind": "point", "at": [-5, -5, 0]}, {"kind": "point", "at": [50, 5, 22.4]}]})
+    assert not broken["resolved"] and broken["why"] == "member 2 of 2 is not found" and "distance" not in broken["measure"]
+    mixed = find({"kind": "group", "of": [{"kind": "edge", "a": [-5, -5, 0], "b": [5, -5, 0]}, {"kind": "object", "name": "foot"}, {"kind": "point", "at": [5, 5, 22.4]}]})
+    assert mixed["resolved"] and (mixed["edges"], mixed["parts"], mixed["points"]) == ([0], [0], [1]) and mixed["measure"] == {"count": 3, "length": 10.0}
+    assert "bad tag" in find({"kind": "group", "of": []})["why"]
+    assert "bad tag" in find({"kind": "group", "of": [{"kind": "group", "of": []}]})["why"]
+
+
+def test_a_sketch_lives_as_long_as_the_face_it_was_drawn_on():
+    sketch = {"kind": "sketch", "plane": {"origin": [0, 0, 22.4], "normal": [0, 0, 1], "x": [1, 0, 0]},
+              "curves": [{"type": "rect", "at": [-2, -2], "size": [4, 4]}, {"type": "polyline", "points": [[0, 0], [3, 0]]}],
+              "on": {"kind": "planar_face", "normal": "+Z", "at": 22.4}}
+    found = find(sketch)
+    assert found["resolved"] and found["faces"] == [1] and found["measure"] == {"curves": 2, "closed": 1}
+    moved = find({**sketch, "on": {"kind": "planar_face", "normal": "+Z", "at": 30}})
+    assert not moved["resolved"] and "the face this was drawn on is not found" in moved["why"]
+    assert find({k: v for k, v in sketch.items() if k != "on"})["resolved"]              # a free plane
+    assert "bad tag" in find({"kind": "sketch", "curves": []})["why"]
+
+
+def test_a_sketch_is_checked_before_it_is_kept():
+    plane = {"origin": [0, 0, 22.4], "normal": [0, 0, 1], "x": [1, 0, 0]}
+    kept = tags.clean_sketch({"plane": plane, "junk": 1, "on": {"kind": "planar_face", "normal": "+Z", "at": 22.4}, "curves": [
+        {"type": "rect", "at": [-9.00004, -3], "size": [15, 7], "extra": True},
+        {"type": "circle", "center": [13, 0], "r": 3},
+        {"type": "polyline", "points": [[10, 2], [14, 2], [12, -2]], "closed": True},
+        {"type": "polyline", "points": [[0, 0], [5, 5]], "closed": True}]})
+    assert kept == {"plane": plane, "on": {"kind": "planar_face", "normal": "+Z", "at": 22.4}, "curves": [
+        {"type": "rect", "at": [-9.0, -3.0], "size": [15.0, 7.0]}, {"type": "circle", "center": [13.0, 0.0], "r": 3.0},
+        {"type": "polyline", "points": [[10.0, 2.0], [14.0, 2.0], [12.0, -2.0]], "closed": True},
+        {"type": "polyline", "points": [[0.0, 0.0], [5.0, 5.0]], "closed": False}]}       # two points do not close
+    assert "on" not in tags.clean_sketch({"plane": plane, "curves": [], "on": {"kind": "group", "of": []}})
+    for bad in ({"curves": []}, {"plane": {**plane, "x": [1, 0]}, "curves": []}, {"plane": plane, "curves": [{"type": "spline"}]},
+                {"plane": plane, "curves": [{"type": "rect", "at": [0, 0], "size": [0, 5]}]}, {"plane": plane, "curves": [{"type": "circle", "center": [0, 0], "r": -1}]},
+                {"plane": plane, "curves": [{"type": "polyline", "points": [[0, 0]]}]}, {"plane": plane, "curves": [{"type": "rect", "at": [0, "x"], "size": [1, 1]}]}):
+        with pytest.raises(ValueError):
+            tags.clean_sketch(bad)
+
+
+def test_whatever_is_selected_can_become_a_tag():
+    items = [{"kind": "vertex", "at": [1, 2, 3]}, {"kind": "edge", "type": "circle", "c": [0, 0, 0], "r": 3, "a": [3, 0, 0], "b": [3, 0, 0]},
+             {"kind": "edge", "type": "line", "a": [0, 0, 0], "b": [1, 0, 0]}, {"kind": "part", "name": "foot"}, {"kind": "face", **BLOCK["faces"][1]}]
+    assert tags.propose_many(items[:1]) == {"kind": "point", "at": [1, 2, 3]}
+    assert tags.propose_many(items) == {"kind": "group", "of": [
+        {"kind": "point", "at": [1, 2, 3]}, {"kind": "edge", "center": [0, 0, 0], "radius": 3}, {"kind": "edge", "a": [0, 0, 0], "b": [1, 0, 0]},
+        {"kind": "object", "name": "foot"}, {"kind": "planar_face", "normal": "+Z", "at": 22.4}]}
+    with pytest.raises(ValueError):
+        tags.propose_many([])
+
+
+def test_the_measuring_geometry_of_the_canvas():
+    """canvas/measure.js has its own tests, in node: run them from here so one command covers everything."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on this machine")
+    done = subprocess.run([node, "--test", str(Path(__file__).parent / "measure.test.mjs")], capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stdout[-2000:]
+
+
 RESULT = {"fingerprint": {"volume": 10476.0, "area": 7449.6, "bbox": [-22.5, -11.2, 0, 22.5, 11.2, 22.4], "com": [0, 0, 11.2], "solids": 1, "faces": 10},
           "valid": True, "tags": {"bore": {"resolved": True, "measure": {"width": 16.4, "through": True, "at": [0.0, 11.2]}}}}
 

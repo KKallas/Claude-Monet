@@ -14,6 +14,12 @@ Kinds
   order), size
 - round_hole / boss: axis, at, diameter (concave / convex cylinder)
 - face_at: point [x, y, z] (fallback for any other surface)
+- point: at [x, y, z] (a corner of the part)
+- edge: a and b (the two ends of a line or curve), or center and radius (a circle or its arcs)
+- object: name (a part of an assembly)
+- group: of [selector, ...] (several features under one name: found when all of them are; with two
+  points, two parallel flat faces or a point and a flat face it measures the distance between them)
+- sketch: plane {origin, normal, x} and curves drawn on it by the user, optionally `on` a face selector
 """
 import math
 
@@ -203,14 +209,146 @@ def _face_at(tag, faces, _ctx):
     return {"resolved": True, "faces": [f["i"]], "measure": {"area": round(f["area"], 3), "type": f["type"]}}
 
 
+def _near(p, q):
+    return math.dist(p, q) <= TOL
+
+
+def _point(tag, _faces, ctx):
+    at = [float(x) for x in tag["at"]]
+    points = ctx.get("points") or []
+    if not points:
+        return None
+    v = min(points, key=lambda v: math.dist(v["at"], at))
+    d = math.dist(v["at"], at)
+    out = {"faces": [], "points": [v["i"]], "measure": {"at": v["at"]}}
+    if d > TOL:
+        out["measure"]["moved"] = round(d, 4)
+        return {"resolved": False, "why": f"no corner at {at}; the nearest is {round(d, 3)} mm away, at {v['at']}", **out}
+    return {"resolved": True, **out}
+
+
+def _edge(tag, _faces, ctx):
+    edges = ctx.get("edges") or []
+    if "center" in tag:   # a circle, or the arcs that make one up
+        c = [float(x) for x in tag["center"]]
+        hit = [e for e in edges if e["type"] == "circle" and _near(e["c"], c)]
+        if tag.get("radius") is not None and hit:
+            same = [e for e in hit if abs(e["r"] - float(tag["radius"])) <= TOL]
+            if not same:   # still there, with another radius: say which, so a check can fail on the number
+                r = min((e["r"] for e in hit), key=lambda r: abs(r - float(tag["radius"])))
+                hit = [e for e in hit if abs(e["r"] - r) <= 0.001]
+            else:
+                hit = same
+        if not hit:
+            return None
+        return {"resolved": True, "faces": [], "edges": [e["i"] for e in hit],
+                "measure": {"radius": hit[0]["r"], "diameter": round(2 * hit[0]["r"], 4), "length": round(sum(e["len"] for e in hit), 3),
+                            "center": hit[0]["c"], "count": len(hit)}}
+    a, b = [float(x) for x in tag["a"]], [float(x) for x in tag["b"]]
+    hit = [e for e in edges if (_near(e["a"], a) and _near(e["b"], b)) or (_near(e["a"], b) and _near(e["b"], a))]
+    if hit:
+        return {"resolved": True, "faces": [], "edges": [e["i"] for e in hit],
+                "measure": {"length": round(sum(e["len"] for e in hit), 3), "a": hit[0]["a"], "b": hit[0]["b"], "count": len(hit)}}
+    if not edges:
+        return None
+    mid = [(x + y) / 2 for x, y in zip(a, b)]
+    e = min(edges, key=lambda e: math.dist([(x + y) / 2 for x, y in zip(e["a"], e["b"])], mid))
+    return {"resolved": False, "faces": [], "edges": [e["i"]], "why": f"no edge from {a} to {b}; the nearest runs from {e['a']} to {e['b']}",
+            "measure": {"length": e["len"], "a": e["a"], "b": e["b"]}}
+
+
+def _object(tag, _faces, ctx):
+    part = next((q for q in ctx.get("parts") or [] if q["name"] == tag.get("name")), None)
+    if part is None:
+        return None
+    b = part["bbox"]
+    return {"resolved": True, "faces": [], "parts": [part["i"]],
+            "measure": {"volume_cm3": round(part["volume"] / 1000, 3), "size": [round(b[k + 3] - b[k], 3) for k in range(3)],
+                        "at": [round((b[k + 3] + b[k]) / 2, 3) for k in range(3)]}}
+
+
+def _between(one, two, faces, ctx):
+    """The distance between two found features, where it is one clear number: two points, two parallel flat faces,
+    a point and a flat face."""
+    points = {v["i"]: v for v in ctx.get("points") or []}
+
+    def flat(r):
+        fs = [faces[i] for i in r.get("faces", [])] if not r.get("points") and not r.get("edges") and not r.get("parts") else []
+        return fs[0] if fs and all(f["type"] == "plane" and _dot(f["normal"], fs[0]["normal"]) > 0.9999 for f in fs) else None
+
+    def corner(r):
+        return points[r["points"][0]]["at"] if len(r.get("points", [])) == 1 and not r.get("faces") else None
+
+    pa, pb, fa, fb = corner(one), corner(two), flat(one), flat(two)
+    if pa and pb:
+        return math.dist(pa, pb)
+    if fa and fb and abs(abs(_dot(fa["normal"], fb["normal"])) - 1) < 1e-4:
+        return abs(_dot([y - x for x, y in zip(fa["center"], fb["center"])], fa["normal"]))
+    for p, f in ((pa, fb), (pb, fa)):
+        if p and f:
+            return abs(_dot([y - x for x, y in zip(f["center"], p)], f["normal"]))
+    return None
+
+
+def _group(tag, faces, ctx):
+    members = []
+    for sel in tag.get("of") or []:
+        fn = KINDS.get(sel.get("kind"))
+        if fn is None or fn is _group:
+            raise ValueError(f"a group is made of plain selectors, not {sel.get('kind')!r}")
+        members.append(fn(sel, faces, ctx) or {"resolved": False, "faces": []})
+    if not members:
+        raise ValueError("a group needs `of`: the selectors it is made of")
+    out = {"resolved": all(m["resolved"] for m in members)}
+    for key in ("faces", "edges", "points", "parts"):
+        ids = sorted({i for m in members for i in m.get(key, [])})
+        if ids or key == "faces":
+            out[key] = ids
+    measure = {"count": len(members)}
+    area = sum(faces[i]["area"] for i in out["faces"])
+    length = sum(e["len"] for e in ctx.get("edges") or [] if e["i"] in set(out.get("edges", [])))
+    if area:
+        measure["area"] = round(area, 3)
+    if length:
+        measure["length"] = round(length, 3)
+    if len(members) == 2 and out["resolved"]:
+        d = _between(members[0], members[1], faces, ctx)
+        if d is not None:
+            measure["distance"] = round(d, 4)
+    out["measure"] = measure
+    if not out["resolved"]:
+        missing = [n + 1 for n, m in enumerate(members) if not m["resolved"]]
+        out["why"] = f"member {', '.join(map(str, missing))} of {len(members)} is not found"
+    return out
+
+
+def _sketch(tag, faces, ctx):
+    """A drawing the user made on a plane. It is found as long as the face it was drawn on is still there."""
+    curves = tag.get("curves") or []
+    plane = tag.get("plane") or {}
+    if len(plane.get("origin", [])) != 3 or len(plane.get("normal", [])) != 3 or len(plane.get("x", [])) != 3:
+        raise ValueError("a sketch needs a plane with origin, normal and x, each [x, y, z]")
+    out = {"resolved": True, "faces": [], "measure": {"curves": len(curves), "closed": sum(1 for c in curves if c.get("closed") or c.get("type") in ("circle", "rect"))}}
+    if tag.get("on"):
+        fn = KINDS.get(tag["on"].get("kind"))
+        on = fn(tag["on"], faces, ctx) if fn and fn not in (_group, _sketch) else None
+        if not on or not on["resolved"]:
+            return {**out, "resolved": False, "why": "the face this was drawn on is not found" + (f": {on['why']}" if on and on.get("why") else "")}
+        out["faces"] = on["faces"]
+    return out
+
+
 KINDS = {"planar_face": _planar_face, "square_hole": _square_hole, "round_hole": _cylinder(True),
-         "boss": _cylinder(False), "face_at": _face_at}
+         "boss": _cylinder(False), "face_at": _face_at, "point": _point, "edge": _edge, "object": _object,
+         "group": _group, "sketch": _sketch}
 
 
-def resolve(tags: dict, faces: list, box: list, inside=None) -> dict:
+def resolve(tags: dict, faces: list, box: list, inside=None, edges=(), points=(), parts=()) -> dict:
     """Find every tag on this build. box = [minx, miny, minz, maxx, maxy, maxz] of the part; inside(point) says
-    whether a point is in material (the runner passes the solid's own test)."""
-    ctx = {"box": box, "inside": inside}
+    whether a point is in material (the runner passes the solid's own test); edges, points and parts are the
+    other things a tag can name, as the runner describes them."""
+    ctx = {"box": box, "inside": inside, "edges": list(edges), "points": list(points),
+           "parts": [{**q, "i": n} for n, q in enumerate(parts)]}
     out = {}
     for name, tag in (tags or {}).items():
         try:
@@ -246,3 +384,61 @@ def propose(face: dict) -> dict:
             return {"kind": "round_hole" if face["concave"] else "boss", "axis": "XYZ"[a],
                     "at": [round(face["origin"][u], 2), round(face["origin"][v], 2)], "diameter": round(2 * face["radius"], 2)}
     return {"kind": "face_at", "point": [round(x, 2) for x in face["center"]]}
+
+
+def propose_item(item: dict) -> dict:
+    """The selector for one selected thing, whatever it is: a face, a line, a point or an object."""
+    kind = item.get("kind", "face")
+    if kind == "vertex":
+        return {"kind": "point", "at": [round(x, 3) for x in item["at"]]}
+    if kind == "edge":
+        if item.get("type") == "circle":
+            return {"kind": "edge", "center": [round(x, 3) for x in item["c"]], "radius": round(item["r"], 3)}
+        return {"kind": "edge", "a": [round(x, 3) for x in item["a"]], "b": [round(x, 3) for x in item["b"]]}
+    if kind == "part":
+        return {"kind": "object", "name": item["name"]}
+    return propose(item)
+
+
+def propose_many(items: list) -> dict:
+    """One thing is its own selector; several become a group."""
+    if not items:
+        raise ValueError("nothing is selected")
+    selectors = [propose_item(i) for i in items]
+    return selectors[0] if len(selectors) == 1 else {"kind": "group", "of": selectors}
+
+
+def clean_sketch(sketch: dict) -> dict:
+    """A drawing as it is kept in a tag: checked, and rounded to a micron. Raises ValueError on one that is not."""
+    def vec(v, n):
+        if not isinstance(v, (list, tuple)) or len(v) != n or not all(isinstance(x, (int, float)) and math.isfinite(x) for x in v):
+            raise ValueError(f"expected {n} numbers, got {v!r}")
+        return [round(float(x), 3) for x in v]
+
+    plane = sketch.get("plane") or {}
+    out = {"plane": {k: vec(plane.get(k), 3) for k in ("origin", "normal", "x")}, "curves": []}
+    curves = sketch.get("curves") or []
+    if len(curves) > 200:
+        raise ValueError("a sketch holds at most 200 curves")
+    for c in curves:
+        kind = c.get("type")
+        if kind == "rect":
+            size = vec(c.get("size"), 2)
+            if min(size) <= 0:
+                raise ValueError("a rectangle needs a width and a height")
+            out["curves"].append({"type": "rect", "at": vec(c.get("at"), 2), "size": size})
+        elif kind == "circle":
+            r = c.get("r")
+            if not isinstance(r, (int, float)) or r <= 0:
+                raise ValueError("a circle needs a radius")
+            out["curves"].append({"type": "circle", "center": vec(c.get("center"), 2), "r": round(float(r), 3)})
+        elif kind == "polyline":
+            points = [vec(q, 2) for q in c.get("points") or []]
+            if not 2 <= len(points) <= 2000:
+                raise ValueError("a line needs 2 to 2000 points")
+            out["curves"].append({"type": "polyline", "points": points, "closed": bool(c.get("closed")) and len(points) > 2})
+        else:
+            raise ValueError(f"a curve is a polyline, a rect or a circle, not {kind!r}")
+    if isinstance(sketch.get("on"), dict) and sketch["on"].get("kind") in KINDS and sketch["on"]["kind"] not in ("group", "sketch"):
+        out["on"] = sketch["on"]
+    return out

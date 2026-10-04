@@ -216,14 +216,15 @@ def run(project_dir: Path, note: str, out_dir: Path, exports=()) -> dict:
         result["valid"] = bool(shape.is_valid)
         groups = parts_of(shape, note)
         faces, verts, tris, parts = describe(shape, groups)
-        from build123d import Vector
-        solids = shape.solids()
-        result["tags"] = tags.resolve(getattr(mod, "TAGS", {}) or {}, faces, result["fingerprint"]["bbox"],
-                                      inside=lambda p: any(s.is_inside(Vector(*p)) for s in solids))
         result["params"] = getattr(mod, "PARAMS", {})
         result["doc"] = (mod.__doc__ or "").strip()
         result["triangles"] = len(tris)
         segs, edges, points = edges_and_points(groups, parts)
+        from build123d import Vector
+        solids = shape.solids()
+        result["tags"] = tags.resolve(getattr(mod, "TAGS", {}) or {}, faces, result["fingerprint"]["bbox"],
+                                      inside=lambda p: any(s.is_inside(Vector(*p)) for s in solids),
+                                      edges=edges, points=points, parts=parts)
         write_glb(out_dir / "model.glb", verts, tris, segs)
         (out_dir / "faces.json").write_text(json.dumps({"faces": faces, "parts": parts, "edges": edges, "points": points}, separators=(",", ":")))
         result["parts"] = [{k: part[k] for k in ("name", "volume", "bbox", "faces")} for part in parts]

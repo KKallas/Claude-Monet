@@ -117,15 +117,33 @@ compared and exported.
 
 ### Canvas: the browser view
 
+Three places to work, as tabs: **Sketch** (a drawing on a face), **Part** (one object) and
+**Assembly** (objects put together). Opening an assembly goes to Assembly, opening one of its
+parts goes to Part, starting a drawing goes to Sketch.
+
 - Orbit, section plane and X-ray, to see inside parts (tunnels, pockets, cable channels).
+- **Three ways to draw the part**: *Rendered* with its material, *Shaded* plainly (an assembly
+  with a colour per part), *Hidden line*: only the lines, the hidden ones left out. Edges can be
+  drawn over any of them.
+- **Materials**: aluminium, POM and printed PLA, each in any colour, set per part. PLA is
+  drawn as a perfect 0.4 mm nozzle would leave it: 0.2 mm layers on the walls, 0.4 mm lines on
+  tops and bottoms. The rendered look is Adam Designer's world (its room light, sun, tone
+  mapping and material values) on plain three.js.
 - **Selecting**: points, lines, faces or whole objects, chosen in the toolbar. A click
   selects, Shift adds, Ctrl (or Cmd) takes away; a drag with Shift or Ctrl held, or any
   drag with Box on, selects with a box (left to right takes what it touches, right to
-  left only what is wholly inside). The panel says what is selected and what it adds up
-  to (a distance, a length, an area), and the agent sees the same.
-- **Tagging**: select a face and name it ("this face sits on the plywood", "this bore
-  takes the 16 mm rod"). The tag is written into the Note. (Tags of edges, points and
-  whole objects are not there yet.)
+  left only what is wholly inside).
+- **Measuring**, as Inspect does in Fusion: with Measure on, click one thing and then
+  another, of any kind. One thing shows its own facts (length, diameter, area, where it
+  is); two show the shortest distance between them, how it splits along x, y and z, and
+  the angle, with the distance drawn in the view. The agent sees the same numbers.
+- **Tagging**: name what is selected: a face, a line, a point, an object, or several of
+  them together ("these two faces are the width"). The tag is written into the Note. Two
+  faces or two points tagged together also carry their distance, which a check can hold.
+  A tag picked in the panel shows through the part, like a hologram.
+- **Sketching**: pick a flat face and draw on it: lines, rectangles, circles, in millimetres,
+  lining up with the part's corners and a 1 mm grid. The drawing is saved as a tag with what
+  you want done with it ("cut 3 deep"); your agent turns it into geometry.
 - **Panels fold**: every panel on either side shuts on a click on its head and stays as
   it was left.
 - **Diff**: model A coloured by its distance to B (what was removed) and B by
@@ -137,8 +155,8 @@ compared and exported.
 - **Series**: versions side by side, like Monet painting the same haystacks in
   different light.
 - **Assembly**: a Note that puts other Notes together is shown as what it is: every part
-  in its own colour, a parts list (hide one, show only one, open its Note), and an
-  Explode slider that pulls the parts apart. A project opens on its assembly.
+  in its own colour or material, a parts list (hide one, show only one, open its Note), and
+  an Explode slider that pulls the parts apart.
 
 Candidate starting point: [yet-another-cad-viewer](https://github.com/yeicor-3d/yet-another-cad-viewer),
 which already shows build123d models in the browser with face, edge and vertex
@@ -210,7 +228,11 @@ monet/        note.py        read a Note without running it; rewrite its TAGS
               workspace.py   workspaces, projects, versions: the working files in a folder
               agent.py       the agent's tools, served over MCP and over plain HTTP
               app.py         the web app (Starlette): canvas API, agent door, /api for LLMs
-canvas/       the browser view (three.js): orbit, section, X-ray, click to tag, compare
+canvas/       the browser view (three.js), no build step:
+              canvas.js      the page: the three areas, selection, panels, compare
+              measure.js     shortest distances and angles (plain arrays; tested in node)
+              look.js        the styles and materials, printed PLA
+              sketch.js      drawing on a face
 profiles/     printer and material profiles
 notes/        templates a new workspace starts with: starter, mg400_rakis
 skill/monet/  the skill for Claude: how to work in Monet (also served as /skill.zip and by guide())
@@ -234,13 +256,15 @@ it wider.
 
 ## What is missing
 
-- Tag kinds: only flat faces, square holes, round holes and bosses. No edges, vertices,
-  whole objects, slots or patterns yet.
+- Tag kinds: flat faces, square and round holes, bosses, edges, points, objects, groups and
+  sketches. No slots or patterns yet; a curved face is only found by a point near it.
 - Checks that need more geometry than a fingerprint: minimum wall, maximum solid
   thickness, overhangs, interference between the parts of an assembly (in the sample the
   nest's mouse ears overlap their neighbours by about 55 mm³ each; nothing reports it yet).
-- Canvas: Series (versions side by side), section caps. Edges, points and objects can be
-  selected and measured but not yet tagged.
+- Canvas: Series (versions side by side), section caps, screen-space reflections (Adam
+  Designer has them on WebGPU). A sketch cannot be edited point by point yet: remove a curve
+  and draw it again. Arcs and dimensions in a sketch. Measuring whole objects against each
+  other is approximate.
 - Translation to Fusion / Onshape, and STEP import ("step 0").
 - Profiles are data only: hole and shaft compensation is not applied to geometry yet.
 - The ten-edit experiment below has not been run.

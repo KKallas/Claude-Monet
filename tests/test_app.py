@@ -116,6 +116,60 @@ def test_the_agent_sees_a_selection_of_many_things(client, reg):
     assert not client.get(f"{w}/agent/selection", params={"project": "starter"}).json()["selected"]
 
 
+def test_a_tag_of_several_things_and_a_check_on_what_lies_between(client, reg):
+    w = f"/w/{reg['id']}"
+    n = f"{w}/api/p/starter/n/rod_foot"
+    d = client.get(f"{n}/faces.json").json()
+    flat = lambda z, up: next({k: v for k, v in f.items() if k != "tris"} for f in d["faces"]
+                              if f["type"] == "plane" and f["normal"][2] * up > 0.99 and abs(f["center"][2] - z) < 0.01)
+    report = client.post(f"{n}/tags", json={"name": "height", "role": "overall height",
+                                           "items": [{"kind": "face", **flat(0, -1)}, {"kind": "face", **flat(22.4, 1)}]}).json()
+    assert report["green"] and report["tags"]["height"]["measure"] == {"count": 2, "area": 2016.0, "distance": 22.4}
+    note = client.get(n).json()
+    assert note["tags"]["height"] == {"kind": "group", "role": "overall height", "of": [
+        {"kind": "planar_face", "normal": "-Z", "at": 0.0}, {"kind": "planar_face", "normal": "+Z", "at": 22.4}]}
+    assert len(note["tag_hits"]["height"]["faces"]) == 2
+    # the dimension has a name now: a check holds it
+    assert client.post(f"{n}/checks", json={"what": "tag.height.distance", "min": 22.3, "max": 22.5, "why": "fits under the shelf"}).json()["report"]["green"]
+    edge = {k: v for k, v in d["edges"][0].items() if k not in ("segs", "p")}
+    mixed = client.post(f"{n}/tags", json={"name": "corner_edge", "items": [{"kind": "edge", **edge}, {"kind": "vertex", "at": d["points"][0]["at"]}]}).json()
+    assert mixed["green"] and client.get(n).json()["tag_hits"]["corner_edge"] == {"faces": [], "edges": [0], "points": [0], "parts": []}
+    assert client.post(f"{n}/tags", json={"name": "nothing", "items": []}).status_code == 400
+    for name in ("height", "corner_edge"):
+        client.delete(f"{n}/tags/{name}")
+    client.delete(f"{n}/checks/tag-height-distance")
+
+
+def test_a_sketch_becomes_a_tag_on_its_face(client, reg):
+    w = f"/w/{reg['id']}"
+    n = f"{w}/api/p/starter/n/rod_foot"
+    top = next({k: v for k, v in f.items() if k != "tris"} for f in client.get(f"{n}/faces.json").json()["faces"]
+               if f["type"] == "plane" and f["normal"][2] > 0.99 and abs(f["center"][2] - 22.4) < 0.01)
+    drawing = {"plane": {"origin": [0, 0, 22.4], "normal": [0, 0, 1], "x": [1, 0, 0]},
+               "curves": [{"type": "rect", "at": [-9, -3], "size": [15, 7]}, {"type": "circle", "center": [13, 0], "r": 3}]}
+    report = client.post(f"{n}/tags", json={"name": "pocket", "role": "cut 3 deep", "sketch": drawing, "face": top}).json()
+    assert report["green"] and report["tags"]["pocket"] == {"resolved": True, "measure": {"curves": 2, "closed": 2}}
+    tag = client.get(n).json()["tags"]["pocket"]
+    assert tag["kind"] == "sketch" and tag["on"] == {"kind": "planar_face", "normal": "+Z", "at": 22.4} and tag["role"] == "cut 3 deep"
+    assert tag["curves"][0] == {"type": "rect", "at": [-9.0, -3.0], "size": [15.0, 7.0]}
+    assert client.post(f"{n}/tags", json={"name": "bad", "sketch": {"plane": {}, "curves": []}}).status_code == 400
+    # the agent reads the drawing where it reads everything else
+    assert "pocket" in client.get(f"{w}/agent/read_note", params={"project": "starter", "note": "rod_foot"}).json()["source"]
+    client.delete(f"{n}/tags/pocket")
+
+
+def test_what_a_part_is_made_of(client, reg):
+    w = f"/w/{reg['id']}"
+    looks = client.put(f"{w}/api/p/starter/looks", json={"names": ["rod_foot"], "material": "aluminium", "color": "#AA3311"}).json()["looks"]
+    assert looks == {"rod_foot": {"material": "aluminium", "color": "#aa3311"}}
+    assert client.put(f"{w}/api/p/starter/looks", json={"names": ["rod_foot"], "color": None}).json()["looks"] == {"rod_foot": {"material": "aluminium"}}
+    assert client.get(f"{w}/api/p/starter").json()["looks"] == {"rod_foot": {"material": "aluminium"}}
+    assert client.put(f"{w}/api/p/starter/looks", json={"names": ["rod_foot"], "material": "gold"}).status_code == 400
+    assert client.put(f"{w}/api/p/starter/looks", json={"names": ["rod_foot"], "color": "red"}).status_code == 400
+    # the sample comes with its pipes in aluminium
+    assert client.get(f"{w}/api/p/mg400_rakis").json()["looks"]["pipe_long_pos"] == {"material": "aluminium"}
+
+
 def test_checks_are_the_persons_to_change(client, reg):
     n = f"/w/{reg['id']}/api/p/starter/n/rod_foot"
     assert client.post(f"{n}/checks", json={"what": "size_x", "max": 40, "why": "fits the drawer"}).json()["report"]["green"] is False

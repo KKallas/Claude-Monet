@@ -64,12 +64,20 @@ wrong:
 - **`skill/monet/` is the single source of the agent's instructions**: the skill zip and the
   `guide` tool both serve it. When behaviour changes, change it there.
 
+- **The canvas has no build step**: plain ES modules, three.js from a CDN by import map.
+  `window.monet` exposes its state for `scripts/shot.mjs`: after a change to the canvas, drive
+  it in headless Chrome and look at the picture. A build's faces, edges, points and parts are
+  numbered in `faces.json`; those numbers only hold within one build.
+- **Two different "workspaces"**: a workspace is a user's id and folder on the server; the
+  three working areas of the canvas (Sketch, Part, Assembly) are called rooms in the code.
+
 ## Commands
 
 ```bash
 uv sync
 uv run monet                      # http://localhost:8000
-uv run pytest                     # about a minute: builds every Note
+uv run pytest                     # about a minute and a half: builds every Note; runs the node tests too
+node --test tests/measure.test.mjs   # the measuring geometry alone
 uv run python notes/mg400_rakis/_verify.py     # the port against the Fusion numbers, as a table
 node scripts/shot.mjs http://localhost:8000/w/<id>#starter/rod_foot shot.png   # the canvas in headless Chrome
 ```

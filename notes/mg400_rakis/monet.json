@@ -1,4 +1,18 @@
 {
  "printer": "bambu_x1c",
- "material": "pla"
+ "material": "pla",
+ "looks": {
+  "pipe_long_pos": {
+   "material": "aluminium"
+  },
+  "pipe_long_neg": {
+   "material": "aluminium"
+  },
+  "pipe_dowel_0": {
+   "material": "aluminium"
+  },
+  "pipe_dowel_1": {
+   "material": "aluminium"
+  }
+ }
 }
