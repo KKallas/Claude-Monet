@@ -36,7 +36,7 @@ ID_RE = re.compile(r"^[A-Za-z0-9_-]{16}$")
 PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 EXPORTS = {"stl": "model/stl", "3mf": "model/3mf", "step": "model/step", "glb": "model/gltf-binary"}
 BUILD_TIMEOUT = int(os.environ.get("MONET_BUILD_TIMEOUT", "180"))
-BUILD_MEMORY_MB = int(os.environ.get("MONET_BUILD_MEMORY_MB", "3000"))
+BUILD_MEMORY_MB = int(os.environ.get("MONET_BUILD_MEMORY_MB", "0"))     # address space, MB; 0 = no such limit
 MAX_SOURCE = 200_000
 
 _locks: dict[str, threading.RLock] = {}
@@ -60,12 +60,23 @@ def _sha(path: Path) -> str:
 
 
 def _limits():
-    """In the build process: a Note may not run for ever or eat the machine."""
+    """In the build process: a Note may not run for ever or take the server down with it.
+
+    Memory is capped where it can be done honestly: by the container (deploy/compose.yml). Here the build is only
+    marked as the first to go when that ceiling is hit, so the kernel kills the hungry Note and not the server.
+    (An address-space limit, RLIMIT_AS, is not used unless asked for: the CAD kernel and numpy reserve far more
+    address space than they use, and die under a limit that their real memory would fit in many times.)"""
     import resource
     resource.setrlimit(resource.RLIMIT_CPU, (BUILD_TIMEOUT, BUILD_TIMEOUT + 5))
     if sys.platform.startswith("linux"):
-        cap = BUILD_MEMORY_MB * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
+        try:
+            with open("/proc/self/oom_score_adj", "w") as fh:
+                fh.write("1000")
+        except OSError:
+            pass
+        if BUILD_MEMORY_MB > 0:
+            cap = BUILD_MEMORY_MB * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
     os.setsid()
 
 
@@ -75,13 +86,16 @@ def run_build(project_dir: Path, name: str, out_dir: Path, exports=()) -> dict:
     result_file.unlink(missing_ok=True)
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "VIRTUAL_ENV")}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env.update(OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")   # one build, one core
     error = None
     try:
         proc = subprocess.run([sys.executable, "-m", "monet.runner", str(project_dir), name, str(out_dir), ",".join(exports)],
                               cwd=project_dir, env={**env, "PYTHONPATH": str(Path(__file__).resolve().parent.parent)},
                               capture_output=True, text=True, timeout=BUILD_TIMEOUT, preexec_fn=_limits)
         if not result_file.exists():
-            error = f"the build process died (exit {proc.returncode}): {(proc.stderr or proc.stdout).strip()[-600:] or 'no output'}"
+            why = "killed: most likely it ran out of memory or CPU time" if proc.returncode in (-9, -24, 137) else \
+                (proc.stderr or proc.stdout).strip()[-600:] or "no output"
+            error = f"the build process died (exit {proc.returncode}): {why}"
     except subprocess.TimeoutExpired:
         error = f"the build took longer than {BUILD_TIMEOUT} s and was stopped"
     if error:

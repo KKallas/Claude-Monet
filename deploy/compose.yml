@@ -17,7 +17,6 @@ services:
       MONET_MAX_USERS: ${MONET_MAX_USERS:-20}
       MONET_NOTE: ${MONET_NOTE:-}
       MONET_BUILD_TIMEOUT: ${MONET_BUILD_TIMEOUT:-120}
-      MONET_BUILD_MEMORY_MB: ${MONET_BUILD_MEMORY_MB:-1500}
     volumes:
       - ./storage:/storage
     networks: [inside]
@@ -26,6 +25,7 @@ services:
       - /tmp:size=256m
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    # the ceiling for the server and every build together; when it is hit, the build is what gets killed
     mem_limit: ${MEM_LIMIT:-1800m}
     cpus: ${CPUS:-1.0}
     pids_limit: 256

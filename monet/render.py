@@ -27,6 +27,7 @@ BODY = np.array([188, 196, 212], dtype=np.float64)
 EDGE = np.array([40, 44, 56], dtype=np.uint8)
 PALETTE = [(226, 111, 40), (40, 150, 200), (60, 170, 90), (190, 70, 170), (210, 170, 30), (90, 100, 220), (220, 70, 80), (20, 160, 150)]
 LEVELS = (1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536)
+CHUNK = 1_500_000    # samples in memory at once
 
 
 def load(path: Path):
@@ -70,33 +71,37 @@ def _view(verts, tris, segs, tri_colour, eye, up, size, pad=26):
     shade = 0.42 + 0.58 * np.clip(normal @ light, 0, 1)
     rgb = np.clip(colour * shade[:, None], 0, 255).astype(np.uint8)
 
-    # sample every triangle on a grid finer than a pixel
+    # sample every triangle on a grid finer than a pixel, a bounded number of samples at a time: an assembly has
+    # tens of millions of them, and this runs inside the server
     e = np.linalg.norm(t[:, [1, 2, 0], :2] - t[:, :, :2], axis=2).max(1)
     level = np.searchsorted(LEVELS, np.minimum(np.ceil(e / 0.7), LEVELS[-1]))
-    xs, ys, zs, cs = [], [], [], []
+    t = t.astype(np.float32)
+    img = np.empty((size, size, 3), dtype=np.uint8)
+    img[:] = BG
+    flat = img.reshape(-1, 3)
+    zbuf = np.full(size * size, -np.inf, dtype=np.float32)
+    near = np.empty(size * size, dtype=np.float32)
+    who = np.empty(size * size, dtype=np.int64)
     for li in np.unique(level):
         n = LEVELS[li]
         i, j = np.meshgrid(np.arange(n + 1), np.arange(n + 1), indexing="ij")
         m = (i + j) <= n
-        w = np.column_stack([i[m], j[m], n - i[m] - j[m]]) / n          # (S, 3) barycentric
+        w = (np.column_stack([i[m], j[m], n - i[m] - j[m]]) / n).astype(np.float32)      # (S, 3) barycentric
         sel = np.nonzero(level == li)[0]
-        pts = np.einsum("sk,tkc->tsc", w, t[sel])                       # (t, S, 3)
-        xs.append(pts[..., 0].ravel())
-        ys.append(pts[..., 1].ravel())
-        zs.append(pts[..., 2].ravel())
-        cs.append(np.repeat(sel, len(w)))
-    img = np.empty((size, size, 3), dtype=np.uint8)
-    img[:] = BG
-    zbuf = np.full(size * size, -np.inf)
-    if xs:
-        x, y, z, c = (np.concatenate(a) for a in (xs, ys, zs, cs))
-        xi, yi = np.rint(x).astype(np.int64), np.rint(y).astype(np.int64)
-        ok = (xi >= 0) & (xi < size) & (yi >= 0) & (yi < size)
-        pix, z, c = (yi[ok] * size + xi[ok]), z[ok], c[ok]
-        order = np.argsort(z, kind="stable")                            # far first: the nearest is written last
-        flat = img.reshape(-1, 3)
-        flat[pix[order]] = rgb[c[order]]
-        zbuf[pix[order]] = z[order]
+        step = max(1, CHUNK // len(w))
+        for k in range(0, len(sel), step):
+            part = sel[k:k + step]
+            pts = np.einsum("sk,tkc->tsc", w, t[part]).reshape(-1, 3)
+            xi, yi = np.rint(pts[:, 0]).astype(np.int64), np.rint(pts[:, 1]).astype(np.int64)
+            ok = (xi >= 0) & (xi < size) & (yi >= 0) & (yi < size)
+            pix, z, c = (yi[ok] * size + xi[ok]), pts[ok, 2], np.repeat(part, len(w))[ok]
+            order = np.argsort(z, kind="stable")                # far first: the nearest of this lot is written last
+            near[:] = -np.inf
+            near[pix[order]] = z[order]
+            who[pix[order]] = c[order]
+            won = near > zbuf                                   # and it only stays where it beats what is there
+            zbuf[won] = near[won]
+            flat[won] = rgb[who[won]]
 
     # the real edges, where nothing is in front of them
     if len(segs):
