@@ -1,0 +1,6 @@
+{
+ "name": "PLA",
+ "max_solid_thickness": 20,
+ "shrinkage": 0.002,
+ "notes": "Large solid blocks warp and lift: keep parts hollow or ribbed, no solid section over about 20 mm. Use brims or mouse ears on parts over about 150 mm. Creeps under clamps."
+}

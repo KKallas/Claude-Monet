@@ -1,0 +1,57 @@
+# The instance: Monet behind Caddy (HTTPS from Let's Encrypt). Lives in /opt/monet on the droplet together with
+# Caddyfile and .env. `docker compose up -d` starts it and it comes back by itself after a reboot.
+#
+# Monet runs the Notes people send it, and a Note is Python. There are no accounts, so anyone who can reach the
+# instance can run code in the app container. That container is therefore given nothing worth having:
+#   - no way out to the internet (it sits on an internal network; only Caddy can talk to it)
+#   - no root, no capabilities, a read-only file system apart from /storage and /tmp
+#   - a ceiling on memory, CPU and processes
+# What a hostile Note can still do: read or spoil the other workspaces in /storage, and keep the CPU busy.
+# Do not put anything secret in this container, and keep backups of ./storage if the work in it matters.
+services:
+  app:
+    image: monet:latest
+    restart: unless-stopped
+    environment:
+      MONET_BASE_URL: https://${DOMAIN}
+      MONET_MAX_USERS: ${MONET_MAX_USERS:-20}
+      MONET_NOTE: ${MONET_NOTE:-}
+      MONET_BUILD_TIMEOUT: ${MONET_BUILD_TIMEOUT:-120}
+      MONET_BUILD_MEMORY_MB: ${MONET_BUILD_MEMORY_MB:-1500}
+    volumes:
+      - ./storage:/storage
+    networks: [inside]
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: ${MEM_LIMIT:-1800m}
+    cpus: ${CPUS:-1.0}
+    pids_limit: 256
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [inside, outside]
+    depends_on:
+      - app
+
+networks:
+  inside:
+    internal: true      # no route to the internet from here
+  outside:
+
+volumes:
+  caddy_data:
+  caddy_config:

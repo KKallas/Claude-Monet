@@ -1,0 +1,281 @@
+{
+ "params": {
+  "clear": 0.5,
+  "run": 20.0,
+  "ramp_angle": 20.0,
+  "rim": 3.0,
+  "H": 24.0,
+  "pitch": 42.0,
+  "cols": 7,
+  "chunks": [
+   4,
+   3
+  ],
+  "half_w": 210.0,
+  "eps": 0.01,
+  "pipe_d": 16.0,
+  "tunnel": 16.4,
+  "tunnel_floor": 1.6,
+  "skin": 1.2,
+  "rail_wall": 3.0,
+  "nest_skin": 3.0,
+  "slot": 10.0,
+  "rib": 2.0,
+  "end_solid": 20.0,
+  "mid_rib": 4.0,
+  "notch_w": 24.0,
+  "notch_h": 12.0,
+  "dowel": 70.0,
+  "dowel_beam": 80.0,
+  "reach": 400.0,
+  "bed": [
+   256.0,
+   256.0
+  ],
+  "table_depth": 700.0,
+  "L_len": 45.0,
+  "L_lip": 5.0,
+  "L_drop": 30.0,
+  "L_wall": 4.0,
+  "socket": 30.0,
+  "end_wall": 2.0,
+  "end_floor": 0.8,
+  "end_skin": 1.2,
+  "end_rib": 2.0,
+  "ear_r": 10.0,
+  "ear_h": 0.4
+ },
+ "levels": {
+  "table": -16.72,
+  "robot_floor": 0,
+  "top": 7.28,
+  "tunnel_z": [
+   -15.12,
+   1.28
+  ],
+  "tunnel_y": 110.51
+ },
+ "nest_gaps": 16,
+ "end_cavity_z": [
+  -15.92,
+  0.62
+ ],
+ "cable_arches": 157,
+ "table": {
+  "depth": 700.0,
+  "min_depth": 621.0,
+  "front_edge_x": -536.5,
+  "back_edge_x": 163.5,
+  "free_pipe_in_front_of_grid": 79.0
+ },
+ "pipes": {
+  "long_mm": [
+   670.0,
+   670.0
+  ],
+  "dowels_mm": [
+   70.0,
+   70.0
+  ],
+  "Ls": [
+   "L_back_pos",
+   "L_back_neg",
+   "L_front_pos",
+   "L_front_neg"
+  ]
+ },
+ "cells": 70,
+ "cells_beyond_reach": {
+  "limit": 400.0,
+  "count": 6,
+  "radii": [
+   405,
+   418,
+   435
+  ]
+ },
+ "bodies": [
+  {
+   "name": "nest_front",
+   "size_xy": [
+    128.5,
+    253.42
+   ],
+   "z": [
+    -16.72,
+    7.28
+   ],
+   "volume_cm3": 141.3,
+   "fits_bed": true
+  },
+  {
+   "name": "nest_back",
+   "size_xy": [
+    128.5,
+    253.42
+   ],
+   "z": [
+    -16.72,
+    7.28
+   ],
+   "volume_cm3": 141.3,
+   "fits_bed": true
+  },
+  {
+   "name": "grid_pos_0",
+   "size_xy": [
+    168.0,
+    210.0
+   ],
+   "z": [
+    -16.72,
+    7.28
+   ],
+   "volume_cm3": 159.4,
+   "fits_bed": true
+  },
+  {
+   "name": "grid_neg_0",
+   "size_xy": [
+    168.0,
+    210.0
+   ],
+   "z": [
+    -16.72,
+    7.28
+   ],
+   "volume_cm3": 159.4,
+   "fits_bed": true
+  },
+  {
+   "name": "grid_pos_1",
+   "size_xy": [
+    126.0,
+    210.0
+   ],
+   "z": [
+    -16.72,
+    7.28
+   ],
+   "volume_cm3": 123.6,
+   "fits_bed": true
+  },
+  {
+   "name": "grid_neg_1",
+   "size_xy": [
+    126.0,
+    210.0
+   ],
+   "z": [
+    -16.72,
+    7.28
+   ],
+   "volume_cm3": 123.6,
+   "fits_bed": true
+  },
+  {
+   "name": "pipe_long_pos",
+   "size_xy": [
+    670.0,
+    16.0
+   ],
+   "z": [
+    -15.12,
+    0.88
+   ],
+   "volume_cm3": 134.7,
+   "fits_bed": true
+  },
+  {
+   "name": "pipe_long_neg",
+   "size_xy": [
+    670.0,
+    16.0
+   ],
+   "z": [
+    -15.12,
+    0.88
+   ],
+   "volume_cm3": 134.7,
+   "fits_bed": true
+  },
+  {
+   "name": "L_back_pos",
+   "size_xy": [
+    50.0,
+    24.4
+   ],
+   "z": [
+    -46.72,
+    5.28
+   ],
+   "volume_cm3": 22.4,
+   "fits_bed": true
+  },
+  {
+   "name": "L_back_neg",
+   "size_xy": [
+    50.0,
+    24.4
+   ],
+   "z": [
+    -46.72,
+    5.28
+   ],
+   "volume_cm3": 22.4,
+   "fits_bed": true
+  },
+  {
+   "name": "L_front_pos",
+   "size_xy": [
+    50.0,
+    24.4
+   ],
+   "z": [
+    -46.72,
+    5.28
+   ],
+   "volume_cm3": 22.4,
+   "fits_bed": true
+  },
+  {
+   "name": "L_front_neg",
+   "size_xy": [
+    50.0,
+    24.4
+   ],
+   "z": [
+    -46.72,
+    5.28
+   ],
+   "volume_cm3": 22.4,
+   "fits_bed": true
+  },
+  {
+   "name": "pipe_dowel_0",
+   "size_xy": [
+    16.0,
+    70.0
+   ],
+   "z": [
+    -15.12,
+    0.88
+   ],
+   "volume_cm3": 14.1,
+   "fits_bed": true
+  },
+  {
+   "name": "pipe_dowel_1",
+   "size_xy": [
+    16.0,
+    70.0
+   ],
+   "z": [
+    -15.12,
+    0.88
+   ],
+   "volume_cm3": 14.1,
+   "fits_bed": true
+  }
+ ]
+}

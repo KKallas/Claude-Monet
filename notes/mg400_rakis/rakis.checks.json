@@ -1,0 +1,27 @@
+{
+ "checks": [
+  {
+   "id": "bodies",
+   "what": "solids",
+   "equals": 14,
+   "why": "2 nest halves, 4 grid tiles, 4 L brackets, 2 pipes, 2 dowels",
+   "by": "user"
+  },
+  {
+   "id": "depth",
+   "what": "size_x",
+   "min": 709.95,
+   "max": 710.05,
+   "why": "700 mm table plus a 5 mm lip over each edge",
+   "by": "user"
+  },
+  {
+   "id": "width",
+   "what": "size_y",
+   "min": 419.95,
+   "max": 420.05,
+   "why": "10 Gridfinity rows of 42 mm",
+   "by": "user"
+  }
+ ]
+}

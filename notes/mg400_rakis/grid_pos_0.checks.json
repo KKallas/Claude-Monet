@@ -1,0 +1,111 @@
+{
+ "checks": [
+  {
+   "id": "bed",
+   "what": "fits_bed",
+   "why": "prints on the Bambu X1C, 256 x 256 mm",
+   "by": "user"
+  },
+  {
+   "id": "one-solid",
+   "what": "solids",
+   "equals": 1,
+   "why": "one printable body",
+   "by": "user"
+  },
+  {
+   "id": "size-x",
+   "what": "size_x",
+   "min": 167.95,
+   "max": 168.05,
+   "why": "Fusion grid_pos_0: 168.0 mm",
+   "by": "user"
+  },
+  {
+   "id": "size-y",
+   "what": "size_y",
+   "min": 209.95,
+   "max": 210.05,
+   "why": "Fusion grid_pos_0: 210.0 mm",
+   "by": "user"
+  },
+  {
+   "id": "bottom",
+   "what": "min_z",
+   "min": -16.77,
+   "max": -16.67,
+   "why": "stands on the table (z = -16.72) or hooks over its edge",
+   "by": "user"
+  },
+  {
+   "id": "top",
+   "what": "max_z",
+   "min": 7.23,
+   "max": 7.33,
+   "why": "top surface level across the rig",
+   "by": "user"
+  },
+  {
+   "id": "volume",
+   "what": "volume_cm3",
+   "min": 157.77,
+   "max": 160.958,
+   "why": "Fusion grid_pos_0: 159.364 cm3, within 1%",
+   "by": "user"
+  },
+  {
+   "id": "surface",
+   "what": "area_cm2",
+   "min": 1015.691,
+   "max": 1036.21,
+   "why": "Fusion grid_pos_0: 1025.95 cm2, within 1% (a sharper test than volume)",
+   "by": "user"
+  },
+  {
+   "id": "pipe-tunnel-width",
+   "what": "tag.pipe_tunnel.width",
+   "min": 16.2,
+   "max": 16.6,
+   "why": "the 16 mm pipe slides in, without rattling",
+   "by": "user"
+  },
+  {
+   "id": "pipe-tunnel-height",
+   "what": "tag.pipe_tunnel.height",
+   "min": 16.2,
+   "max": 16.6,
+   "why": "the 16 mm pipe slides in, without rattling",
+   "by": "user"
+  },
+  {
+   "id": "pipe-tunnel-through",
+   "what": "tag.pipe_tunnel.through",
+   "equals": true,
+   "why": "the long pipe runs right through",
+   "by": "user"
+  },
+  {
+   "id": "dowel-tunnel-width",
+   "what": "tag.dowel_tunnel.width",
+   "min": 16.2,
+   "max": 16.6,
+   "why": "the 16 mm pipe slides in, without rattling",
+   "by": "user"
+  },
+  {
+   "id": "dowel-tunnel-height",
+   "what": "tag.dowel_tunnel.height",
+   "min": 16.2,
+   "max": 16.6,
+   "why": "the 16 mm pipe slides in, without rattling",
+   "by": "user"
+  },
+  {
+   "id": "dowel-tunnel-through",
+   "what": "tag.dowel_tunnel.through",
+   "equals": false,
+   "why": "blind: the pipe end stops against the wall",
+   "by": "user"
+  }
+ ]
+}

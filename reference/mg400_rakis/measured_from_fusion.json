@@ -1,0 +1,19 @@
+{
+ "source": "Read-only Fusion API query of 'MG 400 rakis v8', 2026-10-04. Volumes and areas are exact body properties; F_report.json rounds volumes to 0.1 cm3.",
+ "robot_base_outline": {
+  "note": "Outer loop of the bottom face of the MG400 base (occurrence 2204132100_1:1), z = 0, centred on J1.",
+  "size_xy_mm": [190.0, 190.0],
+  "corner_radius_mm": 10.0,
+  "straight_edge_mm": 170.0
+ },
+ "bodies": {
+  "nest_front": {"volume_cm3": 141.26, "area_cm2": 1292.191},
+  "nest_back": {"volume_cm3": 141.26, "area_cm2": 1292.191},
+  "grid_pos_0": {"volume_cm3": 159.364, "area_cm2": 1025.95},
+  "grid_neg_0": {"volume_cm3": 159.364, "area_cm2": 1025.95},
+  "grid_pos_1": {"volume_cm3": 123.558, "area_cm2": 817.062},
+  "grid_neg_1": {"volume_cm3": 123.558, "area_cm2": 817.062},
+  "pipe_long_pos": {"volume_cm3": 134.711, "area_cm2": 340.8},
+  "pipe_long_neg": {"volume_cm3": 134.711, "area_cm2": 340.8}
+ }
+}

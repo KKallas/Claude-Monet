@@ -1,0 +1,14 @@
+.git
+.venv
+storage
+out
+tests
+docs
+deploy
+reference
+scripts
+**/__pycache__
+**/.DS_Store
+notes/*/_*
+*.log
+.env

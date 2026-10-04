@@ -1,0 +1,10 @@
+{
+ "name": "Bambu Lab X1C",
+ "bed": [256, 256, 256],
+ "tolerance": 0.1,
+ "nozzle": 0.4,
+ "layer": 0.2,
+ "hole_compensation": 0.0,
+ "shaft_compensation": 0.0,
+ "notes": "tolerance is the print tolerance used to clamp diffs and the load check. Compensation values come from a printed calibration coupon; 0 until measured."
+}

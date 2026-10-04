@@ -1,0 +1,25 @@
+{
+ "checks": [
+  {
+   "id": "bore-width",
+   "what": "tag.rod_bore.width",
+   "min": 16.2,
+   "max": 16.4,
+   "why": "rod_bore: square tunnel, 16.4 mm",
+   "by": "user"
+  },
+  {
+   "id": "bore-through",
+   "what": "tag.rod_bore.through",
+   "equals": true,
+   "why": "runs through the part along X",
+   "by": "user"
+  },
+  {
+   "id": "bed",
+   "what": "fits_bed",
+   "why": "printable on a 256 x 256 mm bed",
+   "by": "user"
+  }
+ ]
+}

@@ -1,0 +1,80 @@
+{
+ "checks": [
+  {
+   "id": "bed",
+   "what": "fits_bed",
+   "why": "prints on the Bambu X1C, 256 x 256 mm",
+   "by": "user"
+  },
+  {
+   "id": "one-solid",
+   "what": "solids",
+   "equals": 1,
+   "why": "one printable body",
+   "by": "user"
+  },
+  {
+   "id": "size-x",
+   "what": "size_x",
+   "min": 49.95,
+   "max": 50.05,
+   "why": "Fusion L_back_pos: 50.0 mm",
+   "by": "user"
+  },
+  {
+   "id": "size-y",
+   "what": "size_y",
+   "min": 24.35,
+   "max": 24.45,
+   "why": "Fusion L_back_pos: 24.4 mm",
+   "by": "user"
+  },
+  {
+   "id": "bottom",
+   "what": "min_z",
+   "min": -46.77,
+   "max": -46.67,
+   "why": "stands on the table (z = -16.72) or hooks over its edge",
+   "by": "user"
+  },
+  {
+   "id": "top",
+   "what": "max_z",
+   "min": 5.23,
+   "max": 5.33,
+   "why": "top surface level across the rig",
+   "by": "user"
+  },
+  {
+   "id": "volume",
+   "what": "volume_cm3",
+   "min": 22.176,
+   "max": 22.624,
+   "why": "Fusion L_back_pos: 22.4 cm3, within 1%",
+   "by": "user"
+  },
+  {
+   "id": "socket-width",
+   "what": "tag.socket.width",
+   "min": 16.2,
+   "max": 16.6,
+   "why": "the 16 mm pipe slides in, without rattling",
+   "by": "user"
+  },
+  {
+   "id": "socket-height",
+   "what": "tag.socket.height",
+   "min": 16.2,
+   "max": 16.6,
+   "why": "the 16 mm pipe slides in, without rattling",
+   "by": "user"
+  },
+  {
+   "id": "socket-through",
+   "what": "tag.socket.through",
+   "equals": false,
+   "why": "blind: the pipe end stops against the wall",
+   "by": "user"
+  }
+ ]
+}
