@@ -1,0 +1,63 @@
+# Every push to main: the checks; if they pass and the droplet's secrets are set, the image is
+# built here and sent to the droplet. A failing check deploys nothing.
+#   secrets: DROPLET_HOST (ip or name) · DROPLET_USER (root) · DROPLET_SSH_KEY (a private key whose
+#   public half is in the droplet's authorized_keys: a deploy key made for this, not yours)
+#   variables: DOMAIN (the public name, for the last look from outside)
+name: check and deploy
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # the CAD kernel (OCP) links against these even when nothing is ever drawn
+      - run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libxrender1 libxext6 libsm6 libfontconfig1
+      - uses: astral-sh/setup-uv@v5
+        with: { enable-cache: true }
+      - run: uv sync --frozen
+      # every Note builds, keeps its tags and passes its checks; the canvas geometry runs in node
+      - run: uv run pytest -q
+
+  deploy:
+    needs: check
+    # two pushes close together: their deploys run one after the other, never into each other
+    concurrency: { group: deploy-droplet, cancel-in-progress: false }
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+      DROPLET_USER: ${{ secrets.DROPLET_USER }}
+      DOMAIN: ${{ vars.DOMAIN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip when no droplet is configured
+        id: gate
+        run: echo "go=${{ secrets.DROPLET_SSH_KEY != '' && secrets.DROPLET_HOST != '' }}" >> "$GITHUB_OUTPUT"
+      - name: SSH key
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.DROPLET_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$DROPLET_HOST" >> ~/.ssh/known_hosts
+      - name: Build, send, restart
+        if: steps.gate.outputs.go == 'true'
+        run: deploy/push-image.sh "${DROPLET_USER:-root}@$DROPLET_HOST"
+      - name: Is it the build that was sent, and does it build a part
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          want="$(git rev-parse --short HEAD)"
+          # asked inside the container: this does not depend on the name resolving yet
+          got="$(ssh "${DROPLET_USER:-root}@$DROPLET_HOST" "cd /opt/monet && docker compose exec -T app python -c \"import json, urllib.request as u; print(json.load(u.urlopen('http://localhost:8080/api/version', timeout=10))['commit'])\"")"
+          echo "running $got, sent $want"
+          test "$got" = "$want"
+          ssh "${DROPLET_USER:-root}@$DROPLET_HOST" "cd /opt/monet && docker compose exec -T app python -m monet.runner /app/notes/starter rod_foot /tmp/smoke" | grep -q '"ok": true'
+      - name: A look from outside
+        if: steps.gate.outputs.go == 'true' && vars.DOMAIN != ''
+        run: |
+          # the certificate comes by itself once the name resolves; until then this only says so
+          curl -fsS --retry 5 --retry-delay 5 "https://$DOMAIN/api/version" || echo "::warning::https://$DOMAIN does not answer yet (DNS, or the certificate is still on its way)"
