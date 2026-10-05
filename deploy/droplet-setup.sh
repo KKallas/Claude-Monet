@@ -21,8 +21,8 @@ ufw allow 443/tcp
 ufw allow 443/udp
 ufw --force enable
 
-mkdir -p /opt/monet/storage
-# the container runs as uid 1000 (monet)
-chown 1000:1000 /opt/monet/storage && chmod 700 /opt/monet/storage
+mkdir -p /opt/monet/storage /opt/monet/data
+# the containers run as uid 1000 (monet): storage is the working files, data the accounts
+chown 1000:1000 /opt/monet/storage /opt/monet/data && chmod 700 /opt/monet/storage /opt/monet/data
 [ -f /opt/monet/.env ] || echo "DOMAIN=${DOMAIN}" > /opt/monet/.env
 echo "Ready. Now, from the laptop: deploy/push-image.sh root@<this droplet>   (see docs/SETUP-ONLINE.md)"

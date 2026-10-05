@@ -1,34 +1,58 @@
 # The instance: Monet behind Caddy (HTTPS from Let's Encrypt). Lives in /opt/monet on the droplet together with
 # Caddyfile and .env. `docker compose up -d` starts it and it comes back by itself after a reboot.
 #
-# Monet runs the Notes people send it, and a Note is Python. There are no accounts, so anyone who can reach the
-# instance can run code in the app container. That container is therefore given nothing worth having:
-#   - no way out to the internet (it sits on an internal network; only Caddy can talk to it)
-#   - no root, no capabilities, a read-only file system apart from /storage and /tmp
-#   - a ceiling on memory, CPU and processes
-# What a hostile Note can still do: read or spoil the other workspaces in /storage, and keep the CPU busy.
-# Do not put anything secret in this container, and keep backups of ./storage if the work in it matters.
+# Monet runs the Notes people send it, and a Note is Python: whoever may send one may run anything in the process
+# that builds it. So that process is a container of its own:
+#   app     the web app: the logins, the canvas, the agents' door. Holds ./data (accounts, session secret).
+#           It never runs a Note.
+#   runner  builds the Notes the app asks it to. Holds ./storage (the working files) and nothing else:
+#           no accounts, no secret, no way out to the internet.
+# Both: no root, no capabilities, a read-only file system apart from their volumes and /tmp, ceilings on memory,
+# CPU and processes. Only Caddy is reachable from outside, and only Caddy can reach out.
+# What a hostile Note can still do: read or spoil the working files of other users (they share ./storage), and
+# keep the CPU busy. So let in people you would lend the machine to, and back up ./storage if the work matters.
+x-shut: &shut
+  image: monet:latest
+  restart: unless-stopped
+  networks: [inside]
+  read_only: true
+  tmpfs:
+    - /tmp:size=256m
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  pids_limit: 256
+
 services:
   app:
-    image: monet:latest
-    restart: unless-stopped
+    <<: *shut
     environment:
       MONET_BASE_URL: https://${DOMAIN}
       MONET_MAX_USERS: ${MONET_MAX_USERS:-20}
       MONET_NOTE: ${MONET_NOTE:-}
+      MONET_RUNNER_URL: http://runner:8081
       MONET_BUILD_TIMEOUT: ${MONET_BUILD_TIMEOUT:-120}
     volumes:
       - ./storage:/storage
-    networks: [inside]
-    read_only: true
-    tmpfs:
-      - /tmp:size=256m
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    # the ceiling for the server and every build together; when it is hit, the build is what gets killed
-    mem_limit: ${MEM_LIMIT:-1800m}
+      - ./data:/data
+    mem_limit: ${APP_MEM:-700m}
+    depends_on:
+      - runner
+
+  runner:
+    <<: *shut
+    command: ["python", "-m", "monet.buildd"]
+    environment:
+      MONET_BUILD_TIMEOUT: ${MONET_BUILD_TIMEOUT:-120}
+    volumes:
+      - ./storage:/storage
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8081/healthz', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+    # the ceiling for every build together; when it is hit, the build is what gets killed
+    mem_limit: ${RUNNER_MEM:-1300m}
     cpus: ${CPUS:-1.0}
-    pids_limit: 256
 
   caddy:
     image: caddy:2

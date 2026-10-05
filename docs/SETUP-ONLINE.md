@@ -44,20 +44,34 @@ Builds the image for linux/amd64 (slow on an Apple Silicon laptop: it is emulate
 through the SSH pipe, copies `compose.yml` and `Caddyfile`, starts everything. The same command
 deploys every later version. `deploy/rollback.sh root@$IP <commit>` puts an older one back.
 
-## 5. Check
+## 5. The admin, and letting people in
 
-- `https://monet.example.org` shows the start page and "0 of 20 workspaces in use".
-- Press Start, open `starter/rod_foot`: the part appears.
+The first time the app starts it has one account, the built-in admin, without a password. Its log
+says where to choose one:
+
+```bash
+ssh root@$IP 'cd /opt/monet && docker compose logs app | grep -A1 "no password yet"'
+```
+
+Open that link once. Then `https://<domain>/users`: add a user, send them their card link (or let
+them scan the QR), and they choose their own password on the first visit. Everything about accounts
+is in `/opt/monet/data` (`users.json`, the audit log `log.jsonl`, the session secret); the container
+that builds Notes does not have that folder.
+
+## Check
+
+- `https://monet.example.org` shows the login page.
+- Log in, open `starter/rod_foot`: the part appears (built by the `runner` container).
 - `https://monet.example.org/api` is the page to point an LLM at.
 - Claude Desktop → Settings → Connectors → Add custom connector → the address from
   "Connect your agent" in the canvas.
 
 ## Looking after it
 
-- **Full?** Workspaces are folders: `ls -lt /opt/monet/storage` shows them, oldest last. Delete
-  the folder of one nobody uses and its slot is free. Nothing is removed automatically.
-- **Backups**: everything people made is in `/opt/monet/storage`. Nothing else on the droplet
-  matters; it can be rebuilt from this repository.
+- **Full?** `MONET_MAX_USERS` in `.env` is how many users there may be; delete one on `/users` and
+  the place is free. Their files stay in `/opt/monet/storage/<user id>` until removed by hand.
+- **Backups**: what people made is in `/opt/monet/storage`, who they are in `/opt/monet/data`.
+  Nothing else on the droplet matters; it can be rebuilt from this repository.
 - **Logs**: `cd /opt/monet && docker compose logs --tail 100 app`.
 - The app container has no route to the internet by design (`internal: true` in
   `compose.yml`). The canvas loads three.js from a CDN in the visitor's browser, not through

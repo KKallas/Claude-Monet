@@ -1,8 +1,10 @@
 """The web app: one process. The canvas and its API for the person, the agent's door
-(MCP and plain HTTP) for their own LLM harness, and nothing else.
+(MCP and plain HTTP) for their own LLM harness, and the accounts.
 
-No accounts. Pressing Start makes a workspace with an unguessable id; its link is the
-login. MONET_MAX_USERS says how many workspaces there may be.
+People are let in by an admin (monet/auth.py): a username, a card, a password. Each has one
+workspace. In the browser it is /w/<username>, behind the login. Their agent, which cannot
+log in, comes through /w/<agent key>/agent and /w/<agent key>/mcp: the key is in the link the
+canvas shows them, and it opens only what an agent may do.
 """
 import base64
 import contextlib
@@ -24,13 +26,13 @@ from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Re
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import __version__, agent, note as notes, render, tags as tagging
-from .workspace import EXPORTS, ID_RE, Problem, Workspaces
+from . import __version__, agent, auth, note as notes, tags as tagging
+from .store import Store, now
+from .workspace import EXPORTS, Problem, Workspaces
 
 ROOT = Path(__file__).resolve().parent.parent
 CANVAS = ROOT / "canvas"
-COOKIE = "monet_ws"
-MCP_PATH = re.compile(r"^/w/([A-Za-z0-9_-]{16})/mcp/?$")
+MCP_PATH = re.compile(r"^/w/([A-Za-z0-9_-]{24,48})/mcp/?$")
 NO_STORE = {"Cache-Control": "no-store"}
 
 
@@ -82,27 +84,7 @@ def tool_docs() -> dict:
     return out
 
 
-def connection(ws, base: str) -> dict:
-    """Everything someone who just got a workspace needs to know."""
-    w = f"{base}/w/{ws.id}"
-    return {
-        "id": ws.id,
-        "workspace": w,
-        "canvas": w,
-        "api": f"{w}/agent",
-        "mcp": f"{w}/mcp",
-        "docs": f"{base}/api",
-        "projects": ws.projects(),
-        "next": [
-            f"Keep the id: it is the only key to this workspace. There is no other login.",
-            f"Give the user the canvas link ({w}) to open in a browser: they watch the part there and click the faces they mean.",
-            f"Read how to work here: GET {w}/agent/guide",
-            f"Then: GET {w}/agent/status",
-        ],
-    }
-
-
-def docs(base: str, workspaces) -> str:
+def docs(base: str) -> str:
     """The API, written for an LLM that was only given this address."""
     tools = []
     for name, d in tool_docs().items():
@@ -114,23 +96,20 @@ Monet is a CAD workspace for 3D-printed parts. You (an LLM agent) write each par
 "Note", using build123d. This server builds it, measures it, runs the user's checks, draws pictures, keeps
 saved versions and exports files for printing. The human watches in a browser canvas and clicks the faces they mean.
 
-Everything is plain HTTPS. No keys, no headers, no login: a workspace id in the address is the whole access.
+Everything is plain HTTPS, with no headers and no login of your own: the user's agent key, in the address,
+is your access to their workspace.
 
-## 1. Get a workspace id (once)
+## 1. Your address
 
-If the user gave you a workspace link ({base}/w/<id>), that is your workspace: skip this step.
-Otherwise register one:
-
-    GET {base}/api/register?name=<a short name>
-
-The answer is JSON with `id`, `api` (your tool address), `canvas` (the link to give to the human) and `next`.
-This instance allows {workspaces.max_users} workspaces; {workspaces.count()} are in use. Register once and keep the
-id for the whole conversation; do not register again for every request.
+You need the user's **agent link**. It looks like {base}/w/<agent key> and they find it in their canvas under
+"Connect your agent" (people are let into an instance by its admin; there is no way to sign up from here). If
+you were not given one, ask for it. Treat it as a password: it is theirs, do not show it to anyone else or put
+it where others can read it. Below, <key> stands for the agent key in that link.
 
 ## 2. Call tools
 
-    GET  {base}/w/<id>/agent/<tool>?arg=value&arg=value
-    POST {base}/w/<id>/agent/<tool>          with a JSON object of arguments
+    GET  {base}/w/<key>/agent/<tool>?arg=value&arg=value
+    POST {base}/w/<key>/agent/<tool>          with a JSON object of arguments
 
 Both do the same. Answers are JSON. A mistake of yours comes back as {{"error": "what was wrong", "status": 4xx}}:
 by POST with that HTTP status, by GET inside a 200 (so that a fetch tool which hides failed pages still shows it
@@ -144,13 +123,14 @@ Sending a Note (write_note) needs its whole source. Any of these works:
     GET  .../agent/write_note?project=...&note=...&source_b64=<base64url of the source>
 
 Pictures: `look` answers with `image`, the address of a PNG. Fetch it and look at it.
-Files: `export` answers with `url`, the address of the 3MF / STL / STEP / GLB.
+Files: `export` answers with `url`, the address of the 3MF / STL / STEP / GLB. Both addresses carry the agent
+key. The `canvas` links in the answers are for the user: they open in a browser, behind their login.
 
 Start with `guide` (the Note format, tags, checks, the loop to follow, the rules that are not yours to bend),
 then `status`.
 
-    GET {base}/w/<id>/agent/guide
-    GET {base}/w/<id>/agent/status
+    GET {base}/w/<key>/agent/guide
+    GET {base}/w/<key>/agent/status
 
 ## 3. The rules in one breath
 
@@ -165,57 +145,105 @@ successful save: the history is theirs.
 {chr(10).join(tools)}
 ## Also
 
-- `GET {base}/w/<id>/agent` lists the tools as JSON.
-- MCP (Claude Desktop, Claude Code and others): `{base}/w/<id>/mcp` (streamable HTTP).
+- `GET {base}/w/<key>/agent` lists the tools as JSON.
+- MCP (Claude Desktop, Claude Code and others): `{base}/w/<key>/mcp` (streamable HTTP).
+- What only the person can do, logged in at their canvas: change or remove a check, acknowledge a load check,
+  delete a Note. The agent key does not open those.
 - Source: {version()["source"]} ({version()["license"]}).
 """
 
 
-def create_app(storage: str | Path, max_users: int = 20, templates: str | Path | None = None,
+def create_app(storage: str | Path, data: str | Path | None = None, max_users: int = 20, templates: str | Path | None = None,
                profiles: str | Path | None = None) -> Starlette:
-    workspaces = Workspaces(storage, templates or ROOT / "notes", profiles or ROOT / "profiles", max_users)
+    workspaces = Workspaces(storage, templates or ROOT / "notes", profiles or ROOT / "profiles")
+    store = Store(data if data is not None else Path(storage).resolve().parent / "data")
+    admin = auth.ensure_admin(store)
+    secret = auth.session_secret(store)
+    throttle = auth.Throttle()
     info = version()
 
-    def caller(ws, headers, scheme="http") -> agent.Caller:
-        return agent.Caller(ws, f"{base_url(headers, scheme)}/w/{ws.id}")
+    def caller(ws, owner, headers, scheme="http") -> agent.Caller:
+        base = base_url(headers, scheme)
+        return agent.Caller(ws, f"{base}/w/{owner['key']}", f"{base}/w/{owner['username']}")
+
+    def me(request: Request) -> dict | None:
+        return auth.identify(store, secret, request.cookies, request.headers.get("authorization"))[0]
+
+    def secure(request: Request) -> bool:
+        return (request.headers.get("x-forwarded-proto") or request.url.scheme).split(",")[0].strip() == "https"
+
+    def seen(owner: dict) -> None:
+        """When this user's agent was last here: for the admin's eye. Written at most once a minute."""
+        stamp = now()
+        if (owner.get("lastAgent") or "")[:16] != stamp[:16]:
+            owner["lastAgent"] = stamp
+            store.save_user(owner)
 
     # ---- the agent's door, as MCP -------------------------------------------------
     def caller_from_mcp(headers) -> agent.Caller:
-        ws = workspaces.get(headers.get("x-monet-workspace", ""))
-        if ws is None:
+        owner = store.users.get(headers.get("x-monet-user", ""))
+        if owner is None:
             raise ValueError("no such workspace")
-        return caller(ws, headers)
+        seen(owner)
+        return caller(workspaces.of(owner["id"], owner["name"]), owner, headers)
 
     from mcp.server.transport_security import TransportSecuritySettings
     mcp = agent.mcp_server(caller_from_mcp)
-    # the workspace id in the address is the secret, not an ambient cookie: nothing for a rebound DNS name to ride on
+    # the agent key in the address is the secret, not an ambient cookie: nothing for a rebound DNS name to ride on
     mcp_app = mcp.streamable_http_app(streamable_http_path="/mcp", json_response=True, stateless_http=True,
                                       transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
 
     # ---- helpers ------------------------------------------------------------------
-    def api(fn):
-        """An endpoint inside a workspace: fn(request, ws, body) runs off the event loop; a Problem is the caller's."""
-        async def endpoint(request: Request):
-            ws = workspaces.get(request.path_params["wid"])
-            if ws is None:
-                return JSONResponse({"error": "no such workspace"}, 404)
-            body = {}
-            if request.method in ("POST", "PUT"):
-                raw = await request.body()
-                if raw and "json" not in request.headers.get("content-type", "json"):
-                    body = {"_raw": raw.decode("utf-8", "replace")}      # a Note sent as plain text
-                elif raw:
-                    try:
-                        body = json.loads(raw)
-                    except json.JSONDecodeError:
-                        return JSONResponse({"error": "the body is not JSON"}, 400)
-                    if not isinstance(body, dict):
-                        return JSONResponse({"error": "the body must be a JSON object"}, 400)
+    async def body_of(request: Request):
+        if request.method not in ("POST", "PUT"):
+            return {}
+        raw = await request.body()
+        if raw and "json" not in request.headers.get("content-type", "json"):
+            return {"_raw": raw.decode("utf-8", "replace")}      # a Note sent as plain text
+        if not raw:
+            return {}
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError:
+            raise Problem("the body is not JSON")
+        if not isinstance(body, dict):
+            raise Problem("the body must be a JSON object")
+        return body
+
+    def inside(request, owner, fn):
+        """Run fn(request, ws, body) in the workspace of `owner`, off the event loop; a Problem is the caller's."""
+        async def go():
             try:
-                out = await run_in_threadpool(fn, request, ws, body)
+                body = await body_of(request)
+                request.state.owner = owner
+                out = await run_in_threadpool(lambda: fn(request, workspaces.of(owner["id"], owner["name"]), body))
             except Problem as e:
                 return JSONResponse({"error": str(e)}, e.status)
             return out if isinstance(out, Response) else JSONResponse(out, headers=NO_STORE)
+        return go()
+
+    def api(fn):
+        """The person's door: /w/<username>/…, behind the login. Theirs, or an admin looking in."""
+        async def endpoint(request: Request):
+            user = me(request)
+            if user is None:
+                return JSONResponse({"error": "log in first", "login": True}, 401)
+            owner = auth.find_by_username(store, request.path_params["wid"])
+            if owner is None or (owner["id"] != user["id"] and user["role"] != "admin"):
+                return JSONResponse({"error": "no such workspace"}, 404)
+            request.state.me = user
+            return await inside(request, owner, fn)
+        return endpoint
+
+    def door(fn):
+        """The agent's door: /w/<agent key>/…. The key says whose agent it is; it opens only what an agent may do."""
+        async def endpoint(request: Request):
+            owner = auth.find_by_key(store, request.path_params["wid"])
+            if owner is None:
+                why = "this agent link is not valid (any more): ask the user for the one in their canvas, under Connect your agent"
+                return JSONResponse({"error": why, "status": 404}, 200 if request.method == "GET" else 404)
+            seen(owner)
+            return await inside(request, owner, fn)
         return endpoint
 
     def note_of(request, ws):
@@ -223,38 +251,31 @@ def create_app(storage: str | Path, max_users: int = 20, templates: str | Path |
 
     # ---- pages --------------------------------------------------------------------
     async def home(request: Request):
-        wid = request.cookies.get(COOKIE, "")
-        if workspaces.get(wid):
-            return RedirectResponse(f"/w/{wid}", 302)
-        return FileResponse(CANVAS / "landing.html", headers=NO_STORE)
+        user = me(request)
+        return RedirectResponse(f"/w/{user['username']}" if user else "/login", 302)
+
+    async def login_page(_request: Request):
+        return FileResponse(CANVAS / "login.html", headers=NO_STORE)
+
+    async def users_page(request: Request):
+        user = me(request)
+        if user is None:
+            return RedirectResponse("/login?next=/users", 302)
+        if user["role"] != "admin":
+            return RedirectResponse(f"/w/{user['username']}", 302)
+        return FileResponse(CANVAS / "users.html", headers=NO_STORE)
 
     async def canvas(request: Request):
-        wid = request.path_params["wid"]
-        if not workspaces.get(wid):
-            return RedirectResponse("/?gone=1", 302)
-        response = FileResponse(CANVAS / "index.html", headers=NO_STORE)
-        response.set_cookie(COOKIE, wid, max_age=365 * 24 * 3600, httponly=True, samesite="lax")
-        return response
-
-    async def leave(_request: Request):
-        response = RedirectResponse("/", 302)
-        response.delete_cookie(COOKIE)
-        return response
+        user, wid = me(request), request.path_params["wid"]
+        if user is None:
+            return RedirectResponse(f"/login?next=/w/{wid}", 302)
+        owner = auth.find_by_username(store, wid)
+        if owner is None or (owner["id"] != user["id"] and user["role"] != "admin"):
+            return RedirectResponse(f"/w/{user['username']}", 302)
+        return FileResponse(CANVAS / "index.html", headers=NO_STORE)
 
     async def get_version(_request: Request):
-        return JSONResponse({**info, "workspaces": workspaces.count(), "max": workspaces.max_users,
-                             "templates": workspaces.template_names()}, headers=NO_STORE)
-
-    async def start(request: Request):
-        try:
-            body = await request.json()
-        except json.JSONDecodeError:
-            body = {}
-        try:
-            ws = await run_in_threadpool(workspaces.create, str(body.get("name", "")))
-        except Problem as e:
-            return JSONResponse({"error": str(e)}, e.status)
-        return JSONResponse({"id": ws.id, "url": f"/w/{ws.id}"})
+        return JSONResponse({**info, "templates": workspaces.template_names()}, headers=NO_STORE)
 
     async def skill_zip(_request: Request):
         buf = io.BytesIO()
@@ -264,14 +285,159 @@ def create_app(storage: str | Path, max_users: int = 20, templates: str | Path |
                     z.write(f, Path("monet") / f.relative_to(ROOT / "skill" / "monet"))
         return Response(buf.getvalue(), media_type="application/zip", headers={"Content-Disposition": 'attachment; filename="monet-skill.zip"'})
 
+    # ---- logging in (from Adam Designer) ------------------------------------------
+    def fail(e: auth.HttpError):
+        return JSONResponse({"error": e.message, **e.extra}, e.status, headers=NO_STORE)
+
+    async def card_info(request: Request):
+        """What the login page shows for a card: whose it is, and whether to ask for their password or have them choose one."""
+        user = auth.find_by_card(store, request.path_params["card"])
+        if not user:
+            return JSONResponse({"error": "this card is not valid any more: ask an admin for a new one"}, 404)
+        return JSONResponse({"username": user["username"], "name": user["name"], "hasPassword": bool(user.get("password"))}, headers=NO_STORE)
+
+    async def do_login(request: Request):
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            body = {}
+        try:
+            user = await run_in_threadpool(auth.login, store, throttle, request.client.host if request.client else "?",
+                                           body.get("card"), body.get("username"), body.get("password"))
+        except auth.HttpError as e:
+            return fail(e)
+        return JSONResponse({"ok": True, "user": auth.public_user(user), "home": f"/w/{user['username']}"},
+                            headers={**NO_STORE, "Set-Cookie": auth.session_cookie(secret, user, secure(request))})
+
+    async def do_logout(_request: Request):
+        return JSONResponse({"ok": True}, headers={"Set-Cookie": auth.CLEAR_COOKIE})
+
+    async def whoami(request: Request):
+        """Every page asks this on load, so renewing the cookie here means you stay logged in for as long as you
+        keep using the app, not a year from login."""
+        user, via_cookie = auth.identify(store, secret, request.cookies, request.headers.get("authorization"))
+        headers = {**NO_STORE, **({"Set-Cookie": auth.session_cookie(secret, user, secure(request))} if user and via_cookie else {})}
+        return JSONResponse({"user": auth.public_user(user), "home": f"/w/{user['username']}" if user else None}, headers=headers)
+
+    async def change_password(request: Request):
+        """Changing your own password ends your other sessions, and keeps this one."""
+        user = me(request)
+        if user is None:
+            return JSONResponse({"error": "log in first", "login": True}, 401)
+        body = await request.json()
+        if not auth.check_password(user, body.get("current")):
+            return JSONResponse({"error": "the current password is wrong"}, 401)
+        problem = auth.password_problem(body.get("password"))
+        if problem:
+            return JSONResponse({"error": problem}, 400)
+        user["password"] = auth.hash_password(str(body["password"]))
+        user["passwordSetAt"] = now()
+        user["session"] = (user.get("session") or 1) + 1
+        store.save_user(user)
+        store.log(type="password-change", user=user["username"], who=user["username"])
+        return JSONResponse({"ok": True}, headers={"Set-Cookie": auth.session_cookie(secret, user, secure(request))})
+
+    # ---- the users, admins only (from Adam Designer) -------------------------------
+    def admins(fn):
+        async def endpoint(request: Request):
+            user = me(request)
+            if user is None:
+                return JSONResponse({"error": "log in first", "login": True}, 401)
+            if user["role"] != "admin":
+                return JSONResponse({"error": "only an admin can do that"}, 403)
+            target = None
+            if "id" in request.path_params:
+                target = store.users.get(request.path_params["id"])
+                if target is None:
+                    return JSONResponse({"error": "no such user"}, 404)
+            try:
+                body = await body_of(request)
+                return await fn(request, user, target, body)
+            except auth.HttpError as e:
+                return fail(e)
+            except Problem as e:
+                return JSONResponse({"error": str(e)}, e.status)
+        return endpoint
+
+    def shown(u: dict) -> dict:
+        ws = workspaces.get(u["id"])
+        return {**auth.public_user(u, True), "projects": ws.projects() if ws else []}
+
+    async def list_users(_request, _user, _target, _body):
+        users = sorted(store.users.values(), key=lambda u: (not u.get("builtin"), u["username"]))
+        return JSONResponse({"users": [shown(u) for u in users], "max": max_users, "log": store.tail(60)[::-1]}, headers=NO_STORE)
+
+    async def add_user(_request, user, _target, body):
+        new = auth.make_user(store, body.get("username"), body.get("name"), body.get("role"), limit=max_users)
+        await run_in_threadpool(workspaces.of, new["id"], new["name"])      # their workspace, with the samples in it
+        store.log(type="user-new", user=new["username"], role=new["role"], who=user["username"])
+        return JSONResponse({"ok": True, "user": shown(new)})
+
+    async def edit_user(_request, user, target, body):
+        """Name and role. The username stays: it is what the log remembers, and it is in their address."""
+        if body.get("name") is not None:
+            target["name"] = str(body["name"]).strip()[:80] or target["username"]
+        if body.get("role") is not None:
+            if target.get("builtin") and body["role"] != "admin":
+                raise auth.HttpError(400, "the built-in admin stays an admin")
+            target["role"] = "admin" if body["role"] == "admin" else "user"
+        store.save_user(target)
+        store.log(type="user-edit", user=target["username"], role=target["role"], who=user["username"])
+        return JSONResponse({"ok": True, "user": shown(target)})
+
+    async def reset_user(_request, user, target, _body):
+        """Forgot the password: clear it and sign them out everywhere. Their card then asks for a new one, exactly
+        like the first time."""
+        target["password"] = None
+        target["session"] = (target.get("session") or 1) + 1
+        store.save_user(target)
+        store.log(type="user-reset", user=target["username"], who=user["username"])
+        return JSONResponse({"ok": True, "user": shown(target)})
+
+    async def recard_user(_request, user, target, _body):
+        """Lost card: a new code, so the old link stops working."""
+        target["card"] = str(__import__("uuid").uuid4())
+        store.save_user(target)
+        store.log(type="user-card", user=target["username"], who=user["username"])
+        return JSONResponse({"ok": True, "user": shown(target)})
+
+    async def rekey_user(_request, user, target, _body):
+        """Their agent link got out, or their agent should stop: a new key, so the old link stops working."""
+        target["key"] = auth.new_key()
+        store.save_user(target)
+        store.log(type="user-key", user=target["username"], who=user["username"])
+        return JSONResponse({"ok": True, "user": shown(target)})
+
+    async def delete_user(_request, user, target, _body):
+        if target.get("builtin"):
+            raise auth.HttpError(400, "the built-in admin cannot be deleted")
+        if target["id"] == user["id"]:
+            raise auth.HttpError(400, "you cannot delete yourself")
+        store.delete_user(target["id"])      # their folder stays on the disk: storage/<id>
+        store.log(type="user-delete", user=target["username"], id=target["id"], who=user["username"])
+        return JSONResponse({"ok": True})
+
+    async def card_svg(request, _user, target, _body):
+        """The card's QR: a login link. Admins only, because it is half of a login."""
+        import segno
+        out = io.BytesIO()
+        segno.make(f"{base_url(request.headers, request.url.scheme)}/login?card={target['card']}", error="m").save(out, kind="svg", border=0, xmldecl=False, svgns=True, scale=4)
+        return Response(out.getvalue(), media_type="image/svg+xml", headers=NO_STORE)
+
     # ---- the canvas API (the person) ----------------------------------------------
     def state(request, ws, _body):
-        return {"workspace": {"id": ws.id, **ws.meta}, "projects": ws.projects(), "templates": ws.all.template_names(),
-                "base": f"{base_url(request.headers, request.url.scheme)}/w/{ws.id}", "version": info}
+        owner, user, base = request.state.owner, request.state.me, base_url(request.headers, request.url.scheme)
+        return {"workspace": {"name": owner["name"], "username": owner["username"]}, "me": auth.public_user(user),
+                "projects": ws.projects(), "templates": ws.all.template_names(),
+                "base": f"{base}/w/{owner['username']}", "agent": f"{base}/w/{owner['key']}", "origin": base, "version": info}
 
-    def rename(_request, ws, body):
-        ws.write_meta({**ws.meta, "name": str(body.get("name", "")).strip()[:60]})
-        return {"ok": True}
+    def new_key(request, _ws, _body):
+        """A new agent key for this workspace: the old agent link stops working at once."""
+        owner = request.state.owner
+        owner["key"] = auth.new_key()
+        store.save_user(owner)
+        store.log(type="user-key", user=owner["username"], who=request.state.me["username"])
+        return {"agent": f"{base_url(request.headers, request.url.scheme)}/w/{owner['key']}"}
 
     def new_project(_request, ws, body):
         p = ws.create_project(str(body.get("name", "")), str(body.get("template", "")))
@@ -401,7 +567,10 @@ def create_app(storage: str | Path, max_users: int = 20, templates: str | Path |
         return p.acknowledge(name)
 
     def save(request, ws, body):
-        return ws.project(request.path_params["project"]).save(str(body.get("message", "")), str(body.get("commit", "")))
+        out = ws.project(request.path_params["project"]).save(str(body.get("message", "")), str(body.get("commit", "")))
+        if out.get("saved") and not out.get("unchanged"):
+            store.log(type="save", user=request.state.owner["username"], project=request.path_params["project"], version=out["version"], by="person")
+        return out
 
     def diff(request, ws, _body):
         p, name = note_of(request, ws)
@@ -446,8 +615,12 @@ def create_app(storage: str | Path, max_users: int = 20, templates: str | Path |
         if fn:
             args = {k: coerce(v, inspect.signature(fn).parameters[k].annotation) if k in inspect.signature(fn).parameters else v
                     for k, v in args.items()}
+        owner = request.state.owner
         try:
-            result, png = agent.call(name, caller(ws, request.headers, request.url.scheme), args)
+            result, png = agent.call(name, caller(ws, owner, request.headers, request.url.scheme), args)
+            if name not in agent.READ_ONLY:      # what agents changed: for the admin's eye
+                store.log(type="agent", user=owner["username"], tool=name, project=args.get("project") or args.get("name"), note=args.get("note"),
+                          **({"version": result["version"]} if name == "save" and result.get("saved") else {}))
         except Problem as e:
             if request.method != "GET":
                 raise
@@ -457,39 +630,42 @@ def create_app(storage: str | Path, max_users: int = 20, templates: str | Path |
             return Response(png, media_type="image/png", headers=NO_STORE)
         return result
 
-    def agent_tools(request, ws, _body):
-        return {"workspace": ws.id, "api": f"{base_url(request.headers, request.url.scheme)}/w/{ws.id}/agent", "tools": tool_docs()}
-
-    async def register(request: Request):
-        """A workspace for whoever asks: the id, and where everything is. For an agent that starts on its own."""
-        body = {}
-        if request.method == "POST":
-            with contextlib.suppress(json.JSONDecodeError):
-                body = await request.json()
-        name = str(request.query_params.get("name") or (body.get("name") if isinstance(body, dict) else "") or "")
-        try:
-            ws = await run_in_threadpool(workspaces.create, name)
-        except Problem as e:   # by GET in a 200, like every mistake at the agent's door: see agent_call
-            return JSONResponse({"error": str(e), "status": e.status}, 200 if request.method == "GET" else e.status, headers=NO_STORE)
-        return JSONResponse(connection(ws, base_url(request.headers, request.url.scheme)), headers=NO_STORE)
+    def agent_tools(request, _ws, _body):
+        owner = request.state.owner
+        return {"workspace": owner["username"], "api": f"{base_url(request.headers, request.url.scheme)}/w/{owner['key']}/agent", "tools": tool_docs()}
 
     async def api_docs(request: Request):
-        return Response(docs(base_url(request.headers, request.url.scheme), workspaces), media_type="text/markdown; charset=utf-8", headers=NO_STORE)
+        return Response(docs(base_url(request.headers, request.url.scheme)), media_type="text/markdown; charset=utf-8", headers=NO_STORE)
 
-    n = "/w/{wid}/api/p/{project}/n/{note}"
+    n, f = "/w/{wid}/api/p/{project}/n/{note}", "/w/{wid}/file/p/{project}/n/{note}"
     routes = [
         Route("/", home),
-        Route("/leave", leave),
+        Route("/login", login_page),
+        Route("/users", users_page),
         Route("/healthz", lambda _r: JSONResponse({"ok": True})),
         Route("/api/version", get_version),
-        Route("/api/start", start, methods=["POST"]),
         Route("/api", api_docs),
         Route("/llms.txt", api_docs),
-        Route("/api/register", register, methods=["GET", "POST"]),
         Route("/skill.zip", skill_zip),
+        # logging in
+        Route("/api/login", do_login, methods=["POST"]),
+        Route("/api/login/card/{card}", card_info),
+        Route("/api/logout", do_logout, methods=["POST"]),
+        Route("/api/me", whoami),
+        Route("/api/me/password", change_password, methods=["PUT"]),
+        # the users, for admins
+        Route("/api/users", admins(list_users)),
+        Route("/api/users", admins(add_user), methods=["POST"]),
+        Route("/api/users/{id}", admins(edit_user), methods=["PUT"]),
+        Route("/api/users/{id}", admins(delete_user), methods=["DELETE"]),
+        Route("/api/users/{id}/reset", admins(reset_user), methods=["POST"]),
+        Route("/api/users/{id}/card", admins(recard_user), methods=["POST"]),
+        Route("/api/users/{id}/key", admins(rekey_user), methods=["POST"]),
+        Route("/api/users/{id}/card.svg", admins(card_svg)),
+        # the person's door: /w/<username>, behind the login
         Route("/w/{wid}", canvas),
         Route("/w/{wid}/api/state", api(state)),
-        Route("/w/{wid}/api/name", api(rename), methods=["PUT"]),
+        Route("/w/{wid}/api/key", api(new_key), methods=["POST"]),
         Route("/w/{wid}/api/projects", api(new_project), methods=["POST"]),
         Route("/w/{wid}/api/p/{project}", api(project)),
         Route("/w/{wid}/api/p/{project}/rev", api(rev)),
@@ -510,8 +686,13 @@ def create_app(storage: str | Path, max_users: int = 20, templates: str | Path |
         Route(n + "/diff", api(diff)),
         Route(n + "/diff.glb", api(diff_model)),
         Route(n + "/export.{fmt}", api(export)),
-        Route("/w/{wid}/agent", api(agent_tools)),
-        Route("/w/{wid}/agent/{tool}", api(agent_call), methods=["GET", "POST"]),
+        # the agent's door: /w/<agent key>: the tools, and the files their answers point at
+        Route("/w/{wid}/agent", door(agent_tools)),
+        Route("/w/{wid}/agent/{tool}", door(agent_call), methods=["GET", "POST"]),
+        Route(f + "/render.png", door(picture)),
+        Route(f + "/model.glb", door(model)),
+        Route(f + "/fingerprint.json", door(fingerprint)),
+        Route(f + "/export.{fmt}", door(export)),
         Mount("/static", StaticFiles(directory=CANVAS)),
     ]
 
@@ -523,18 +704,19 @@ def create_app(storage: str | Path, max_users: int = 20, templates: str | Path |
     # any origin may call: what opens a workspace is the id in the address, not a cookie a foreign page could ride on
     site = Starlette(routes=routes, lifespan=lifespan,
                      middleware=[Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])])
-    site.state.workspaces = workspaces
+    site.state.workspaces, site.state.store, site.state.admin = workspaces, store, admin
 
     async def app(scope, receive, send):
-        """/w/<id>/mcp goes to the MCP app, with the workspace it is for written where a tool can read it."""
+        """/w/<agent key>/mcp goes to the MCP app, with whose agent it is written where a tool can read it."""
         if scope["type"] == "http":
             m = MCP_PATH.match(scope["path"])
             if m:
-                if not workspaces.get(m.group(1)):
-                    await JSONResponse({"error": "no such workspace"}, 404)(scope, receive, send)
+                owner = auth.find_by_key(store, m.group(1))
+                if owner is None:
+                    await JSONResponse({"error": "this agent link is not valid (any more)"}, 404)(scope, receive, send)
                     return
-                headers = [(k, v) for k, v in scope["headers"] if k != b"x-monet-workspace"]
-                headers.append((b"x-monet-workspace", m.group(1).encode()))
+                headers = [(k, v) for k, v in scope["headers"] if k != b"x-monet-user"]
+                headers.append((b"x-monet-user", owner["id"].encode()))
                 await mcp_app({**scope, "path": "/mcp", "raw_path": b"/mcp", "root_path": "", "headers": headers}, receive, send)
                 return
         await site(scope, receive, send)

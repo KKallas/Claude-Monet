@@ -107,11 +107,41 @@ def test_a_note_cannot_run_for_ever(project, monkeypatch):
     project.delete("forever")
 
 
-def test_max_users(tmp_path):
-    all_ = Workspaces(tmp_path, ROOT / "notes", ROOT / "profiles", max_users=2)
-    a, b = all_.create("a"), all_.create("b")
-    assert a.id != b.id and len(a.id) == 16 and set(a.projects()) == {"mg400_rakis", "starter"}
-    with pytest.raises(Problem, match="all 2 workspaces"):
-        all_.create("c")
-    assert all_.get(a.id).meta["name"] == "a" and all_.get("nope") is None and all_.get("../" + a.id) is None
+def test_a_workspace_is_made_the_first_time_it_is_asked_for(tmp_path):
+    import uuid
+    all_ = Workspaces(tmp_path, ROOT / "notes", ROOT / "profiles")
+    one, two = str(uuid.uuid4()), str(uuid.uuid4())
+    assert all_.get(one) is None
+    a = all_.of(one, "a")
+    assert a.id == one and set(a.projects()) == {"mg400_rakis", "starter"} and all_.get(one).meta["name"] == "a"
+    a.project("starter").write("mine", "X = 1\n")
+    assert "mine" in all_.of(one).project("starter").files()             # asked for again, it is the same one
+    assert "mine" not in all_.of(two, "b").project("starter").files()
+    for bad in ("nope", "../" + one, ""):
+        assert all_.get(bad) is None
+        with pytest.raises(Problem):
+            all_.of(bad)
     assert not (a.dir / "mg400_rakis" / "_verify.py").exists()        # the port's own script is not part of the template
+
+
+def test_notes_can_be_built_by_a_runner_elsewhere(project, monkeypatch):
+    """Online the web app does not run Notes: it asks the runner (monet/buildd.py), which has the working files only."""
+    from starlette.testclient import TestClient
+    import monet.buildd as buildd
+    import monet.workspace as w
+    monkeypatch.setattr(buildd, "STORAGE", project.ws.all.storage)
+    runner = TestClient(buildd.app)
+
+    class Wire:      # httpx, as far as run_build uses it, going to the runner in this process
+        HTTPError = OSError
+        @staticmethod
+        def post(url, json, timeout):
+            return runner.post(url.replace("http://runner", ""), json=json)
+    monkeypatch.setattr(w, "RUNNER_URL", "http://runner")
+    monkeypatch.setitem(__import__("sys").modules, "httpx", Wire)
+    r = w.run_build(project.dir, "rod_foot", project.out / "rod_foot")
+    assert r["ok"] and r["fingerprint"]["solids"] == 1
+    # the runner builds Notes of the storage, and nothing else
+    assert runner.post("/build", json={"dir": "/etc", "note": "passwd", "out": "/tmp/x"}).status_code == 400
+    assert runner.post("/build", json={"dir": str(project.dir), "note": "../x", "out": str(project.out / "x")}).status_code == 400
+    assert runner.post("/build", json={"dir": str(project.dir), "note": "rod_foot", "out": "/tmp/elsewhere"}).status_code == 400

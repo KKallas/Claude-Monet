@@ -26,16 +26,21 @@ Your tools, in whichever form the harness gives them:
   `read_note`, `write_note`, `check`, `look`, `selection`, `add_check`, `load_check`, `save`,
   `versions`, `diff`, `export`.
 - **A shell but no MCP tools**: `scripts/monet.py` in this skill does the same over HTTP. Set
-  `MONET_URL` to the user's workspace link (it looks like `https://host/w/AbC123…`), then
-  `python scripts/monet.py status`.
+  `MONET_URL` to the user's agent link (it looks like `https://host/w/AbC123…`; they find it in
+  their canvas under "Connect your agent"), then `python scripts/monet.py status`.
 - **Only the ability to fetch web addresses** (a chat interface with internet access): every tool
-  is also a plain HTTPS address, `GET <workspace link>/agent/<tool>?arg=value`. Read
-  `<the Monet site>/api` first: it explains how to register a workspace id and lists every tool.
-- **None of these**: ask the user to open their Monet site, press Start, and use "Connect your
-  agent" there. It shows the exact addresses for them to give you.
+  is also a plain HTTPS address, `GET <agent link>/agent/<tool>?arg=value`. Read
+  `<the Monet site>/api` first: it lists every tool.
+- **None of these**: ask the user to log in to their Monet site and use "Connect your agent"
+  there. It shows the exact addresses for them to give you.
+
+The agent link carries the user's agent key. It is a password: use it, do not repeat it in what
+you write to anyone else, and do not put it in files that get committed. The `canvas` links in
+tool answers are different: they are the user's own pages, behind their login, and safe to show.
 
 Start every session with `status()`. It lists the projects and gives the canvas link: pass that
-link to the user so they can watch the part change and point at it.
+link to the user so they can watch the part change and point at it. What only they can do there,
+logged in: change or remove a check, acknowledge a load check.
 
 ## The user's own folder, with git
 

@@ -50,11 +50,17 @@ The four first tasks are done (skeleton, the MG400 port, fingerprint + load chec
 The README's "What is missing" is the list of what comes next. Things that are easy to get
 wrong:
 
-- **No accounts, on purpose.** A workspace id in the address is the whole access;
-  `MONET_MAX_USERS` is the only limit. Do not add logins.
-- **No model in the server.** The agent is the user's own harness, connected over MCP
-  (`/w/<id>/mcp`) or plain HTTPS (`/w/<id>/agent/<tool>`, GET or POST; described for LLMs at
-  `/api`). One definition of the tools serves both: `monet/agent.py`.
+- **Accounts as in Adam Designer** (`monet/auth.py`, `monet/store.py`): an admin lets people
+  in; a card link sets the first password; there is no signing up. Each user has one
+  workspace, in a folder named by their user id (never by name or key).
+- **Two doors.** The person: `/w/<username>/…`, behind the login (cookie, or HTTP Basic for
+  scripts). Their agent: `/w/<agent key>/agent/<tool>` (GET or POST), `/w/<agent key>/mcp`
+  and `/w/<agent key>/file/…`, with the key as the only credential. A route belongs to one
+  door or the other (`api()` and `door()` in `monet/app.py`); do not make one answer to both.
+- **No model in the server.** The agent is the user's own harness. One definition of the
+  tools serves MCP and HTTPS: `monet/agent.py`; it is described for LLMs at `/api`.
+- **Online, the web app never runs a Note**: it asks the runner container (`monet/buildd.py`),
+  which has the working files and nothing else. Keep accounts and secrets out of `storage/`.
 - **Git is the user's**, in a folder on their computer; the server keeps numbered versions.
   No git on the server.
 - **The agent's door has no tool to change or remove a check, acknowledge a load check or
@@ -75,7 +81,7 @@ wrong:
 
 ```bash
 uv sync
-uv run monet                      # http://localhost:8000
+uv run monet                      # http://localhost:8000; prints the admin's first link
 uv run pytest                     # about a minute and a half: builds every Note; runs the node tests too
 node --test tests/measure.test.mjs   # the measuring geometry alone
 uv run python notes/mg400_rakis/_verify.py     # the port against the Fusion numbers, as a table

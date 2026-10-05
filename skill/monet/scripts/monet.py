@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """monet.py: the Monet tools from a shell, for a harness without MCP. Standard library only.
 
-    export MONET_URL=https://host/w/<workspace id>      (the workspace link from the canvas)
+    export MONET_URL=https://host/w/<agent key>      (the agent link from the canvas: Connect your agent)
 
     monet.py status [project]
     monet.py pull <project> [dir]            every Note, with the saved .glb and .fingerprint.json, into dir (default .)
@@ -36,7 +36,7 @@ def call(tool: str, **args):
 
 def fetch(path: str, out: Path) -> bool:
     try:
-        with urllib.request.urlopen(f"{URL}/api{path}", timeout=600) as r:
+        with urllib.request.urlopen(f"{URL}/file{path}", timeout=600) as r:
             out.write_bytes(r.read())
         return True
     except urllib.error.HTTPError:
@@ -51,7 +51,7 @@ def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         sys.exit(__doc__)
     if not URL:
-        sys.exit("monet: set MONET_URL to your workspace link (https://host/w/<id>)")
+        sys.exit("monet: set MONET_URL to the agent link from your canvas (https://host/w/<agent key>)")
     cmd, a = argv[0], argv[1:]
     if cmd == "status":
         show(call("status", project=a[0] if a else ""))

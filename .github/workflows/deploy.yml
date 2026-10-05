@@ -55,7 +55,9 @@ jobs:
           got="$(ssh "${DROPLET_USER:-root}@$DROPLET_HOST" "cd /opt/monet && docker compose exec -T app python -c \"import json, urllib.request as u; print(json.load(u.urlopen('http://localhost:8080/api/version', timeout=10))['commit'])\"")"
           echo "running $got, sent $want"
           test "$got" = "$want"
-          ssh "${DROPLET_USER:-root}@$DROPLET_HOST" "cd /opt/monet && docker compose exec -T app python -m monet.runner /app/notes/starter rod_foot /tmp/smoke" | grep -q '"ok": true'
+          # in the runner, where Notes are built; and the runner must not be able to see the accounts
+          ssh "${DROPLET_USER:-root}@$DROPLET_HOST" "cd /opt/monet && docker compose exec -T runner python -m monet.runner /app/notes/starter rod_foot /tmp/smoke" | grep -q '"ok": true'
+          ssh "${DROPLET_USER:-root}@$DROPLET_HOST" "cd /opt/monet && docker compose exec -T runner sh -c 'ls /data 2>/dev/null | wc -l'" | grep -qx 0
       - name: A look from outside
         if: steps.gate.outputs.go == 'true' && vars.DOMAIN != ''
         run: |

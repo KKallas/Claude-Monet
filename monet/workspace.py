@@ -1,11 +1,11 @@
 """Workspaces and projects: the working files, in a folder on the server.
 
-No accounts. A workspace is an unguessable id; whoever holds its link is its user, in a
-browser (/w/<id>) or through their own agent (/w/<id>/mcp). The only limit is how many
-workspaces there may be.
+Every user has one workspace: a folder named by their id (not by their name, and not by
+their agent key: the place where Notes are run can list these folders, and must learn
+nothing from their names that opens a door).
 
-    <storage>/<workspace id>/workspace.json
-    <storage>/<workspace id>/<project>/
+    <storage>/<user id>/workspace.json
+    <storage>/<user id>/<project>/
         monet.json                  printer, material
         <note>.py                   the Notes, as last sent
         <note>.checks.json          the checks (the user's)
@@ -20,7 +20,6 @@ import hashlib
 import json
 import os
 import re
-import secrets
 import shutil
 import subprocess
 import sys
@@ -32,7 +31,7 @@ from pathlib import Path
 
 from . import feynman, note as notes, runner, semmelweis
 
-ID_RE = re.compile(r"^[A-Za-z0-9_-]{16}$")
+ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 EXPORTS = {"stl": "model/stl", "3mf": "model/3mf", "step": "model/step", "glb": "model/gltf-binary"}
 MATERIALS = ("pla", "pom", "aluminium")      # what the canvas can render a part as (canvas/look.js)
@@ -81,7 +80,27 @@ def _limits():
     os.setsid()
 
 
+RUNNER_URL = os.environ.get("MONET_RUNNER_URL", "").rstrip("/")
+
+
 def run_build(project_dir: Path, name: str, out_dir: Path, exports=()) -> dict:
+    """Run one Note and read back what it left: in the runner, where there is one (another container, which has
+    the working files and nothing else: no accounts, no session secret), else in a process of its own here."""
+    if not RUNNER_URL:
+        return run_build_here(project_dir, name, out_dir, exports)
+    import httpx
+    try:
+        r = httpx.post(f"{RUNNER_URL}/build", json={"dir": str(project_dir), "note": name, "out": str(out_dir), "exports": list(exports)},
+                       timeout=BUILD_TIMEOUT + 60)
+        r.raise_for_status()
+        return r.json()
+    except (httpx.HTTPError, ValueError) as e:
+        src = project_dir / f"{name}.py"
+        return {"note": name, "ok": False, "error": f"the runner did not answer: {type(e).__name__}", "libs": runner.versions(),
+                "deps": {src.name: _sha(src)} if src.exists() else {}}
+
+
+def run_build_here(project_dir: Path, name: str, out_dir: Path, exports=()) -> dict:
     """Run one Note in its own process and read back what it left."""
     result_file = out_dir / "result.json"
     result_file.unlink(missing_ok=True)
@@ -110,36 +129,32 @@ def run_build(project_dir: Path, name: str, out_dir: Path, exports=()) -> dict:
 
 
 class Workspaces:
-    def __init__(self, storage: str | Path, templates: str | Path, profiles: str | Path, max_users: int = 20):
+    def __init__(self, storage: str | Path, templates: str | Path, profiles: str | Path):
         self.storage = Path(storage).resolve()
         self.storage.mkdir(parents=True, exist_ok=True)
         self.templates = Path(templates)
         self.profiles = Path(profiles)
-        self.max_users = max_users
         self._guard = threading.Lock()
 
-    def ids(self) -> list[str]:
-        return [p.name for p in self.storage.iterdir() if p.is_dir() and ID_RE.match(p.name)]
-
-    def count(self) -> int:
-        return len(self.ids())
-
-    def create(self, name: str = "") -> "Workspace":
+    def of(self, user_id: str, name: str = "") -> "Workspace":
+        """The workspace of a user: made, with a copy of every template in it, the first time it is asked for."""
+        if not ID_RE.match(user_id or ""):
+            raise Problem("no such workspace", 404)
         with self._guard:
-            if self.count() >= self.max_users:
-                raise Problem(f"all {self.max_users} workspaces of this instance are in use", 503)
-            wid = secrets.token_urlsafe(12)
-            (self.storage / wid).mkdir()
-            ws = Workspace(self, wid)
-            ws.write_meta({"name": str(name or "").strip()[:60], "createdAt": now()})
-        for template in self.template_names():
-            ws.create_project(template, template)
+            fresh = not (self.storage / user_id).is_dir()
+            if fresh:
+                (self.storage / user_id).mkdir()
+                Workspace(self, user_id).write_meta({"name": str(name or "").strip()[:80], "createdAt": now()})
+        ws = Workspace(self, user_id)
+        if fresh:
+            for template in self.template_names():
+                ws.create_project(template, template)
         return ws
 
-    def get(self, wid: str) -> "Workspace | None":
-        if not ID_RE.match(wid or "") or not (self.storage / wid).is_dir():
+    def get(self, user_id: str) -> "Workspace | None":
+        if not ID_RE.match(user_id or "") or not (self.storage / user_id).is_dir():
             return None
-        return Workspace(self, wid)
+        return Workspace(self, user_id)
 
     def template_names(self) -> list[str]:
         return sorted(p.name for p in self.templates.iterdir() if p.is_dir() and PROJECT_RE.match(p.name)) if self.templates.is_dir() else []

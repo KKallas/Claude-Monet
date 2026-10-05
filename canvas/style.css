@@ -27,6 +27,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 header { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 0 14px; background: var(--bg-surface); border-bottom: 1px solid var(--border); }
 header b { color: var(--text-bright); font-weight: 600; letter-spacing: .16em; }
 header .sp { flex: 1; }
+header a.quiet { color: var(--text-muted); text-decoration: none; font-size: 12px; }
+header a.quiet:hover { color: var(--accent); }
+.start h2 { font-size: 16px; color: var(--text-bright); margin: 0 0 6px; font-weight: 600; }
 aside, .panel { background: var(--bg-surface); overflow-y: auto; }
 aside { border-right: 1px solid var(--border); padding: 10px 0; }
 .panel { border-left: 1px solid var(--border); padding: 10px; }

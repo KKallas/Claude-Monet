@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log in · Monet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+.start form button { width: 100%; margin-top: 16px; padding: 10px; font-size: 13px; }
+.start label { display: block; font-size: 12px; color: var(--text-muted); margin: 12px 0 4px; }
+.start .show { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.start .show input { width: auto; }
+</style>
+</head>
+<body>
+<main class="start">
+  <h1>MONET</h1>
+  <p class="tag">Impressionist on the surface, exact underneath.</p>
+  <form class="card" id="form" autocomplete="on">
+    <h2 id="title">Log in</h2>
+    <p class="muted" id="sub">With the username you were given, or open the card link an admin sent you.</p>
+    <div id="nameField">
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+    </div>
+    <label for="password" id="pwLabel">Password</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" required>
+    <div id="repeatField" hidden>
+      <label for="repeat">The same again</label>
+      <input type="password" id="repeat" autocomplete="new-password">
+    </div>
+    <label class="show"><input type="checkbox" id="show"> show password</label>
+    <button class="primary" id="go">Log in</button>
+    <p class="err" id="err" hidden></p>
+  </form>
+  <p class="muted">CAD for people who would rather say what they want than click through a feature tree: you describe a part to your own
+    AI agent, it writes it, and this page builds it, checks it and shows it. People are let in by an admin.</p>
+  <p class="warn" id="note" hidden></p>
+  <footer id="ver"></footer>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const params = new URLSearchParams(location.search);
+const card = params.get('card');
+// only ever go back somewhere on this site
+const next = /^\/(?!\/)/.test(params.get('next') || '') ? params.get('next') : null;
+let firstTime = false;
+const fail = (msg) => { $('#err').textContent = msg; $('#err').hidden = !msg; };
+const api = async (method, url, body) => {
+  const r = await fetch(url, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || ('error ' + r.status));
+  return data;
+};
+api('GET', '/api/version').then((v) => {
+  if (v.note) { $('#note').textContent = v.note; $('#note').hidden = false; }
+  $('#ver').innerHTML = `Monet ${v.version} · ${v.commit} · <a href="${v.source}">source</a> (${v.license}): free to use; if you change it and let others use it, publish your changes.`;
+}).catch(() => {});
+
+if (card) cardMode();
+async function cardMode() {
+  $('#nameField').hidden = true;
+  $('#username').required = false;
+  $('#sub').textContent = '…';
+  let who;
+  try { who = await api('GET', '/api/login/card/' + encodeURIComponent(card)); }
+  catch (e) { $('#title').textContent = 'This card does not work'; $('#sub').textContent = e.message; $('#go').hidden = true; return; }
+  const me = await api('GET', '/api/me');
+  if (me.user && me.user.username === who.username && who.hasPassword) return location.replace(next || me.home);
+  $('#username').value = who.username;
+  firstTime = !who.hasPassword;
+  $('#title').textContent = firstTime ? 'Welcome, ' + who.name : who.name;
+  $('#sub').textContent = firstTime
+    ? 'Choose a password. From now on you log in as "' + who.username + '", or with this link, and that password.'
+    : 'Logging in as "' + who.username + '".';
+  if (firstTime) {
+    $('#pwLabel').textContent = 'Choose a password (at least 8 characters)';
+    $('#password').autocomplete = 'new-password';
+    $('#repeatField').hidden = false;
+    $('#go').textContent = 'Set password and log in';
+  }
+  $('#password').focus();
+}
+
+$('#show').onchange = (e) => { for (const id of ['password', 'repeat']) $('#' + id).type = e.target.checked ? 'text' : 'password'; };
+
+$('#form').onsubmit = async (e) => {
+  e.preventDefault();
+  fail('');
+  if (firstTime && $('#password').value !== $('#repeat').value) return fail('the two passwords are not the same');
+  try {
+    const done = await api('POST', '/api/login', card ? { card, password: $('#password').value } : { username: $('#username').value, password: $('#password').value });
+    location.replace(next || done.home);
+  } catch (err) { fail(err.message); }
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Users · Monet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+body { overflow: auto; }
+.bar-top { display: flex; align-items: center; gap: 14px; padding: 0 14px; height: 44px; background: var(--bg-surface); border-bottom: 1px solid var(--border); }
+.bar-top b { color: var(--text-bright); font-weight: 600; letter-spacing: .16em; }
+.bar-top .sp { flex: 1; }
+.bar-top a { color: var(--text-muted); text-decoration: none; font-size: 12px; }
+.bar-top a:hover { color: var(--accent); }
+main { max-width: 860px; margin: 0 auto; padding: 22px 16px 60px; }
+label { display: block; font-size: 12px; color: var(--text-muted); margin: 0 0 4px; }
+.add { display: grid; grid-template-columns: 1fr 1fr 120px auto; gap: 8px; align-items: end; }
+.add input, .add select { width: 100%; }
+.user { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.user .who { flex: 1; min-width: 240px; }
+.user b { color: var(--text-bright); font-weight: 600; }
+.link { font: 11px ui-monospace, monospace; color: var(--text-muted); word-break: break-all; margin-top: 6px; }
+.qr { width: 96px; height: 96px; background: #fff; padding: 6px; border-radius: 4px; flex: none; }
+.qr svg { display: block; width: 100%; height: 100%; }
+.buttons { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+button.danger:hover { background: #8b2020; border-color: #8b2020; color: #fff; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+td { padding: 3px 8px 3px 0; border-top: 1px solid var(--border); vertical-align: top; }
+@media (max-width: 700px) { .add { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="bar-top"><b>MONET</b><span class="muted">Users</span><span class="sp"></span><a href="/">← back to my workspace</a><a href="#" id="logout">log out</a></div>
+<main>
+  <div class="card">
+    <p class="head">Add a user · <span id="count"></span></p>
+    <form class="add" id="add">
+      <div><label for="username">Username</label><input id="username" autocapitalize="none" spellcheck="false" required></div>
+      <div><label for="name">Name</label><input id="name"></div>
+      <div><label for="role">Role</label><select id="role"><option value="user">user</option><option value="admin">admin</option></select></div>
+      <button class="primary">Add</button>
+    </form>
+    <p class="err" id="err" hidden></p>
+    <p class="muted">A new user has no password. Send them their card link (or let them scan the QR): the first visit asks them to choose one.
+      Each user gets a workspace of their own, with the sample projects in it, and an agent link for their own AI agent (they find it in
+      the canvas, under Connect your agent). Their Notes are Python that runs on this server: let in people you would lend the machine to.</p>
+  </div>
+  <div id="list"></div>
+  <div class="card"><p class="head">What happened lately</p><table id="log"></table></div>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const api = async (method, url, body) => {
+  const r = await fetch(url, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const data = await r.json().catch(() => ({}));
+  if (r.status === 401 && data.login) { location.href = '/login?next=/users'; throw new Error('log in first'); }
+  if (!r.ok) throw new Error(data.error || ('error ' + r.status));
+  return data;
+};
+const fail = (msg) => { $('#err').textContent = msg; $('#err').hidden = !msg; };
+const when = (t) => (t ? new Date(t).toLocaleString() : 'never');
+
+async function load() {
+  const { users, max, log } = await api('GET', '/api/users');
+  $('#count').textContent = `${users.length} of ${max}`;
+  $('#list').innerHTML = users.map((u) => {
+    const link = location.origin + '/login?card=' + u.card;
+    return `<div class="card user" data-id="${u.id}">
+      <div class="qr" data-qr="${u.id}"></div>
+      <div class="who"><b>${esc(u.name)}</b> <span class="muted">${esc(u.username)} · ${u.role}${u.builtin ? ' · built-in' : ''}</span>
+        <div class="muted">${u.hasPassword ? 'has a password' : '<span class="warn">no password yet: send the card link</span>'} · last seen ${when(u.lastSeen)} · agent last here ${when(u.lastAgent)}</div>
+        <div class="muted">projects: ${u.projects.map(esc).join(', ') || 'none'} · <a href="/w/${esc(u.username)}">open their workspace</a></div>
+        <div class="link">${esc(link)}</div>
+        <div class="buttons">
+          <button data-act="copy" data-link="${esc(link)}">Copy card link</button>
+          <button data-act="reset">Reset password</button>
+          <button data-act="card">New card</button>
+          <button data-act="key" title="their agent link stops working; they find the new one in their canvas">New agent key</button>
+          ${u.builtin ? '' : `<button data-act="role" data-role="${u.role === 'admin' ? 'user' : 'admin'}">Make ${u.role === 'admin' ? 'user' : 'admin'}</button><button class="danger" data-act="delete" data-name="${esc(u.username)}">Delete</button>`}
+        </div></div></div>`;
+  }).join('');
+  for (const el of document.querySelectorAll('[data-qr]')) fetch('/api/users/' + el.dataset.qr + '/card.svg').then((r) => r.text()).then((svg) => { el.innerHTML = svg; });
+  $('#log').innerHTML = log.map((e) => { const { at, type, ...rest } = e; return `<tr><td class="muted">${esc(new Date(at).toLocaleString())}</td><td>${esc(type)}</td><td class="muted">${esc(Object.entries(rest).map(([k, v]) => `${k} ${v}`).join(' · '))}</td></tr>`; }).join('') || '<tr><td class="muted">nothing yet</td></tr>';
+}
+
+$('#list').onclick = async (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  const id = b.closest('[data-id]').dataset.id;
+  try {
+    if (b.dataset.act === 'copy') { await navigator.clipboard.writeText(b.dataset.link); b.textContent = 'Copied'; return; }
+    if (b.dataset.act === 'reset') { if (!confirm('Clear the password and log them out everywhere? Their card link then asks for a new one.')) return; await api('POST', '/api/users/' + id + '/reset'); }
+    if (b.dataset.act === 'card') { if (!confirm('Make a new card? The old link and QR stop working.')) return; await api('POST', '/api/users/' + id + '/card'); }
+    if (b.dataset.act === 'key') { if (!confirm('Make a new agent key? Their agent stops working until they give it the new link from their canvas.')) return; await api('POST', '/api/users/' + id + '/key'); }
+    if (b.dataset.act === 'role') await api('PUT', '/api/users/' + id, { role: b.dataset.role });
+    if (b.dataset.act === 'delete') { if (!confirm('Delete "' + b.dataset.name + '"? They can no longer log in and their agent link stops working. Their files stay on the server.')) return; await api('DELETE', '/api/users/' + id); }
+    await load();
+  } catch (err) { alert(err.message); }
+};
+
+$('#add').onsubmit = async (e) => {
+  e.preventDefault(); fail('');
+  try {
+    await api('POST', '/api/users', { username: $('#username').value, name: $('#name').value, role: $('#role').value });
+    $('#add').reset(); await load();
+  } catch (err) { fail(err.message); }
+};
+$('#logout').onclick = async (e) => { e.preventDefault(); await api('POST', '/api/logout'); location.href = '/login'; };
+load().catch((e) => fail(e.message));
+</script>
+</body>
+</html>

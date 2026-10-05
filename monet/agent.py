@@ -24,10 +24,11 @@ _selection: dict[tuple[str, str], dict] = {}
 @dataclass
 class Caller:
     ws: Workspace
-    base: str     # https://host/w/<id>
+    base: str       # https://host/w/<agent key>: the agent's own address; what it can fetch without a login
+    page: str       # https://host/w/<username>: the person's canvas; they log in to see it
 
     def canvas(self, project: str = "", note: str = "") -> str:
-        return self.base + (f"#{project}" + (f"/{note}" if note else "") if project else "")
+        return self.page + (f"#{project}" + (f"/{note}" if note else "") if project else "")
 
 
 def remember_selection(ws_id: str, project: str, selection: dict | None) -> None:
@@ -53,7 +54,7 @@ def status(c: Caller, project: str = "") -> dict:
     whether each builds, is saved, or has changed since the last save."""
     if not project:
         return {"projects": c.ws.projects(), "templates": c.ws.all.template_names(), "canvas": c.canvas(),
-                "hint": "ask the user to open the canvas link in a browser; call guide() if you have not read the rules"}
+                "hint": "the canvas link is where the user watches and points (they log in there); call guide() if you have not read the rules"}
     p = c.ws.project(project)
     return {**p.status(), "printer_profile": p.printer, "material_profile": p.material, "canvas": c.canvas(project)}
 
@@ -117,7 +118,7 @@ def look(c: Caller, project: str, note: str, views: str = "iso,top,front,right",
     png = picture(p, note, views, version, tags)
     query = urllib.parse.urlencode({"views": views, "v": version, "tags": int(bool(tags)), "r": p.rev[-8:]})
     return {"note": note, "version": str(version), "views": views, "units": "mm, Z up",
-            "image": f"{c.base}/api/p/{project}/n/{note}/render.png?{query}"}, png
+            "image": f"{c.base}/file/p/{project}/n/{note}/render.png?{query}"}, png
 
 
 def selection(c: Caller, project: str) -> dict:
@@ -196,11 +197,12 @@ def diff(c: Caller, project: str, note: str, a: str, b: str = "draft") -> dict:
 
 
 def export(c: Caller, project: str, note: str, format: str = "3mf", version: str = "draft") -> dict:
-    """A file of the part for printing or for other CAD: 3mf, stl, step or glb. Returns a link; give it to the user
-    (or download it into their local folder if you have a shell)."""
+    """A file of the part for printing or for other CAD: 3mf, stl, step or glb. Returns a link that you can fetch
+    (download it into the user's local folder if you have a shell). It carries your agent key: do not pass it on;
+    the user downloads the same file from the Export panel of their canvas."""
     p = c.ws.project(project)
     path = p.export(note, format, version)
-    return {"url": f"{c.base}/api/p/{project}/n/{note}/export.{format}" + ("" if str(version) == "draft" else f"?v={version}"),
+    return {"url": f"{c.base}/file/p/{project}/n/{note}/export.{format}" + ("" if str(version) == "draft" else f"?v={version}"),
             "bytes": path.stat().st_size, "format": format, "mime": EXPORTS[format]}
 
 

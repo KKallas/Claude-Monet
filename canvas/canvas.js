@@ -23,6 +23,7 @@ const PARTS = ['#8fa8d6', '#d6a58f', '#9cc7a4', '#c9a3d0', '#d4c58a', '#8fc7cf',
 async function api(path, method = 'GET', body) {
   const r = await fetch(root + path, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
   const data = await r.json().catch(() => ({}));
+  if (r.status === 401 && data.login) { location.href = `/login?next=${encodeURIComponent(location.pathname + location.hash)}`; throw new Error('log in first'); }
   if (!r.ok) throw new Error(data.error || `error ${r.status}`);
   return data;
 }
@@ -1284,36 +1285,46 @@ $('#newProject').onclick = () => {
   dlg.showModal();
 };
 $('#connect').onclick = () => {
-  const base = S.state.base, dlg = $('#connectDialog'), local = /\/\/(localhost|127\.0\.0\.1)/.test(base);
+  const agentLink = S.state.agent, dlg = $('#connectDialog'), local = /\/\/(localhost|127\.0\.0\.1)/.test(agentLink);
   dlg.onclose = null;
   dlg.innerHTML = `<h2>Connect your agent</h2>
     <p class="muted">The thinking happens on your computer, with your own model. This page builds, checks, shows and exports.
-    Your workspace link is your key: whoever has it can use this workspace. Keep it; there is no other login.</p>
-    <pre>${esc(base)}</pre>
+    Your agent cannot log in as you do, so it comes with this link, which has your <b>agent key</b> in it. Treat it as a password:
+    whoever has it can work in your workspace as your agent.</p>
+    <pre id="agentLink">${esc(agentLink)}</pre>
+    <div class="line" style="margin-top:0"><span class="muted" style="flex:1">It got out, or an agent should stop?</span><button id="newKey">New key</button></div>
     <h3>1 · Claude Desktop</h3>
     ${local ? `<p>This server runs on your own computer, which Claude's connectors cannot reach. Add it to
       <code>claude_desktop_config.json</code> (Settings → Developer → Edit Config) instead, then restart Claude:</p>
-      <pre>{ "mcpServers": { "monet": { "command": "npx", "args": ["-y", "mcp-remote", "${esc(base)}/mcp"] } } }</pre>`
-    : `<p>Settings → Connectors → Add custom connector. Name <code>Monet</code>, URL:</p><pre>${esc(base)}/mcp</pre>`}
+      <pre>{ "mcpServers": { "monet": { "command": "npx", "args": ["-y", "mcp-remote", "${esc(agentLink)}/mcp"] } } }</pre>`
+    : `<p>Settings → Connectors → Add custom connector. Name <code>Monet</code>, URL:</p><pre>${esc(agentLink)}/mcp</pre>`}
     <p>Then the skill, so Claude knows how to work here: <a href="/skill.zip">download monet-skill.zip</a> and add it in
       Settings → Capabilities → Skills.</p>
     <h3>Or Claude Code</h3>
-    <pre>claude mcp add --transport http monet ${esc(base)}/mcp</pre>
+    <pre>claude mcp add --transport http monet ${esc(agentLink)}/mcp</pre>
     <h3>Or any LLM that can open web addresses</h3>
     <p>Everything is also plain HTTPS, by GET or POST. Paste this to it:</p>
-    <pre>Read ${esc(location.origin)}/api and work in my Monet workspace: ${esc(base)}</pre>
+    <pre>Read ${esc(S.state.origin)}/api and work in my Monet workspace. My agent link: ${esc(agentLink)}</pre>
     <h3>2 · A folder of your own, with git</h3>
     <p>Make a folder for the project on your computer and let the agent keep the Notes there, with <code>git init</code>.
       It commits after every successful save, so the history is yours and survives this server.</p>
     <h3>3 · Say what you want</h3>
     <p>"Use Monet. Open the project mg400_rakis and show me the nest." Then point at faces here and describe the change.</p>
     <form method="dialog"><div class="line"><span style="flex:1"></span><button>Close</button></div></form>`;
+  $('#newKey').onclick = async (e) => {
+    e.preventDefault();
+    if (!confirm('Make a new agent key? The link above stops working at once: every agent you connected needs the new one.')) return;
+    try { S.state.agent = (await api('/key', 'POST', {})).agent; $('#connect').onclick(); } catch (err) { alert(err.message); }
+  };
   dlg.showModal();
 };
+$('#logout').onclick = async (e) => { e.preventDefault(); await fetch('/api/logout', { method: 'POST' }); location.href = '/login'; };
 
 async function start(project) {
   S.state = await api('/state');
-  $('#wsName').textContent = S.state.workspace.name || '';
+  const mine = S.state.me.username === S.state.workspace.username;
+  $('#wsName').textContent = mine ? S.state.me.name : `${S.state.workspace.name} (you are looking in as ${S.state.me.username})`;
+  $('#usersLink').hidden = S.state.me.role !== 'admin';
   $('#project').innerHTML = S.state.projects.map((p) => `<option>${esc(p)}</option>`).join('');
   const [hp, hn] = decodeURIComponent(location.hash.slice(1)).split('/');
   const want = project || (S.state.projects.includes(hp) ? hp : S.state.projects[0]);

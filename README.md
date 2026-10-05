@@ -22,20 +22,24 @@ uv run monet                 # http://localhost:8000, working files in ./storage
 uv run pytest                # every Note builds, keeps its tags, passes its checks
 ```
 
-Open the page and press **Start**. There are no accounts: you get a workspace, and its link
-(`/w/<id>`) is your key. The server only limits how many workspaces exist
-(`MONET_MAX_USERS`, default 20). A new workspace starts with two projects: `starter` (the
-rod foot below) and `mg400_rakis` (the sample).
+People are let in by an admin, as in Adam Designer: a username, a card (a login link, also
+as a QR) and a password they choose on their first visit. The first time the server starts
+it prints a link for the built-in admin to choose a password; the admin then adds users on
+`/users` and sends each their card link. `MONET_MAX_USERS` (default 20) is how many there
+may be. Every user has one workspace, which starts with two projects: `starter` (the rod
+foot below) and `mg400_rakis` (the sample).
 
 **The thinking happens on your computer, with your own model.** Monet has no LLM inside. It
 gives your agent structure (the Note format, tags, checks), a preview, an interface for
-pointing, and export. Press **Connect your agent** in the canvas for the exact lines:
+pointing, and export. An agent cannot log in as a person does, so it comes with an **agent
+link** that has the user's agent key in it (`/w/<agent key>`): treat it as a password. Press
+**Connect your agent** in the canvas for the exact lines, and for a new key when one got out:
 
 | your harness | how it connects |
 |---|---|
-| Claude Desktop | Settings → Connectors → Add custom connector → `https://<host>/w/<id>/mcp`, then add the skill (`/skill.zip`) under Settings → Capabilities → Skills. For a server on your own machine use `npx mcp-remote http://localhost:8000/w/<id>/mcp` in `claude_desktop_config.json`. |
-| Claude Code | `claude mcp add --transport http monet http://localhost:8000/w/<id>/mcp` |
-| any LLM that can open web addresses | tell it: "Read `https://<host>/api` and work in my workspace `https://<host>/w/<id>`". Every tool is a plain GET or POST; it can also register a workspace by itself with `GET /api/register`. |
+| Claude Desktop | Settings → Connectors → Add custom connector → `https://<host>/w/<agent key>/mcp`, then add the skill (`/skill.zip`) under Settings → Capabilities → Skills. For a server on your own machine use `npx mcp-remote http://localhost:8000/w/<agent key>/mcp` in `claude_desktop_config.json`. |
+| Claude Code | `claude mcp add --transport http monet http://localhost:8000/w/<agent key>/mcp` |
+| any LLM that can open web addresses | tell it: "Read `https://<host>/api` and work in my Monet workspace; my agent link is `https://<host>/w/<agent key>`". Every tool is a plain GET or POST. |
 | a shell | `skill/monet/scripts/monet.py` (standard library only) |
 
 **History is your own git.** Make a folder for the project on your computer and let the
@@ -234,8 +238,11 @@ monet/        note.py        read a Note without running it; rewrite its TAGS
               diff.py        distance colour maps between two versions
               render.py      PNG views without a GPU: the agent's eyes
               workspace.py   workspaces, projects, versions: the working files in a folder
+              store.py       the accounts and the audit log, as files (from Adam Designer)
+              auth.py        users, cards, passwords, the cookie, agent keys (from Adam Designer)
+              buildd.py      the runner as a service: where Notes are built when online
               agent.py       the agent's tools, served over MCP and over plain HTTP
-              app.py         the web app (Starlette): canvas API, agent door, /api for LLMs
+              app.py         the web app (Starlette): logins, canvas API, agent door, /api for LLMs
 canvas/       the browser view (three.js), no build step:
               canvas.js      the page: the three areas, selection, panels, compare
               measure.js     shortest distances and angles (plain arrays; tested in node)
@@ -252,16 +259,24 @@ tests/        pytest: the core, every Note, the Fusion acceptance numbers, both 
 
 ## Running it for other people
 
-Read this before putting an instance online. **Monet runs the Notes people send it, and a
-Note is Python.** With no accounts, anyone who can reach an instance can run code on it. The
-deploy setup (`deploy/compose.yml`) therefore gives the app container nothing worth having:
-no route to the internet, no root, a read-only file system apart from the storage folder,
-and ceilings on memory, CPU, processes and build time. What a hostile Note can still do is
-read or spoil the other workspaces on that instance and keep its CPU busy. So: use a
-droplet that holds nothing else, keep nothing secret on it, back up `storage/` if the work
-matters, and share the address only with people you would lend the machine to. A real
-sandbox per build (nsjail, gVisor, a container per build) is the next step before opening
-it wider.
+**Monet runs the Notes people send it, and a Note is Python.** Whoever may send one may run
+code on the server. Three things keep that in hand:
+
+- **Accounts.** Only people an admin let in have a workspace, and only their agent links
+  work. `/users` shows who there is, when each was last seen, when their agent was last
+  there, and what agents changed lately.
+- **The person and their agent are told apart.** What comes in with the agent key can write
+  Notes and add checks. Changing or removing a check, acknowledging a load check and
+  everything about accounts need the login.
+- **Notes are built somewhere that has nothing to steal.** Online (`deploy/compose.yml`) the
+  web app never runs a Note: it asks a second container, which holds the working files and
+  nothing else: no accounts, no session secret, no route to the internet. Both containers
+  run without root, on a read-only file system, under ceilings on memory, CPU, processes
+  and build time.
+
+What a hostile Note can still do: read or spoil the working files of other users of the same
+instance (they share one folder), and keep its CPU busy. So let in people you would lend the
+machine to, and back up `storage/` if the work matters. A sandbox per build is the step after.
 
 ## What is missing
 
