@@ -58,6 +58,9 @@ services:
   caddy:
     image: caddy:2
     restart: unless-stopped
+    logging:      # it keeps the access log: who came, for what (deploy/Caddyfile). Only so much of it
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
     ports:
       - "80:80"
       - "443:443"
