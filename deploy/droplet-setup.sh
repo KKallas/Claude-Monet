@@ -15,6 +15,17 @@ if ! swapon --show | grep -q /swapfile; then
   echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
 
+# a public droplet is knocked on all day: keys only, and room for our own connections among the knocking
+cat > /etc/ssh/sshd_config.d/10-monet.conf <<'EOT'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+MaxStartups 100:30:300
+LoginGraceTime 20
+MaxAuthTries 3
+EOT
+sshd -t && systemctl reload ssh
+
 ufw allow OpenSSH
 ufw allow 80/tcp
 ufw allow 443/tcp

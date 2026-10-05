@@ -43,21 +43,24 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "${{ secrets.DROPLET_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H "$DROPLET_HOST" >> ~/.ssh/known_hosts
+          # the port is knocked on all day: ask again rather than fail on a dropped connection
+          for try in $(seq 1 10); do ssh-keyscan -T 10 -H "$DROPLET_HOST" >> ~/.ssh/known_hosts 2>/dev/null; [ -s ~/.ssh/known_hosts ] && break; sleep 4; done
+          test -s ~/.ssh/known_hosts
       - name: Build, send, restart
         if: steps.gate.outputs.go == 'true'
         run: deploy/push-image.sh "${DROPLET_USER:-root}@$DROPLET_HOST"
       - name: Is it the build that was sent, and does it build a part
         if: steps.gate.outputs.go == 'true'
         run: |
+          on() { for try in $(seq 1 10); do ssh -o ConnectTimeout=20 "${DROPLET_USER:-root}@$DROPLET_HOST" "$1" && return 0; sleep 4; done; return 1; }
           want="$(git rev-parse --short HEAD)"
           # asked inside the container: this does not depend on the name resolving yet
-          got="$(ssh "${DROPLET_USER:-root}@$DROPLET_HOST" "cd /opt/monet && docker compose exec -T app python -c \"import json, urllib.request as u; print(json.load(u.urlopen('http://localhost:8080/api/version', timeout=10))['commit'])\"")"
+          got="$(on "cd /opt/monet && docker compose exec -T app python -c \"import json, urllib.request as u; print(json.load(u.urlopen('http://localhost:8080/api/version', timeout=10))['commit'])\"")"
           echo "running $got, sent $want"
           test "$got" = "$want"
           # in the runner, where Notes are built; and the runner must not be able to see the accounts
-          ssh "${DROPLET_USER:-root}@$DROPLET_HOST" "cd /opt/monet && docker compose exec -T runner python -m monet.runner /app/notes/starter rod_foot /tmp/smoke" | grep -q '"ok": true'
-          ssh "${DROPLET_USER:-root}@$DROPLET_HOST" "cd /opt/monet && docker compose exec -T runner sh -c 'ls /data 2>/dev/null | wc -l'" | grep -qx 0
+          on "cd /opt/monet && docker compose exec -T runner python -m monet.runner /app/notes/starter rod_foot /tmp/smoke" | grep -q '"ok": true'
+          on "cd /opt/monet && docker compose exec -T runner sh -c 'ls /data 2>/dev/null | wc -l'" | grep -qx 0
       - name: A look from outside
         if: steps.gate.outputs.go == 'true' && vars.DOMAIN != ''
         run: |
