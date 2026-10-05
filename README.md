@@ -232,6 +232,8 @@ What actually decides whether a jig works, kept as data the agent must respect:
 monet/        note.py        read a Note without running it; rewrite its TAGS
               runner.py      the one place a Note is executed: its own process, a time limit;
                              writes the preview GLB and what the parts of an assembly are
+              warm.py        what a build needs, loaded once: builds are forked from a process that
+                             has the CAD kernel in it already, instead of loading it every time
               tags.py        find tagged features on a build (planar faces, square and round holes)
               feynman.py     the checks
               semmelweis.py  fingerprint + load check

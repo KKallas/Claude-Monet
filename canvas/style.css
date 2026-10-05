@@ -89,7 +89,20 @@ aside .fold { padding: 2px 14px 6px; }
 .bar input[type=range] { width: 110px; padding: 0; }
 .bar .sep { width: 1px; align-self: stretch; background: var(--border); }
 .hint { position: absolute; right: 12px; bottom: 10px; color: var(--text-muted); font-size: 11px; text-align: right; pointer-events: none; }
-.busy { position: absolute; top: 12px; right: 12px; color: var(--warn); font-size: 12px; }
+/* building: how far along (by how long it took last time), and under it how long the last build took */
+.build { position: absolute; left: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; font-size: 12px; pointer-events: none; }
+#compare:not([hidden]) ~ .build { bottom: 56px; }
+.busy { min-width: 250px; max-width: 420px; color: var(--warn); background: rgba(26, 31, 46, .92); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; }
+.busy .track { height: 4px; margin-top: 6px; border-radius: 2px; background: rgba(255, 255, 255, .1); overflow: hidden; }
+.busy .track[hidden] { display: none; }
+.busy .track i { display: block; height: 100%; width: 0; border-radius: 2px; background: var(--warn); transition: width .15s linear; }
+.busy .track.unknown i { width: 30%; animation: sweep 1.2s ease-in-out infinite alternate; transition: none; }
+.busy .track.over i { animation: throb .8s ease-in-out infinite alternate; }
+@keyframes sweep { from { margin-left: 0; } to { margin-left: 70%; } }
+@keyframes throb { from { opacity: 1; } to { opacity: .45; } }
+.last { color: var(--text-muted); background: rgba(26, 31, 46, .7); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; pointer-events: auto; cursor: default; }
+.last b { color: var(--text); font-weight: 600; }
+.last.failed b { color: var(--err, #e0707a); }
 
 /* cards: label | value rows */
 .card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin: 0 0 10px; }

@@ -17,7 +17,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from .note import NAME_RE
-from .workspace import EXPORTS, run_build_here
+from .workspace import EXPORTS, run_build_here, warm
 
 STORAGE = Path(os.environ.get("MONET_STORAGE", "storage")).resolve()
 
@@ -36,6 +36,7 @@ app = Starlette(routes=[Route("/build", build, methods=["POST"]), Route("/health
 
 
 def main():
+    warm()      # the kernel, loaded once: no build waits for it
     uvicorn.run(app, host=os.environ.get("MONET_HOST", "0.0.0.0"), port=int(os.environ.get("RUNNER_PORT", "8081")), log_level="warning")
 
 

@@ -68,7 +68,12 @@ def _span(fs, i):
 def _through(ctx, a, u, v, cu, cv, a0, a1):
     """Open from end to end: the centre line of the hole never passes through material. Asked of the solid itself
     when there is one (ctx["inside"]); from descriptors alone, a hole that spans the part is taken to be through."""
-    box, inside = ctx["box"], ctx.get("inside")
+    box, inside, blocked = ctx["box"], ctx.get("inside"), ctx.get("blocked")
+    if blocked is not None:      # the solid itself, asked once: does the line meet it between one side of the part and the other
+        p, q = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
+        p[a], p[u], p[v] = box[a] + 0.01, cu, cv
+        q[a], q[u], q[v] = box[a + 3] - 0.01, cu, cv
+        return not blocked(p, q)
     if inside is None:
         return bool(a0 <= box[a] + TOL and a1 >= box[a + 3] - TOL)
     n = max(2, min(400, int(box[a + 3] - box[a])))
@@ -414,11 +419,12 @@ KINDS = {"planar_face": _planar_face, "square_hole": _square_hole, "round_hole":
          "group": _group, "sketch": _sketch, "plane": _plane, "sketch_curve": _sketch_curve}
 
 
-def resolve(tags: dict, faces: list, box: list, inside=None, edges=(), points=(), parts=()) -> dict:
+def resolve(tags: dict, faces: list, box: list, inside=None, edges=(), points=(), parts=(), blocked=None) -> dict:
     """Find every tag on this build. box = [minx, miny, minz, maxx, maxy, maxz] of the part; inside(point) says
-    whether a point is in material (the runner passes the solid's own test); edges, points and parts are the
-    other things a tag can name, as the runner describes them."""
-    ctx = {"box": box, "inside": inside, "edges": list(edges), "points": list(points),
+    whether a point is in material and blocked(p, q) whether the straight way from p to q meets the part (the
+    runner passes the solid's own answer to the second); edges, points and parts are the other things a tag can
+    name, as the runner describes them."""
+    ctx = {"box": box, "inside": inside, "blocked": blocked, "edges": list(edges), "points": list(points),
            "parts": [{**q, "i": n} for n, q in enumerate(parts)], "tags": tags or {}}
     out = {}
     for name, tag in (tags or {}).items():

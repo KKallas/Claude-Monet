@@ -452,7 +452,8 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         return {"looks": p.set_look(list(body.get("names") or []), body.get("material"), body.get("color", ""))}
 
     def rev(request, ws, _body):
-        return {"rev": ws.project(request.path_params["project"]).rev}
+        p = ws.project(request.path_params["project"])
+        return {"rev": p.rev, "building": p.building()}
 
     def get_note(request, ws, _body):
         p, name = note_of(request, ws)

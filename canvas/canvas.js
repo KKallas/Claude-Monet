@@ -749,7 +749,7 @@ function leaveSketch() {
   S.room = kindOf(S.note) === 'assembly' ? 'assembly' : 'part';
   roomBar(); showSketches(); renderPanel(true);
 }
-const notice = (text) => { busy(text); setTimeout(() => { if ($('#busy').textContent === text) busy(); }, 3500); };
+const notice = (text) => { busy(text); setTimeout(() => { if (B.text === text && !B.clocked) busy(); }, 3500); };
 async function goRoom(room) {
   if (!S.proj) return;
   if (room === 'sketch') {
@@ -886,7 +886,56 @@ document.querySelectorAll('aside [data-card]').forEach((c) => c.classList.toggle
 $('aside').addEventListener('click', (e) => { const f = e.target.closest('[data-fold]'); if (f) fold(f.dataset.fold); });
 
 // ---- loading -----------------------------------------------------------------------------------------------
-function busy(text) { $('#busy').hidden = !text; $('#busy').textContent = text || ''; }
+// What the view is waiting for. A plain busy(text) is a word in passing. A build is clocked: it shows how long it
+// has run and, when the Note was built before, how far along that is by how long it took last time. Said again
+// while it runs (a tag is written, then the Note is opened) it is still the one wait, and the clock runs on.
+const B = { text: '', clocked: false, mine: true, start: 0, eta: null, timer: 0 };
+const secs = (s) => (s < 9.95 ? `${s.toFixed(1)} s` : s < 90 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`);
+const waiting = () => !!B.text && B.mine;
+function busy(text, clock) {
+  if (!text) { clearInterval(B.timer); Object.assign(B, { text: '', clocked: false, mine: true, timer: 0, eta: null }); $('#busy').hidden = true; return; }
+  const mine = clock?.mine ?? true;
+  if (clock && B.clocked) { B.mine = B.mine || mine; return; }
+  clearInterval(B.timer);
+  Object.assign(B, { text, clocked: !!clock, mine, start: performance.now() - (clock?.since ?? 0) * 1000, eta: clock?.eta > 0 ? clock.eta : null, timer: clock ? setInterval(tick, 100) : 0 });
+  tick();
+}
+function tick() {
+  const t = (performance.now() - B.start) / 1000, track = $('#busyTrack');
+  track.hidden = !B.clocked;
+  if (!B.clocked) { $('#busy').hidden = false; $('#busyText').textContent = B.text; return; }
+  $('#busy').hidden = t < 0.3;      // what is back at once (a build that was kept) never shows at all
+  const left = B.eta ? B.eta - t : null;
+  $('#busyText').textContent = `${B.text} ${secs(t)}` + (left == null ? '' : left > 0.25 ? ` · about ${secs(left)} left` : ` · longer than the ${secs(B.eta)} of last time`);
+  track.classList.toggle('unknown', left == null);
+  track.classList.toggle('over', left != null && left <= 0);
+  $('#busyBar').style.width = left == null ? '' : `${Math.min(100, 100 * t / B.eta).toFixed(1)}%`;
+}
+/** A build of these Notes begins: expect what they took last time (several at once, where the server builds so). */
+function building(names, text) {
+  const rows = (S.proj?.notes ?? []).filter((n) => names.includes(n.name) && n.kind !== 'module');
+  const times = rows.map((n) => n.seconds).filter((x) => x > 0);
+  const eta = times.length ? Math.max(Math.max(...times), times.reduce((a, x) => a + x, 0) / (S.proj.workers || 1)) : null;
+  busy(text ?? (names.length === 1 ? `building ${names[0]}…` : 'building…') + (eta ? '' : times.length || !rows.length ? '' : ' (the first time: no estimate yet)'), { eta });
+}
+const stale = () => (S.proj?.notes ?? []).filter((n) => n.kind !== 'module' && n.state !== 'built').map((n) => n.name);
+/** How long the build on show took: it stays, so the next wait can be judged by it. */
+function showLast() {
+  const r = S.data?.note === S.note ? S.data.report : null, el = $('#last');
+  const before = (S.proj?.notes ?? []).find((n) => n.name === S.note)?.seconds;      // not on show yet, but built before
+  el.hidden = !(S.note && (r?.seconds != null || before));
+  if (el.hidden) return;
+  if (!r || r.seconds == null) { el.classList.remove('failed'); el.innerHTML = `${esc(S.note)} · last built in <b>${secs(before)}</b>`; el.title = ''; return; }
+  const k = r.took, at = k?.at ? new Date(k.at) : null;
+  el.classList.toggle('failed', !r.built);
+  el.innerHTML = r.built ? `${esc(S.note)} · built in <b>${secs(r.seconds)}</b>${at ? ` · ${at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`
+    : `${esc(S.note)} · <b>did not build</b> (${secs(r.seconds)})`;
+  el.title = !k ? '' : [`the last build of ${S.note}: ${secs(k.seconds)} from start to finish`,
+    k.build != null ? `the Note's own build(): ${secs(k.build)}` : '',
+    k.kernel != null && k.build != null ? `meshing, tags and files: ${secs(Math.max(0, k.kernel - k.build))}` : '',
+    k.kernel != null ? `starting the build and handing it over: ${secs(Math.max(0, k.seconds - k.kernel))}` : '',
+    at ? `built ${at.toLocaleString()}` : ''].filter(Boolean).join('\n');
+}
 const state = (n) => (n.kind === 'module' ? '' : n.state === 'error' ? 'red' : n.state === 'unbuilt' ? '' : n.changed ? 'yellow' : 'green');
 const order = { assembly: 0, note: 1, module: 2 };
 
@@ -920,7 +969,7 @@ function renderSide() {
 }
 $('#notes').onclick = (e) => { const el = e.target.closest('[data-note]'); if (el) open(S.project, el.dataset.note); };
 const tagsUrl = () => `/p/${S.project}/n/${S.note}`;
-async function redo(fn) { try { busy('building…'); await fn(); await open(S.project, S.note); } catch (e) { alert(e.message); busy(); } }
+async function redo(fn) { try { building([S.note]); await fn(); await open(S.project, S.note); } catch (e) { alert(e.message); busy(); } }
 $('aside').addEventListener('click', (e) => {
   if (e.target.closest('input')) return;
   const b = e.target.closest('[data-act]');
@@ -971,8 +1020,9 @@ async function open(project, note) {
   document.querySelectorAll('[data-sel]').forEach((b) => b.classList.toggle('on', b.dataset.sel === S.mode));
   roomBar();
   renderSide();
-  if (!S.note) { S.data = null; S.parts = []; assemble({}); assemblyBar(); showSelection(); renderPanel(true); return; }
-  busy('building…');
+  if (!S.note) { S.data = null; S.parts = []; assemble({}); assemblyBar(); showSelection(); renderPanel(true); showLast(); return; }
+  if (S.proj.notes.find((n) => n.name === S.note)?.state === 'built') busy('loading…', {}); else building([S.note]);
+  showLast();
   try {
     S.data = await api(`/p/${project}/n/${S.note}`);
     S.rev = (await api(`/p/${project}/rev`)).rev;   // the build itself moved the revision
@@ -995,7 +1045,7 @@ async function open(project, note) {
     roomBar(); renderSide();
   } catch (e) { S.data = { error: e.message }; }
   busy();
-  styleAll(); paint(); showTag(); renderPanel(true);
+  styleAll(); paint(); showTag(); renderPanel(true); showLast();
 }
 
 // ---- the panel -----------------------------------------------------------------------------------------------
@@ -1221,7 +1271,7 @@ $('#panel').addEventListener('click', (e) => {
     const role = $('#tagRole').value;
     (async () => {
       try {
-        busy('building…');
+        building([S.note]);
         await api(`/p/${S.project}/n/${S.note}/tags`, 'POST', { name, role, plane: { plane, offset: off }, face });
         await open(S.project, S.note);
         const made = S.data.tags[name];
@@ -1237,7 +1287,7 @@ $('#panel').addEventListener('click', (e) => {
   if (a === 'sketchsave') {
     const name = S.sketchName.trim(), drawing = sketch.drawing(), face = sketch.state.face;
     act(async () => {
-      busy('building…');
+      building([S.note]);
       await api(`/p/${S.project}/n/${S.note}/tags`, 'POST', { name, role: S.sketchRole, sketch: drawing, face });
       sketch.end(); S.room = 'part'; S.tagSel = name;
     });
@@ -1256,7 +1306,7 @@ $('#panel').addEventListener('click', (e) => {
   const n = `/p/${S.project}/n/${S.note}`, num = (id) => ($(id).value.trim() === '' ? null : Number($(id).value.replace(',', '.')));
   if (a === 'tag') act(async () => {
     const name = $('#tagName').value.trim();
-    busy('building…');
+    building([S.note]);
     await api(`${n}/tags`, 'POST', { name, role: $('#tagRole').value, items: selectedItems() });
     S.tagSel = name;      // show what was just named
   });
@@ -1268,7 +1318,7 @@ $('#panel').addEventListener('click', (e) => {
       equals: eq === '' ? null : eq === 'true' ? true : eq === 'false' ? false : Number(eq) });
   });
   if (a === 'ack') act(() => api(`${n}/ack`, 'POST', {}));
-  if (a === 'save') act(async () => { busy('building every Note…'); S.saveResult = await api(`/p/${S.project}/save`, 'POST', { message: S.message }); if (S.saveResult.saved) S.message = ''; });
+  if (a === 'save') act(async () => { building(stale(), 'building every Note…'); S.saveResult = await api(`/p/${S.project}/save`, 'POST', { message: S.message }); if (S.saveResult.saved) S.message = ''; });
 });
 
 // ---- projects, the agent, the start ------------------------------------------------------------------------
@@ -1333,10 +1383,20 @@ async function start(project) {
 }
 
 // follow the agent: when the project moves, look again
+let beat = 0;
 setInterval(async () => {
-  if (!S.project || document.hidden || !$('#busy').hidden || press) return;
-  try { const { rev } = await api(`/p/${S.project}/rev`); if (rev !== S.rev && !S.compare) await open(S.project, S.note); } catch { /* the server is away; try again */ }
-}, 2000);
+  if (beat++ % 4 && !(B.text && !B.mine)) return;      // every two seconds; four times as often while a build is watched
+  if (!S.project || document.hidden || waiting() || press) return;
+  try {
+    const { rev, building: now = [] } = await api(`/p/${S.project}/rev`);
+    if (waiting()) return;
+    // a build someone else began (the agent, most often): show it under way, as one of this page's own would be
+    const b = now.find((x) => x.note === S.note) ?? now[0];
+    if (b && !B.text) busy(`building ${b.note}…`, { eta: b.expect, since: b.since, mine: false });
+    else if (!b && B.text && !B.mine) busy();
+    if (rev !== S.rev && !S.compare) await open(S.project, S.note);
+  } catch { /* the server is away; try again */ }
+}, 500);
 window.addEventListener('hashchange', () => { const [p, n] = decodeURIComponent(location.hash.slice(1)).split('/'); if (p && (p !== S.project || (n && n !== S.note))) open(p, n); });
 
 window.monet = { S, groups, camera, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom };   // for looking in from the console, and from scripts/shot.mjs

@@ -91,7 +91,10 @@
       <input type="range" id="mix" min="0" max="1" step="0.005" value="0.5" hidden>
       <button id="compareOff">×</button>
     </div>
-    <div class="busy" id="busy" hidden>building…</div>
+    <div class="build">
+      <div class="busy" id="busy" hidden><span id="busyText"></span><div class="track" id="busyTrack"><i id="busyBar"></i></div></div>
+      <div class="last" id="last" hidden></div>
+    </div>
     <div class="hint">drag: orbit · right-drag: pan · wheel: zoom<br>click: select · Shift: add · Ctrl: take away · Shift- or Ctrl-drag: box</div>
   </div>
 

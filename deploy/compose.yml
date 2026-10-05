@@ -43,6 +43,7 @@ services:
     command: ["python", "-m", "monet.buildd"]
     environment:
       MONET_BUILD_TIMEOUT: ${MONET_BUILD_TIMEOUT:-120}
+      MONET_COLD: ${MONET_COLD:-}      # set to 1 to start every build from nothing
     volumes:
       - ./storage:/storage
     healthcheck:

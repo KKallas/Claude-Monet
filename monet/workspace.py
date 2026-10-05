@@ -41,6 +41,8 @@ MAX_SOURCE = 200_000
 
 _locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
+_running: dict[tuple[str, str], float] = {}      # the builds under way now: (project folder, Note) -> when it began
+_times_guard = threading.Lock()
 
 
 class Problem(Exception):
@@ -60,27 +62,11 @@ def _sha(path: Path) -> str:
 
 
 def _limits():
-    """In the build process: a Note may not run for ever or take the server down with it.
-
-    Memory is capped where it can be done honestly: by the container (deploy/compose.yml). Here the build is only
-    marked as the first to go when that ceiling is hit, so the kernel kills the hungry Note and not the server.
-    (An address-space limit, RLIMIT_AS, is not used unless asked for: the CAD kernel and numpy reserve far more
-    address space than they use, and die under a limit that their real memory would fit in many times.)"""
-    import resource
-    resource.setrlimit(resource.RLIMIT_CPU, (BUILD_TIMEOUT, BUILD_TIMEOUT + 5))
-    if sys.platform.startswith("linux"):
-        try:
-            with open("/proc/self/oom_score_adj", "w") as fh:
-                fh.write("1000")
-        except OSError:
-            pass
-        if BUILD_MEMORY_MB > 0:
-            cap = BUILD_MEMORY_MB * 1024 * 1024
-            resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
-    os.setsid()
+    runner.limits(BUILD_TIMEOUT, BUILD_MEMORY_MB)
 
 
 RUNNER_URL = os.environ.get("MONET_RUNNER_URL", "").rstrip("/")
+WORKERS = min(4, os.cpu_count() or 1)      # how many Notes a save builds at once
 
 
 def run_build(project_dir: Path, name: str, out_dir: Path, exports=()) -> dict:
@@ -100,31 +86,97 @@ def run_build(project_dir: Path, name: str, out_dir: Path, exports=()) -> dict:
                 "deps": {src.name: _sha(src)} if src.exists() else {}}
 
 
+_forks = None
+_forks_guard = threading.Lock()
+
+
+def forks():
+    """Where builds are started from: a fork server that has the CAD kernel loaded already (monet/warm.py), so a
+    build begins at once instead of after the seconds it takes to load. None where that cannot be had."""
+    global _forks
+    with _forks_guard:
+        if _forks is None:
+            try:
+                import multiprocessing
+                for key in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
+                    os.environ.setdefault(key, "1")      # one build, one core; and no threads in what gets forked
+                ctx = multiprocessing.get_context("forkserver")
+                # Every build re-runs the server's main module on its way in. Loaded here once, that costs nothing.
+                main = getattr(getattr(sys.modules.get("__main__"), "__spec__", None), "name", None) or "monet.__main__"
+                ctx.set_forkserver_preload(["monet.warm"] + ([main] if main.startswith("monet.") else []))
+                _forks = ctx
+            except (ValueError, ImportError):
+                _forks = False
+    return _forks or None
+
+
+def warm() -> None:
+    """Start the fork server now, in the background, so the first build does not wait for it."""
+    def go():
+        ctx = forks()
+        if ctx is not None:
+            p = ctx.Process(target=print, args=("",), daemon=True)
+            p.start()
+            p.join(120)
+    threading.Thread(target=go, daemon=True).start()
+
+
+def _failed(project_dir: Path, name: str, out_dir: Path, error: str) -> dict:
+    src = project_dir / f"{name}.py"
+    result = {"note": name, "ok": False, "error": error, "libs": runner.versions(), "deps": {src.name: _sha(src)} if src.exists() else {}}
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "result.json").write_text(json.dumps(result))
+    return result
+
+
 def run_build_here(project_dir: Path, name: str, out_dir: Path, exports=()) -> dict:
-    """Run one Note in its own process and read back what it left."""
+    """Run one Note in a process of its own and read back what it left."""
     result_file = out_dir / "result.json"
     result_file.unlink(missing_ok=True)
+    ctx = None if os.environ.get("MONET_COLD") else forks()
+    if ctx is None:
+        return run_build_cold(project_dir, name, out_dir, exports)
+    import signal
+    started = time.time()
+    proc = ctx.Process(target=runner.child, args=(str(project_dir), name, str(out_dir), tuple(exports), BUILD_TIMEOUT, BUILD_MEMORY_MB))
+    try:
+        proc.start()
+    except (OSError, EOFError, RuntimeError):      # no fork server to be had here: build as before, and stop asking
+        global _forks
+        _forks = False
+        return run_build_cold(project_dir, name, out_dir, exports)
+    proc.join(BUILD_TIMEOUT)
+    if proc.is_alive():
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)      # and whatever it started
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        proc.join(10)
+        return _failed(project_dir, name, out_dir, f"the build took longer than {BUILD_TIMEOUT} s and was stopped")
+    if not result_file.exists():
+        why = "killed: most likely it ran out of memory or CPU time" if proc.exitcode in (-9, -24, 137) else "it crashed"
+        return _failed(project_dir, name, out_dir, f"the build process died (exit {proc.exitcode}): {why}")
+    result = json.loads(result_file.read_text())
+    result["wall"] = round(time.time() - started, 2)      # start to finish as the server saw it
+    return result
+
+
+def run_build_cold(project_dir: Path, name: str, out_dir: Path, exports=()) -> dict:
+    """The same in a process started from nothing: every build loads the kernel again. The fallback."""
+    result_file = out_dir / "result.json"
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "VIRTUAL_ENV")}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env.update(OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")   # one build, one core
-    error = None
     try:
         proc = subprocess.run([sys.executable, "-m", "monet.runner", str(project_dir), name, str(out_dir), ",".join(exports)],
                               cwd=project_dir, env={**env, "PYTHONPATH": str(Path(__file__).resolve().parent.parent)},
                               capture_output=True, text=True, timeout=BUILD_TIMEOUT, preexec_fn=_limits)
-        if not result_file.exists():
-            why = "killed: most likely it ran out of memory or CPU time" if proc.returncode in (-9, -24, 137) else \
-                (proc.stderr or proc.stdout).strip()[-600:] or "no output"
-            error = f"the build process died (exit {proc.returncode}): {why}"
     except subprocess.TimeoutExpired:
-        error = f"the build took longer than {BUILD_TIMEOUT} s and was stopped"
-    if error:
-        src = project_dir / f"{name}.py"
-        result = {"note": name, "ok": False, "error": error, "libs": runner.versions(),
-                  "deps": {src.name: _sha(src)} if src.exists() else {}}
-        out_dir.mkdir(parents=True, exist_ok=True)
-        result_file.write_text(json.dumps(result))
-        return result
+        return _failed(project_dir, name, out_dir, f"the build took longer than {BUILD_TIMEOUT} s and was stopped")
+    if not result_file.exists():
+        why = "killed: most likely it ran out of memory or CPU time" if proc.returncode in (-9, -24, 137) else \
+            (proc.stderr or proc.stdout).strip()[-600:] or "no output"
+        return _failed(project_dir, name, out_dir, f"the build process died (exit {proc.returncode}): {why}")
     return json.loads(result_file.read_text())
 
 
@@ -311,14 +363,46 @@ class Project:
             have = all((self.out / name / f"model.{e}").exists() for e in exports)
             if self._fresh(r) and (have or not r["ok"]):
                 return r
-            r = run_build(self.dir, name, self.out / name, exports)
+            key, began = (str(self.dir), name), time.time()
+            _running[key] = began
+            try:
+                r = run_build(self.dir, name, self.out / name, exports)
+            finally:
+                _running.pop(key, None)
+            if r["ok"]:
+                self._took(name, {"seconds": round(time.time() - began, 2), "at": now(), "kernel": r.get("seconds"), "build": r.get("build_seconds")})
             self.touch()
             return r
+
+    def took(self) -> dict:
+        """How long the last good build of each Note took, start to finish as the server saw it: {seconds, at, and
+        of that: kernel (in the build process), build (in the Note's own build())}. What the next one is expected
+        to take, and what the canvas shows as its progress."""
+        try:
+            return json.loads((self.out / ".times.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _took(self, name: str, entry: dict) -> None:
+        with _times_guard:
+            times = {**self.took(), name: entry}
+            tmp = self.out / ".times.json.new"
+            tmp.write_text(json.dumps(times, indent=1))
+            tmp.replace(self.out / ".times.json")
+
+    def building(self) -> list:
+        """The builds of this project under way now, with how long each has run and how long it took last time."""
+        times, here = self.took(), str(self.dir)
+        return [{"note": name, "since": round(time.time() - began, 1), "expect": (times.get(name) or {}).get("seconds")}
+                for (folder, name), began in list(_running.items()) if folder == here]
 
     def report(self, name: str, result: dict | None = None) -> dict:
         """Build and checks of one Note: what the agent and the canvas both look at."""
         r = result or self.result(name)
         out = {"note": name, "built": r["ok"], "seconds": r.get("seconds")}
+        if r["ok"] and self.took().get(name):
+            out["took"] = self.took()[name]
+            out["seconds"] = out["took"]["seconds"]
         if not r["ok"]:
             out.update(green=False, error=r.get("error"), checks=[])
             return out
@@ -438,7 +522,7 @@ class Project:
             names = self.note_names()
             if not names:
                 raise Problem("there is no Note to save yet")
-            with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1)) as pool:
+            with ThreadPoolExecutor(max_workers=WORKERS) as pool:
                 reports = dict(zip(names, pool.map(self.report, names)))
             red = {n: r for n, r in reports.items() if not r["green"]}
             if red:
@@ -594,7 +678,7 @@ class Project:
     # ---- the whole picture -------------------------------------------------------
     def status(self) -> dict:
         head = self.head()
-        rows = []
+        rows, times = [], self.took()
         sources = {name: self.read(name) for name in self.files()}
         note_names = {name for name, src in sources.items() if notes.parse(src)["is_note"]}
         for name, src in sources.items():
@@ -612,7 +696,8 @@ class Project:
                 "state": "unbuilt" if not fresh else "error" if not r["ok"] else "built",
                 "saved": bool(head and name in head["notes"]),
                 "changed": not (saved_src and saved_src.exists() and saved_src.read_text() == src),
+                "seconds": (times.get(name) or {}).get("seconds"),      # of its last good build
             })
         return {"project": self.name, "rev": self.rev, "printer": self.settings.get("printer"), "material": self.settings.get("material"),
                 "looks": self.settings.get("looks", {}),
-                "version": head["n"] if head else None, "notes": rows}
+                "version": head["n"] if head else None, "notes": rows, "building": self.building(), "workers": WORKERS}

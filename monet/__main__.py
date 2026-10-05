@@ -33,6 +33,9 @@ def main():
     admin = app.state.admin
     if not admin.get("password"):
         print(f"\nThe admin ({admin['username']}) has no password yet. Open this link once to choose one:\n  {base}/login?card={admin['card']}\n", flush=True)
+    if not os.environ.get("MONET_RUNNER_URL"):
+        from .workspace import warm
+        warm()      # Notes are built here: load the kernel once, now, so the first build does not wait for it
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning", proxy_headers=True,
                 forwarded_allow_ips=os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1"))
 

@@ -145,3 +145,39 @@ def test_notes_can_be_built_by_a_runner_elsewhere(project, monkeypatch):
     assert runner.post("/build", json={"dir": "/etc", "note": "passwd", "out": "/tmp/x"}).status_code == 400
     assert runner.post("/build", json={"dir": str(project.dir), "note": "../x", "out": str(project.out / "x")}).status_code == 400
     assert runner.post("/build", json={"dir": str(project.dir), "note": "rod_foot", "out": "/tmp/elsewhere"}).status_code == 400
+
+
+def test_a_build_is_timed_and_seen_while_it_runs(project, monkeypatch):
+    """What the canvas makes its progress bar of: how long the last good build took, and what is building now."""
+    import threading
+    import monet.workspace as w
+    project.write("timed", SOURCE)
+    took = project.took()["timed"]
+    assert took["seconds"] >= took["kernel"] >= took["build"] >= 0 and took["at"].endswith("Z")
+    assert project.report("timed")["took"] == took and project.report("timed")["seconds"] == took["seconds"]
+    row = [n for n in project.status()["notes"] if n["name"] == "timed"][0]
+    assert row["seconds"] == took["seconds"] and project.status()["building"] == []
+    # while it builds, it is listed with what to expect; a build that fails leaves the last good time as it was
+    real, going, seen = w.run_build, threading.Event(), []
+
+    def slow(*a, **k):
+        going.set()
+        seen.append(project.building())
+        return real(*a, **k)
+    monkeypatch.setattr(w, "run_build", slow)
+    assert not project.write("timed", SOURCE + "\nraise ValueError('no')\n")["built"]
+    assert [(b["note"], b["expect"]) for b in seen[0]] == [("timed", took["seconds"])] and project.building() == []
+    assert project.took()["timed"] == took
+    project.delete("timed")
+
+
+def test_a_build_starts_warm_or_cold_and_is_the_same_build(project, monkeypatch):
+    """Builds are forked from a process that has the kernel loaded (monet/warm.py); started from nothing they are
+    the same build, only later."""
+    import monet.workspace as w
+    warm = w.run_build_here(project.dir, "rod_foot", project.out / ".warm")
+    monkeypatch.setenv("MONET_COLD", "1")
+    cold = w.run_build_here(project.dir, "rod_foot", project.out / ".cold")
+    assert warm["ok"] and cold["ok"] and "wall" in warm and "wall" not in cold
+    assert warm["fingerprint"] == cold["fingerprint"] and warm["tags"] == cold["tags"] and warm["libs"] == cold["libs"]
+    assert (project.out / ".warm" / "model.glb").read_bytes() == (project.out / ".cold" / "model.glb").read_bytes()

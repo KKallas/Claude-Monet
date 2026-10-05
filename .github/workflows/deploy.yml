@@ -60,6 +60,8 @@ jobs:
           test "$got" = "$want"
           # in the runner, where Notes are built; and the runner must not be able to see the accounts
           on "cd /opt/monet && docker compose exec -T runner python -m monet.runner /app/notes/starter rod_foot /tmp/smoke" | grep -q '"ok": true'
+          # and the way the service builds them: forked from a process that has the kernel loaded (monet/warm.py)
+          on "cd /opt/monet && docker compose exec -T runner python -c \"from pathlib import Path; from monet import workspace as w; r = w.run_build_here(Path('/app/notes/starter'), 'rod_foot', Path('/tmp/smoke-warm')); print('warm' if r['ok'] and 'wall' in r else r)\"" | grep -qx warm
           on "cd /opt/monet && docker compose exec -T runner sh -c 'ls /data 2>/dev/null | wc -l'" | grep -qx 0
       - name: A look from outside
         if: steps.gate.outputs.go == 'true' && vars.DOMAIN != ''

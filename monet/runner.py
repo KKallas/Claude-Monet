@@ -65,35 +65,76 @@ def parts_of(shape, note="part"):
 
 
 def describe(shape, groups):
-    """Faces as plain data, and one mesh whose triangles are grouped face by face, the faces part by part."""
-    from build123d import GeomType, Vector
+    """Faces as plain data, and one mesh whose triangles are grouped face by face, the faces part by part.
+
+    Straight from the kernel's own mesh (one meshing of the whole shape, then each face's triangles read out):
+    asking build123d face by face is several times slower, and this is most of what a build spends its time on."""
+    from OCP.BRep import BRep_Tool
     from OCP.BRepAdaptor import BRepAdaptor_Surface
-    shape.mesh(LINEAR, ANGULAR)
+    from OCP.BRepGProp import BRepGProp
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+    from OCP.GeomAbs import GeomAbs_Cylinder, GeomAbs_Plane
+    from OCP.GProp import GProp_GProps
+    from OCP.TopAbs import TopAbs_REVERSED
+    from OCP.TopLoc import TopLoc_Location
     faces, verts, tris, parts = [], [], [], []
+    r4, r6 = (lambda v: round(v, 4)), (lambda v: round(v, 6))
+    # the size of each part first: asking for a bounding box throws the mesh away
+    sized = []
     for name, sub in groups:
         bb = sub.bounding_box()
-        part = {"name": name, "faces": [len(faces), 0], "tris": [len(tris), 0], "volume": round(sub.volume, 3),
-                "bbox": [round(x, 4) for x in (bb.min.X, bb.min.Y, bb.min.Z, bb.max.X, bb.max.Y, bb.max.Z)]}
+        sized.append((round(sub.volume, 3), [round(x, 4) for x in (bb.min.X, bb.min.Y, bb.min.Z, bb.max.X, bb.max.Y, bb.max.Z)]))
+    BRepMesh_IncrementalMesh(shape.wrapped, LINEAR, False, ANGULAR, True)
+    for (name, sub), (volume, bbox) in zip(groups, sized):
+        part = {"name": name, "faces": [len(faces), 0], "tris": [len(tris), 0], "volume": volume, "bbox": bbox}
         for f in sub.faces():
-            v, t = f.tessellate(LINEAR, ANGULAR)
-            fb = f.bounding_box()
-            d = {"i": len(faces), "type": "other", "area": round(f.area, 4), "center": _vec(f.center()),
-                 "bbox": [round(x, 4) for x in (fb.min.X, fb.min.Y, fb.min.Z, fb.max.X, fb.max.Y, fb.max.Z)],
-                 "tris": [len(tris), len(t)]}
-            if f.geom_type == GeomType.PLANE:
-                d.update(type="plane", normal=_vec(f.normal_at()))
-            elif f.geom_type == GeomType.CYLINDER:
-                cyl = BRepAdaptor_Surface(f.wrapped).Cylinder()
-                loc, way = cyl.Axis().Location(), cyl.Axis().Direction()
-                origin, axis = Vector(loc.X(), loc.Y(), loc.Z()), Vector(way.X(), way.Y(), way.Z())
-                mid = f.position_at(0.5, 0.5)
-                to_axis = (origin + axis * ((mid - origin).dot(axis))) - mid
-                d.update(type="cylinder", axis=_vec(axis), origin=_vec(origin), radius=round(cyl.Radius(), 5),
-                         concave=bool(f.normal_at(mid).dot(to_axis) > 0))
+            w = f.wrapped
+            loc = TopLoc_Location()
+            mesh = BRep_Tool.Triangulation_s(w, loc)
+            if mesh is None:      # a face the kernel could not mesh: nothing to show of it
+                continue
+            move, flipped = loc.Transformation(), w.Orientation() == TopAbs_REVERSED
+            pts = []
+            for k in range(1, mesh.NbNodes() + 1):
+                q = mesh.Node(k).Transformed(move)
+                pts.append((q.X(), q.Y(), q.Z()))
+            local = []
+            for k in range(1, mesh.NbTriangles() + 1):
+                i, j, l = mesh.Triangle(k).Get()
+                local.append((i - 1, l - 1, j - 1) if flipped else (i - 1, j - 1, l - 1))
+            props = GProp_GProps()
+            BRepGProp.SurfaceProperties_s(w, props)
+            c = props.CentreOfMass()
+            xs, ys, zs = zip(*pts)
+            d = {"i": len(faces), "type": "other", "area": r4(props.Mass()), "center": [r6(c.X()), r6(c.Y()), r6(c.Z())],
+                 "bbox": [r4(min(xs)), r4(min(ys)), r4(min(zs)), r4(max(xs)), r4(max(ys)), r4(max(zs))],
+                 "tris": [len(tris), len(local)]}
+            surface = BRepAdaptor_Surface(w)
+            kind = surface.GetType()
+            if kind in (GeomAbs_Plane, GeomAbs_Cylinder) and local:
+                # which way the face looks: from its largest triangle, wound as the face is turned
+                def normal_of(t):
+                    (ax, ay, az), (bx, by, bz), (cx, cy, cz) = pts[t[0]], pts[t[1]], pts[t[2]]
+                    ux, uy, uz, vx, vy, vz = bx - ax, by - ay, bz - az, cx - ax, cy - ay, cz - az
+                    return (uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx)
+                t = max(local, key=lambda t: sum(x * x for x in normal_of(t)))
+                nx, ny, nz = normal_of(t)
+                size = (nx * nx + ny * ny + nz * nz) ** 0.5 or 1.0
+                nx, ny, nz = nx / size, ny / size, nz / size
+                if kind == GeomAbs_Plane:
+                    d.update(type="plane", normal=[r6(nx), r6(ny), r6(nz)])
+                else:
+                    cyl = surface.Cylinder()
+                    o, way = cyl.Axis().Location(), cyl.Axis().Direction()
+                    mid = [sum(pts[i][k] for i in t) / 3 for k in range(3)]
+                    along = (mid[0] - o.X()) * way.X() + (mid[1] - o.Y()) * way.Y() + (mid[2] - o.Z()) * way.Z()
+                    to_axis = (o.X() + way.X() * along - mid[0], o.Y() + way.Y() * along - mid[1], o.Z() + way.Z() * along - mid[2])
+                    d.update(type="cylinder", axis=[r6(way.X()), r6(way.Y()), r6(way.Z())], origin=[r6(o.X()), r6(o.Y()), r6(o.Z())],
+                             radius=round(cyl.Radius(), 5), concave=bool(nx * to_axis[0] + ny * to_axis[1] + nz * to_axis[2] > 0))
             faces.append(d)
             base = len(verts)
-            verts.extend((p.X, p.Y, p.Z) for p in v)
-            tris.extend((a + base, b + base, c + base) for a, b, c in t)
+            verts.extend(pts)
+            tris.extend((i + base, j + base, l + base) for i, j, l in local)
         part["faces"][1] = len(faces) - part["faces"][0]
         part["tris"][1] = len(tris) - part["tris"][0]
         parts.append(part)
@@ -130,6 +171,24 @@ def edges_and_points(groups, parts):
         base = len(points)
         points.extend({"i": base + k, "p": index, "at": at(v)} for k, v in enumerate(sub.vertices()))
     return segs, edges, points
+
+
+def crossing(shape):
+    """blocked(p, q): does the straight way from p to q meet the part anywhere? One question to the kernel, where
+    asking point by point whether each is inside took a second and more on a part with many faces."""
+    from OCP.gp import gp_Dir, gp_Lin, gp_Pnt
+    from OCP.IntCurvesFace import IntCurvesFace_ShapeIntersector
+    probe = IntCurvesFace_ShapeIntersector()
+    probe.Load(shape.wrapped, 1e-7)
+
+    def blocked(p, q):
+        d = [b - a for a, b in zip(p, q)]
+        length = sum(x * x for x in d) ** 0.5
+        if length < 1e-9:
+            return False
+        probe.Perform(gp_Lin(gp_Pnt(*p), gp_Dir(*d)), 0.0, length)
+        return probe.NbPnt() > 0
+    return blocked
 
 
 def write_glb(path: Path, verts, tris, segs):
@@ -220,11 +279,8 @@ def run(project_dir: Path, note: str, out_dir: Path, exports=()) -> dict:
         result["doc"] = (mod.__doc__ or "").strip()
         result["triangles"] = len(tris)
         segs, edges, points = edges_and_points(groups, parts)
-        from build123d import Vector
-        solids = shape.solids()
         result["tags"] = tags.resolve(getattr(mod, "TAGS", {}) or {}, faces, result["fingerprint"]["bbox"],
-                                      inside=lambda p: any(s.is_inside(Vector(*p)) for s in solids),
-                                      edges=edges, points=points, parts=parts)
+                                      blocked=crossing(shape), edges=edges, points=points, parts=parts)
         write_glb(out_dir / "model.glb", verts, tris, segs)
         (out_dir / "faces.json").write_text(json.dumps({"faces": faces, "parts": parts, "edges": edges, "points": points}, separators=(",", ":")))
         result["parts"] = [{k: part[k] for k in ("name", "volume", "bbox", "faces")} for part in parts]
@@ -250,6 +306,45 @@ def run(project_dir: Path, note: str, out_dir: Path, exports=()) -> dict:
     result["seconds"] = round(time.time() - t0, 2)
     (out_dir / "result.json").write_text(json.dumps(result, default=str))
     return result
+
+
+def limits(seconds: int, memory_mb: int = 0) -> None:
+    """In the build process: a Note may not run for ever or take the server down with it.
+
+    Memory is capped where it can be done honestly: by the container (deploy/compose.yml). Here the build is only
+    marked as the first to go when that ceiling is hit, so the kernel kills the hungry Note and not the server.
+    (An address-space limit, RLIMIT_AS, is not used unless asked for: the CAD kernel and numpy reserve far more
+    address space than they use, and die under a limit that their real memory would fit in many times.)"""
+    import os
+    import resource
+    resource.setrlimit(resource.RLIMIT_CPU, (seconds, seconds + 5))
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/self/oom_score_adj", "w") as fh:
+                fh.write("1000")
+        except OSError:
+            pass
+        if memory_mb > 0:
+            cap = memory_mb * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
+    os.setsid()
+
+
+KEPT = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
+
+
+def child(project_dir: str, note: str, out_dir: str, exports, seconds: int, memory_mb: int) -> None:
+    """A build, in a process forked for it from one that has the kernel loaded already (monet/warm.py). It is held
+    in like any other build, and sees none of the server's surroundings."""
+    import os
+    limits(seconds, memory_mb)
+    # no bytecode kept: a Note written twice within a second, at the same length, would be run from the first one's
+    sys.dont_write_bytecode = True
+    for key in list(os.environ):
+        if key not in KEPT:
+            del os.environ[key]
+    os.chdir(project_dir)
+    run(Path(project_dir), note, Path(out_dir), tuple(exports))
 
 
 def main(argv=None):
