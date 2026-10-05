@@ -390,10 +390,19 @@ class Project:
             tmp.write_text(json.dumps(times, indent=1))
             tmp.replace(self.out / ".times.json")
 
+    def expected(self, name: str, times: dict | None = None, kept: dict | None = None) -> float | None:
+        """How long a build of this Note is expected to take: as long as its last good one. Of a build kept from
+        before times were kept, what the build process itself said it took."""
+        took = (self.took() if times is None else times).get(name)
+        if took:
+            return took["seconds"]
+        kept = kept if kept is not None else self.cached(name)
+        return kept.get("seconds") if kept and kept.get("ok") else None
+
     def building(self) -> list:
         """The builds of this project under way now, with how long each has run and how long it took last time."""
         times, here = self.took(), str(self.dir)
-        return [{"note": name, "since": round(time.time() - began, 1), "expect": (times.get(name) or {}).get("seconds")}
+        return [{"note": name, "since": round(time.time() - began, 1), "expect": self.expected(name, times)}
                 for (folder, name), began in list(_running.items()) if folder == here]
 
     def report(self, name: str, result: dict | None = None) -> dict:
@@ -696,7 +705,7 @@ class Project:
                 "state": "unbuilt" if not fresh else "error" if not r["ok"] else "built",
                 "saved": bool(head and name in head["notes"]),
                 "changed": not (saved_src and saved_src.exists() and saved_src.read_text() == src),
-                "seconds": (times.get(name) or {}).get("seconds"),      # of its last good build
+                "seconds": self.expected(name, times, r or {}),      # of its last good build
             })
         return {"project": self.name, "rev": self.rev, "printer": self.settings.get("printer"), "material": self.settings.get("material"),
                 "looks": self.settings.get("looks", {}),

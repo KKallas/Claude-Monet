@@ -168,6 +168,10 @@ def test_a_build_is_timed_and_seen_while_it_runs(project, monkeypatch):
     assert not project.write("timed", SOURCE + "\nraise ValueError('no')\n")["built"]
     assert [(b["note"], b["expect"]) for b in seen[0]] == [("timed", took["seconds"])] and project.building() == []
     assert project.took()["timed"] == took
+    # a build kept from before times were: what it said of itself is the estimate
+    (project.out / ".times.json").unlink()
+    kept = project.cached("rod_foot")["seconds"]
+    assert [n["seconds"] for n in project.status()["notes"] if n["name"] == "rod_foot"] == [kept] and project.expected("nothing") is None
     project.delete("timed")
 
 
