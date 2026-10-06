@@ -63,8 +63,12 @@ wrong:
   which has the working files and nothing else. Keep accounts and secrets out of `storage/`.
 - **Git is the user's**, in a folder on their computer; the server keeps numbered versions.
   No git on the server.
-- **The agent's door has no tool to change or remove a check, acknowledge a load check or
-  delete a Note.** Those are routes of the canvas API only. Keep it that way.
+- **The agent's door has no tool to change or remove a check, acknowledge a load check,
+  delete a Note, or delete a project or bring one in from an archive** (an archive carries
+  checks). Those are routes of the canvas API only. Keep it that way.
+- **An uploaded archive is not trusted**: `Workspace.import_project` takes files by name
+  against `ARCHIVED` and writes each under that name; it never extracts a zip to a path the
+  zip gives. Keep it that way.
 - **A Note is only ever executed in `monet/runner.py`**, in its own process. The server
   reads Notes with `ast` (`monet/note.py`), so `TAGS` must stay a plain literal.
 - **`skill/monet/` is the single source of the agent's instructions**: the skill zip and the

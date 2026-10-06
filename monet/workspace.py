@@ -13,10 +13,13 @@ nothing from their names that opens a door).
         versions/0001/              a save: every source file, and for each Note that changed
                                     its <note>.glb and <note>.fingerprint.json
 
+A project goes out and comes in as an archive: a zip of all of that but out/, which is made again.
+
 History is the user's own git, on their own computer: the agent commits there after
 every successful save. A version here is what the viewer needs to compare and export.
 """
 import hashlib
+import io
 import json
 import os
 import re
@@ -25,6 +28,8 @@ import subprocess
 import sys
 import threading
 import time
+import zipfile
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +44,13 @@ BUILD_TIMEOUT = int(os.environ.get("MONET_BUILD_TIMEOUT", "180"))
 BUILD_MEMORY_MB = int(os.environ.get("MONET_BUILD_MEMORY_MB", "0"))     # address space, MB; 0 = no such limit
 MAX_SOURCE = 200_000
 MAX_PARTS = 400      # of a Note that is sent in parts
+MAX_ARCHIVE = 100_000_000      # bytes of a project as an archive: of the zip, and of what it unpacks to
+MAX_ARCHIVE_FILES = 5000
+# what an archive of a project holds, and all that is taken from one that comes in: the Notes, their checks, the
+# settings, and of every saved version the same and what was kept of each Note
+_NOTE = r"[a-z][a-z0-9_]{0,47}"
+ARCHIVED = re.compile(rf"^(versions/[0-9]{{4}}/)?({_NOTE}\.py|{_NOTE}\.checks\.json|monet\.json)$"
+                      rf"|^versions/[0-9]{{4}}/(meta\.json|{_NOTE}\.glb|{_NOTE}\.fingerprint\.json)$")
 
 _locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
@@ -255,6 +267,86 @@ class Workspace:
             (target / "monet.json").write_text(json.dumps({"printer": "bambu_x1c", "material": "pla"}, indent=1) + "\n")
         return Project(self, name)
 
+    def listing(self) -> list[dict]:
+        """The projects, each with what tells it from the others: how many Notes, the last saved version and when."""
+        out = []
+        for name in self.projects():
+            p = Project(self, name)
+            head = p.head()
+            out.append({"name": name, "notes": len(p.note_names()), "version": head["n"] if head else None, "saved": head["at"] if head else None})
+        return out
+
+    def delete_project(self, name: str) -> None:
+        """The project and every saved version of it, gone from the server. The user's door only."""
+        p = self.project(name)
+        with p.lock:
+            if p.building():
+                raise Problem(f"{name} is being built just now: delete it when that is done", 409)
+            gone = self.dir / f".deleted-{name}-{time.time_ns()}"
+            p.dir.rename(gone)      # from here on it is no project; then its files go
+            shutil.rmtree(gone, ignore_errors=True)
+
+    def import_project(self, name: str, data: bytes) -> tuple["Project", int]:
+        """A project from an archive, as Project.archive() makes them: (the project, how many files of the zip were
+        left out). Only what an archive holds is taken, by its name, and written here under that name: nothing in a
+        zip says where a file goes. The user's door only: the checks in it become the checks."""
+        if not PROJECT_RE.match(name or ""):
+            raise Problem("a project name is lowercase letters, digits, dashes or underscores")
+        target = self.dir / name
+        if target.exists():
+            raise Problem(f"there is already a project {name!r}: give this one another name", 409)
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                files = [i for i in z.infolist() if not i.is_dir() and not i.filename.startswith("__MACOSX/")]
+                # zipped as a folder (as Download does) or as what is in it
+                tops = {i.filename.split("/")[0] for i in files}
+                folder = f"{tops.pop()}/" if len(tops) == 1 and all("/" in i.filename for i in files) else ""
+                take = {i.filename[len(folder):]: i for i in files if ARCHIVED.match(i.filename[len(folder):])}
+                if len(take) > MAX_ARCHIVE_FILES or sum(i.file_size for i in take.values()) > MAX_ARCHIVE:
+                    raise Problem(f"that archive unpacks to more than a project may be ({MAX_ARCHIVE // 1_000_000} MB)", 413)
+                got = {rel: z.read(i) for rel, i in take.items()}
+        except (zipfile.BadZipFile, zlib.error, EOFError, RuntimeError, NotImplementedError):
+            raise Problem("that is not a zip that can be read")
+        if not any("/" not in rel for rel in got):
+            raise Problem("there is nothing of a project in that archive: no Notes, no monet.json")
+        docs = {}
+        for rel, raw in got.items():
+            if rel.endswith(".glb"):
+                continue
+            try:
+                text = raw.decode("utf-8")
+                docs[rel] = json.loads(text) if rel.endswith(".json") else text
+            except ValueError:
+                raise Problem(f"{rel} in that archive cannot be read")
+            if rel.endswith(".json") and not isinstance(docs[rel], dict):
+                raise Problem(f"{rel} in that archive is not what Monet writes there")
+            if rel.endswith(".py") and "/" not in rel and len(text) > MAX_SOURCE:
+                raise Problem(f"{rel} is too long for a Note")
+        # a saved version is whole or it is refused: what it says of each Note has to be in the archive too
+        for n in sorted({rel.split("/")[1] for rel in got if "/" in rel}):
+            meta = docs.get(f"versions/{n}/meta.json") or {}
+            kept = meta.get("notes")
+            whole = meta.get("n") == int(n) and isinstance(meta.get("at"), str) and isinstance(meta.get("message"), str) and isinstance(kept, dict) and all(
+                isinstance(v, dict) and isinstance(v.get("v"), int)
+                and {"fingerprint", "tags", "libs"} <= set(docs.get(f"versions/{v['v']:04d}/{k}.fingerprint.json") or {})
+                and (v["v"] != int(n) or f"versions/{n}/{k}.glb" in got) for k, v in kept.items())
+            if not whole:
+                raise Problem(f"version {int(n)} in that archive is not whole: it is not an archive Monet made")
+        coming = self.dir / f".incoming-{name}-{time.time_ns()}"
+        try:
+            for rel, raw in got.items():
+                (coming / rel).parent.mkdir(parents=True, exist_ok=True)
+                (coming / rel).write_bytes(raw)
+            if "monet.json" not in got:
+                (coming / "monet.json").write_text(json.dumps({"printer": "bambu_x1c", "material": "pla"}, indent=1) + "\n")
+            try:
+                coming.rename(target)      # there whole, or not at all
+            except OSError:
+                raise Problem(f"there is already a project {name!r}: give this one another name", 409)
+        finally:
+            shutil.rmtree(coming, ignore_errors=True)
+        return Project(self, name), len(files) - len(take)
+
 
 class Project:
     def __init__(self, ws: Workspace, name: str):
@@ -335,6 +427,17 @@ class Project:
 
     def is_note(self, name: str) -> bool:
         return notes.parse(self.read(name))["is_note"]
+
+    def archive(self) -> bytes:
+        """The project as a zip, in a folder of its name: to keep, or to upload here or to another Monet. The Notes,
+        their checks, the settings and the saved versions; not the builds, which are made again from the Notes."""
+        buf = io.BytesIO()
+        with self.lock, zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for f in sorted(self.dir.glob("*")) + sorted(self.vdir.glob("[0-9][0-9][0-9][0-9]/*")):
+                rel = f.relative_to(self.dir).as_posix()
+                if ARCHIVED.match(rel) and f.is_file() and not f.is_symlink():
+                    z.write(f, f"{self.name}/{rel}")
+        return buf.getvalue()
 
     def note_names(self) -> list[str]:
         return [n for n in self.files() if self.is_note(n)]

@@ -15,8 +15,7 @@
 <div class="app">
   <header>
     <b>MONET</b>
-    <select id="project" title="project"></select>
-    <button id="newProject" title="new project">+</button>
+    <button id="project" title="the projects of this workspace: open one, start one, download, upload or delete"><span id="projectName">no project</span><span class="chev"></span></button>
     <span class="rooms" title="three places to work: a drawing on a face, one part, the parts put together">
       <button data-room="sketch">Sketch</button><button data-room="part">Part</button><button data-room="assembly">Assembly</button>
     </span>
@@ -102,6 +101,7 @@
 </div>
 
 <dialog id="connectDialog"></dialog>
+<dialog id="projectsDialog"></dialog>
 <script type="module" src="/static/canvas.js"></script>
 </body>
 </html>

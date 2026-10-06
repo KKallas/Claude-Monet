@@ -158,6 +158,10 @@ parts goes to Part, starting a drawing goes to Sketch.
   you want done with it ("cut 3 deep"); your agent turns it into geometry.
 - **Panels fold**: every panel on either side shuts on a click on its head and stays as
   it was left.
+- **Projects**: the name at the top left opens all of them: open one, start one, **Download**
+  one as an archive (a zip of its Notes, their checks and the saved versions), **Upload** such
+  an archive as a project of its own, here or on another Monet, or delete one. Deleting is for
+  good: the server keeps no copy, so download first what you may want back.
 - **Diff**: model A coloured by its distance to B (what was removed) and B by
   its distance to A (what was added). The colour scale is clamped to the printer's
   tolerance, so only changes that matter for printing show up. Tagged features are

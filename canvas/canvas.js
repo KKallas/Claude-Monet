@@ -21,7 +21,8 @@ const BASE = new THREE.Color('#b9c2d6'), PICK = new THREE.Color('#ffd23f');
 const PARTS = ['#8fa8d6', '#d6a58f', '#9cc7a4', '#c9a3d0', '#d4c58a', '#8fc7cf', '#d49aa8', '#a9b0e0', '#b8cf94', '#e0b48a', '#9fb8b0', '#c7b1a0'];
 
 async function api(path, method = 'GET', body) {
-  const r = await fetch(root + path, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+  const file = body instanceof Blob;      // an archive goes as it is, anything else as JSON
+  const r = await fetch(root + path, { method, headers: body ? { 'content-type': file ? 'application/zip' : 'application/json' } : {}, body: file ? body : body ? JSON.stringify(body) : undefined });
   const data = await r.json().catch(() => ({}));
   if (r.status === 401 && data.login) { location.href = `/login?next=${encodeURIComponent(location.pathname + location.hash)}`; throw new Error('log in first'); }
   if (!r.ok) throw new Error(data.error || `error ${r.status}`);
@@ -956,12 +957,12 @@ function renderSketchSide() {
 function renderSide() {
   renderSketchSide();
   // Assembly shows the assemblies; Part and Sketch show the parts (and the modules they share)
-  const mine = S.proj.notes.filter((n) => (S.room === 'assembly' ? n.kind === 'assembly' : n.kind !== 'assembly'));
+  const mine = (S.proj?.notes ?? []).filter((n) => (S.room === 'assembly' ? n.kind === 'assembly' : n.kind !== 'assembly'));
   const sorted = [...mine].sort((a, b) => order[a.kind] - order[b.kind] || a.name.localeCompare(b.name));
   $('#notes').innerHTML = sorted.map((n) => `<div class="item ${n.name === S.note ? 'sel' : ''}" data-note="${esc(n.name)}" title="${n.kind === 'module' ? 'a helper module, imported by Notes' : n.kind === 'assembly' ? 'an assembly: Notes put together' : n.state === 'error' ? 'does not build' : n.changed ? 'changed since the last save' : 'saved'}">
     <span class="dot ${state(n)}"></span>${esc(n.name)}${n.kind === 'note' ? '' : ` <small>${n.kind}</small>`}</div>`).join('')
-    || `<div class="item muted">${S.room === 'assembly' ? 'no assembly yet' : 'no parts yet: ask your agent for one'}</div>`;
-  $('#versions').innerHTML = [...S.proj.versions].reverse().map((v) => {
+    || `<div class="item muted">${!S.proj ? 'no project open' : S.room === 'assembly' ? 'no assembly yet' : 'no parts yet: ask your agent for one'}</div>`;
+  $('#versions').innerHTML = [...(S.proj?.versions ?? [])].reverse().map((v) => {
     const mine = v.notes[S.note]?.v === v.n;
     return `<div class="item" data-version="${v.n}" title="${esc(v.message)}\n${new Date(v.at).toLocaleString()}${v.commit ? '\ngit ' + esc(v.commit) : ''}\nclick: compare with the draft">
       <span class="dot ${mine ? 'green' : ''}"></span>v${v.n} <small>${esc(v.message || '')}</small></div>`;
@@ -1007,7 +1008,7 @@ async function open(project, note) {
   // a project opens on its assembly, where there is one: the parts put together
   S.note = names.includes(note) ? note : (S.proj.notes.find((n) => n.kind === 'assembly')?.name ?? S.proj.notes.find((n) => n.kind === 'note')?.name ?? names[0] ?? null);
   history.replaceState(null, '', `#${project}${S.note ? '/' + S.note : ''}`);
-  $('#project').value = project;
+  $('#projectName').textContent = project;
   if (changedNote) { S.sel = nothing(); S.inspect = null; S.tagSel = null; S.saveResult = null; S.hotPart = null; S.hidden = new Set(); explode = 0; sketch.end(); }
   // the room follows the Note: an assembly is worked on in Assembly, a part in Part (or in Sketch, while one is drawn)
   const kind = kindOf(S.note);
@@ -1046,6 +1047,17 @@ async function open(project, note) {
   } catch (e) { S.data = { error: e.message }; }
   busy();
   styleAll(); paint(); showTag(); renderPanel(true); showLast();
+}
+
+/** No project is open: the one that was is gone, or there is none yet. */
+function shut() {
+  if (S.compare) compareOff();
+  sketch.end();
+  Object.assign(S, { project: null, proj: null, note: null, data: null, rev: null, faces: [], parts: [], edges: [], points: [], sel: nothing(), inspect: null,
+    tagSel: null, saveResult: null, hotPart: null, hidden: new Set(), room: 'part' });
+  history.replaceState(null, '', location.pathname);
+  $('#projectName').textContent = 'no project';
+  busy(); assemble({}); assemblyBar(); showSelection(); roomBar(); renderSide(); renderPanel(true); showLast();
 }
 
 // ---- the panel -----------------------------------------------------------------------------------------------
@@ -1127,7 +1139,8 @@ function renderPanel(force) {
   if (!force && panel.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) { S.stale = true; return; }
   S.stale = false;
   const d = S.data;
-  if (!d) { panel.innerHTML = '<div class="card"><h2>No Note open</h2><p class="muted">Connect your agent and ask it for a part. It appears here as soon as it is written.</p></div>'; return; }
+  if (!d) { panel.innerHTML = S.project ? '<div class="card"><h2>No Note open</h2><p class="muted">Connect your agent and ask it for a part. It appears here as soon as it is written.</p></div>'
+    : '<div class="card"><h2>No project open</h2><p class="muted">Start one, or upload an archive of one, under the name at the top left.</p></div>'; return; }
   if (d.error) { panel.innerHTML = `<div class="card"><h2>${esc(S.note)}</h2><p class="err">${esc(d.error)}</p></div>`; return; }
   const r = d.report, cards = [];
   const pill = !d.is_note ? '<span class="pill muted">module</span>' : !r.built ? '<span class="pill err">does not build</span>'
@@ -1322,18 +1335,85 @@ $('#panel').addEventListener('click', (e) => {
 });
 
 // ---- projects, the agent, the start ------------------------------------------------------------------------
-$('#project').onchange = (e) => open(e.target.value, null);
-$('#newProject').onclick = () => {
-  const dlg = $('#connectDialog');
-  dlg.innerHTML = `<h2>New project</h2><form method="dialog"><div class="line"><input id="npName" placeholder="name: lowercase, digits, dashes" required pattern="[a-z0-9][a-z0-9_-]*">
-    <select id="npTemplate"><option value="">empty</option>${S.state.templates.map((t) => `<option value="${esc(t)}">copy of ${esc(t)}</option>`).join('')}</select></div>
-    <div class="line"><span style="flex:1"></span><button value="no">Cancel</button><button class="primary" value="yes">Create</button></div></form>`;
-  dlg.onclose = async () => {
-    if (dlg.returnValue !== 'yes') return;
-    try { const { project } = await api('/projects', 'POST', { name: $('#npName').value.trim(), template: $('#npTemplate').value }); await start(project); } catch (e) { alert(e.message); }
-  };
-  dlg.showModal();
-};
+// The projects of the workspace, in a sheet of their own: open one, start one, and a project as an archive, out and
+// in. Deleting asks first, in the row itself: what is deleted is gone from the server, with its saved versions.
+const P = { rows: [], asking: null, file: null, name: '' }, sheet = $('#projectsDialog');
+const NAMED = 'required pattern="[a-z0-9][a-z0-9_\\-]*" maxlength="48"';
+function renderProjects() {
+  const zip = (p) => `${root}/p/${p.name}/archive.zip`, plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  sheet.innerHTML = `<h2>Projects</h2>
+    <div class="projects">${P.rows.map((p) => (p.name === P.asking
+    ? `<div class="item asking"><span class="grow">Delete <b>${esc(p.name)}</b>, with its ${plural(p.notes, 'Note')}${p.version ? ` and ${plural(p.version, 'saved version')}` : ''}? It cannot be brought back.</span>
+        <a href="${zip(p)}" download><button>Download first</button></a><button class="danger" data-act="delete" data-name="${esc(p.name)}">Delete</button><button data-act="keep">Keep</button></div>`
+    : `<div class="item ${p.name === S.project ? 'sel' : ''}" data-open="${esc(p.name)}" title="open ${esc(p.name)}">
+        <span class="grow">${esc(p.name)} <small>${plural(p.notes, 'Note')} · ${p.version ? `v${p.version}, saved ${new Date(p.saved).toLocaleDateString()}` : 'never saved'}</small></span>
+        <a href="${zip(p)}" download title="the Notes, their checks and every saved version, as a zip"><button>Download</button></a>
+        <button data-act="ask" data-name="${esc(p.name)}" title="delete this project from the server">Delete</button></div>`)).join('') || '<div class="item muted">no projects yet</div>'}</div>
+    <h3>A new one</h3>
+    <form id="npForm" class="line"><input id="npName" placeholder="name: lowercase, digits, dashes" ${NAMED}>
+      <select id="npTemplate"><option value="">empty</option>${S.state.templates.map((t) => `<option value="${esc(t)}">copy of ${esc(t)}</option>`).join('')}</select>
+      <button class="primary">Create</button></form>
+    <h3>From an archive</h3>
+    ${P.file ? `<form id="upForm" class="line"><span class="muted">${esc(P.file.name)}, as</span><input id="upName" value="${esc(P.name)}" ${NAMED}>
+      <button class="primary">Upload</button><button type="button" data-act="nofile">Cancel</button></form>`
+    : `<div class="line"><span class="muted" style="flex:1">A zip that Download made, here or on another Monet. It comes in as a project of its own.</span>
+      <button data-act="pick">Upload an archive…</button></div>`}
+    <input type="file" id="upFile" accept=".zip,application/zip" hidden>
+    <p class="err" id="projectsError"></p>
+    <form method="dialog"><div class="line"><span style="flex:1"></span><button>Close</button></div></form>`;
+}
+async function showProjects() {
+  Object.assign(P, { rows: (await api('/projects')).projects, asking: null, file: null });
+  S.state.projects = P.rows.map((p) => p.name);
+  renderProjects();
+  if (!sheet.open) sheet.showModal();
+}
+$('#project').onclick = () => showProjects().catch((e) => alert(e.message));
+const projectsFailed = (e) => { $('#projectsError').textContent = e.message; };
+sheet.addEventListener('click', async (e) => {
+  const r = sheet.getBoundingClientRect();
+  if (e.target === sheet && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) { sheet.close(); return; }      // beside it
+  const b = e.target.closest('[data-act]'), a = b?.dataset.act;
+  if (!b) {
+    const row = e.target.closest('[data-open]');
+    if (row && !e.target.closest('a, button')) { sheet.close(); open(row.dataset.open, null); }
+    return;
+  }
+  if (a === 'ask' || a === 'keep') { P.asking = a === 'ask' ? b.dataset.name : null; renderProjects(); }
+  if (a === 'pick') $('#upFile').click();
+  if (a === 'nofile') { P.file = null; renderProjects(); }
+  if (a === 'delete') {
+    b.disabled = true;
+    try {
+      await api(`/p/${b.dataset.name}`, 'DELETE');
+      await showProjects();
+      if (b.dataset.name === S.project) await start();      // the one that was open: on to another, where there is one
+    } catch (err) { P.asking = null; renderProjects(); projectsFailed(err); }
+  }
+});
+sheet.addEventListener('change', (e) => {
+  if (e.target.id !== 'upFile' || !e.target.files[0]) return;
+  // named after the file, as far as a project may be named so, and not as one that is there already
+  const stem = e.target.files[0].name.replace(/\.zip$/i, '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^[^a-z0-9]+|-+$/g, '').slice(0, 44) || 'project';
+  let name = stem;
+  for (let k = 2; S.state.projects.includes(name); k++) name = `${stem}-${k}`;
+  Object.assign(P, { file: e.target.files[0], name });
+  renderProjects();
+  $('#upName').select();
+});
+sheet.addEventListener('submit', async (e) => {
+  if (e.target.id !== 'npForm' && e.target.id !== 'upForm') return;      // Close is the dialog's own
+  e.preventDefault();
+  const go = e.target.querySelector('button.primary');
+  go.disabled = true;
+  try {
+    const made = e.target.id === 'npForm' ? await api('/projects', 'POST', { name: $('#npName').value.trim(), template: $('#npTemplate').value })
+      : await api(`/projects/upload?name=${encodeURIComponent($('#upName').value.trim())}`, 'POST', P.file);
+    sheet.close();
+    await start(made.project);
+    if (made.left_out) notice(`${made.left_out} file${made.left_out === 1 ? '' : 's'} in the archive ${made.left_out === 1 ? 'is' : 'are'} not of a project and ${made.left_out === 1 ? 'was' : 'were'} left out`);
+  } catch (err) { go.disabled = false; projectsFailed(err); }
+});
 $('#connect').onclick = () => {
   const agentLink = S.state.agent, dlg = $('#connectDialog'), local = /\/\/(localhost|127\.0\.0\.1)/.test(agentLink);
   dlg.onclose = null;
@@ -1375,11 +1455,10 @@ async function start(project) {
   const mine = S.state.me.username === S.state.workspace.username;
   $('#wsName').textContent = mine ? S.state.me.name : `${S.state.workspace.name} (you are looking in as ${S.state.me.username})`;
   $('#usersLink').hidden = S.state.me.role !== 'admin';
-  $('#project').innerHTML = S.state.projects.map((p) => `<option>${esc(p)}</option>`).join('');
   const [hp, hn] = decodeURIComponent(location.hash.slice(1)).split('/');
   const want = project || (S.state.projects.includes(hp) ? hp : S.state.projects[0]);
   if (want) await open(want, project ? null : hn);
-  else renderPanel(true);
+  else shut();
 }
 
 // follow the agent: when the project moves, look again

@@ -15,6 +15,8 @@ button:hover { background: var(--btn-hover); }
 button.primary { border-color: var(--accent); color: var(--accent); }
 button.primary:hover { background: var(--accent); color: #fff; }
 button.on { border-color: var(--accent); color: var(--accent); }
+button.danger { border-color: var(--err); color: var(--err); }
+button.danger:hover { background: var(--err); color: #1a1f2e; }
 button:disabled { opacity: .45; cursor: default; }
 input, select, textarea { background: var(--bg-body); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; font-size: 12px; min-width: 0; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
@@ -136,6 +138,16 @@ dialog h3 { margin: 16px 0 4px; font-size: 12px; color: var(--accent); text-tran
 dialog code, dialog pre { background: var(--bg-body); border: 1px solid var(--border); border-radius: 4px; }
 dialog code { padding: 1px 5px; }
 dialog pre { padding: 8px; overflow-x: auto; user-select: all; margin: 6px 0; }
+
+/* the projects, in a sheet of their own: a row each, and at its end what can be done with it */
+#project { display: inline-flex; align-items: center; gap: 8px; max-width: 260px; color: var(--text-bright); font-weight: 500; }
+#projectName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.projects { margin: 12px -20px 0; max-height: 44vh; overflow-y: auto; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.projects .item { padding: 7px 20px; }
+.projects .item:hover, .projects .item.asking { background: var(--bg-surface); }
+.projects .item.asking { cursor: default; white-space: normal; }
+.projects .item a { flex: none; }
+#projectsError:empty { display: none; }
 
 /* the start page */
 .start { max-width: 560px; margin: 0 auto; padding: 12vh 20px 40px; }

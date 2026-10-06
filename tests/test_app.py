@@ -400,6 +400,33 @@ def test_what_agents_change_is_written_down(app, admin, client, reg):
     assert next(u for u in admin.get("/api/users").json()["users"] if u["username"] == "mari")["lastAgent"]
 
 
+def test_projects_are_archived_uploaded_and_deleted_by_the_person_only(app, admin, client, reg):
+    rows = {p["name"]: p for p in client.get("/w/mari/api/projects").json()["projects"]}
+    assert set(rows) == {"mg400_rakis", "starter"} and rows["starter"]["version"] >= 1 and rows["mg400_rakis"]["notes"] == 8
+    got = client.get("/w/mari/api/p/starter/archive.zip")
+    assert got.headers["content-type"] == "application/zip" and 'filename="starter.zip"' in got.headers["content-disposition"]
+    zipped = {"content": got.content, "headers": {"content-type": "application/zip"}}
+    assert client.post("/w/mari/api/projects/upload?name=copy", **zipped).json() == {"project": "copy", "left_out": 0}
+    assert client.get("/w/mari/api/p/copy").json()["version"] == rows["starter"]["version"]
+    assert client.post("/w/mari/api/projects/upload?name=copy", **zipped).status_code == 409
+    assert "lowercase" in client.post("/w/mari/api/projects/upload", **zipped).json()["error"]
+    assert "as the body" in client.post("/w/mari/api/projects/upload?name=other", json={}).json()["error"]
+    assert "not a zip" in client.post("/w/mari/api/projects/upload?name=other", content=b"nothing", headers={"content-type": "application/zip"}).json()["error"]
+    # none of it through the agent's door: the key opens no route of the canvas, and there is no such tool
+    agent = f"/w/{reg['id']}"
+    with browser(app) as nobody:
+        assert nobody.delete(f"{agent}/api/p/copy").status_code == 401 and nobody.get(f"{agent}/api/p/copy/archive.zip").status_code == 401
+        assert nobody.post(f"{agent}/api/projects/upload?name=theirs", **zipped).status_code == 401
+        assert nobody.delete("/w/mari/api/p/copy").status_code == 401
+        for tool in ("delete_project", "upload_project", "archive"):
+            assert nobody.post(f"{agent}/agent/{tool}", json={"project": "copy"}).status_code == 404
+    assert client.delete(f"{agent}/api/p/copy").status_code == 404 and "copy" in client.get("/w/mari/api/state").json()["projects"]
+    assert client.delete("/w/mari/api/p/copy").json() == {"deleted": "copy", "projects": ["mg400_rakis", "starter"]}
+    assert client.delete("/w/mari/api/p/copy").status_code == 404 and client.get("/w/mari/api/p/copy").status_code == 404
+    log = admin.get("/api/users").json()["log"]
+    assert [e["project"] for e in log if e["type"] in ("project-upload", "project-delete") and e["user"] == "mari"] == ["copy", "copy"]
+
+
 def test_mcp_door(live, client, reg):
     def rpc(method, params, wid=reg["id"]):
         return live.post(f"/w/{wid}/mcp", json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},

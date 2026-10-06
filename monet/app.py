@@ -27,7 +27,7 @@ from starlette.staticfiles import StaticFiles
 
 from . import __version__, agent, auth, note as notes, tags as tagging
 from .store import Store, now
-from .workspace import EXPORTS, Problem, Workspaces
+from .workspace import EXPORTS, MAX_ARCHIVE, Problem, Workspaces
 
 ROOT = Path(__file__).resolve().parent.parent
 CANVAS = ROOT / "canvas"
@@ -220,6 +220,13 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
     async def body_of(request: Request):
         if request.method not in ("POST", "PUT"):
             return {}
+        if "zip" in request.headers.get("content-type", ""):      # a project as an archive: bytes, and only so many
+            got = bytearray()
+            async for chunk in request.stream():
+                got += chunk
+                if len(got) > MAX_ARCHIVE:
+                    raise Problem(f"that archive is bigger than a project may be ({MAX_ARCHIVE // 1_000_000} MB)", 413)
+            return {"_zip": bytes(got)}
         raw = await request.body()
         if raw and "json" not in request.headers.get("content-type", "json"):
             return {"_raw": raw.decode("utf-8", "replace")}      # a Note sent as plain text
@@ -466,6 +473,27 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         p = ws.create_project(str(body.get("name", "")), str(body.get("template", "")))
         return {"project": p.name}
 
+    def list_projects(_request, ws, _body):
+        return {"projects": ws.listing()}
+
+    def upload_project(request, ws, body):
+        """A project from an archive that was downloaded here, or from another Monet."""
+        if "_zip" not in body:
+            raise Problem("send the archive as the body, with Content-Type: application/zip")
+        p, left_out = ws.import_project(request.query_params.get("name", ""), body["_zip"])
+        store.log(type="project-upload", user=request.state.owner["username"], project=p.name, who=request.state.me["username"])
+        return {"project": p.name, "left_out": left_out}
+
+    def delete_project(request, ws, _body):
+        name = request.path_params["project"]
+        ws.delete_project(name)
+        store.log(type="project-delete", user=request.state.owner["username"], project=name, who=request.state.me["username"])
+        return {"deleted": name, "projects": ws.projects()}
+
+    def archive(request, ws, _body):
+        p = ws.project(request.path_params["project"])
+        return Response(p.archive(), media_type="application/zip", headers={**NO_STORE, "Content-Disposition": f'attachment; filename="{p.name}.zip"'})
+
     def project(request, ws, _body):
         p = ws.project(request.path_params["project"])
         return {**p.status(), "versions": p.versions(), "tolerance": p.tolerance}
@@ -685,8 +713,12 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route("/w/{wid}", canvas),
         Route("/w/{wid}/api/state", api(state)),
         Route("/w/{wid}/api/key", api(new_key), methods=["POST"]),
+        Route("/w/{wid}/api/projects", api(list_projects)),
         Route("/w/{wid}/api/projects", api(new_project), methods=["POST"]),
+        Route("/w/{wid}/api/projects/upload", api(upload_project), methods=["POST"]),
         Route("/w/{wid}/api/p/{project}", api(project)),
+        Route("/w/{wid}/api/p/{project}", api(delete_project), methods=["DELETE"]),
+        Route("/w/{wid}/api/p/{project}/archive.zip", api(archive)),
         Route("/w/{wid}/api/p/{project}/rev", api(rev)),
         Route("/w/{wid}/api/p/{project}/looks", api(looks), methods=["PUT"]),
         Route("/w/{wid}/api/p/{project}/save", api(save), methods=["POST"]),

@@ -124,6 +124,65 @@ def test_a_workspace_is_made_the_first_time_it_is_asked_for(tmp_path):
     assert not (a.dir / "mg400_rakis" / "_verify.py").exists()        # the port's own script is not part of the template
 
 
+def test_a_project_goes_out_and_comes_back_as_an_archive(ws, monkeypatch):
+    """The Notes, their checks, the settings and the saved versions travel; the builds are made again where they land."""
+    import io
+    import zipfile
+    import monet.workspace as w
+
+    def zipped(files):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for name, text in files.items():
+                z.writestr(name, text)
+        return buf.getvalue()
+    p = ws.create_project("packed", "starter")
+    assert p.save("first")["saved"]
+    data = p.archive()
+    held = {n: zipfile.ZipFile(io.BytesIO(data)).read(n) for n in zipfile.ZipFile(io.BytesIO(data)).namelist()}
+    assert {"packed/rod_foot.py", "packed/rod_foot.checks.json", "packed/monet.json", "packed/versions/0001/meta.json",
+            "packed/versions/0001/rod_foot.glb", "packed/versions/0001/rod_foot.fingerprint.json"} <= set(held)
+    assert not any("/out/" in n for n in held)
+    back, left_out = ws.import_project("unpacked", data)
+    assert left_out == 0 and back.files() == p.files() and back.versions() == p.versions() and back.checks("rod_foot") == p.checks("rod_foot")
+    assert not back.out.exists() and back.load_check("rod_foot")["status"] == "green"      # rebuilt here, and the same part
+    assert {"name": "unpacked", "notes": 1, "version": 1, "saved": p.head()["at"]} in ws.listing()
+    with pytest.raises(Problem, match="already a project"):
+        ws.import_project("unpacked", data)
+    # a zip does not say where its files go: what is not of a project is left out, wherever it points
+    loose, left_out = ws.import_project("loose", zipped({"rod_foot.py": SOURCE, "../escape.py": "x = 1", "/tmp/abs.py": "x = 1", "sub/deep.py": "x = 1",
+                                                         "out/rod_foot/result.json": "{}", ".env": "SECRET=1", "__MACOSX/._rod_foot.py": "x"}))
+    assert left_out == 5 and sorted(f.name for f in loose.dir.rglob("*")) == ["monet.json", "rod_foot.py"]
+    assert not (ws.dir / "escape.py").exists() and not (ws.dir.parent / "escape.py").exists()
+    for bad, why in ((b"not a zip", "not a zip"), (zipped({"README.md": "hello"}), "nothing of a project"), (zipped({"monet.json": "[]"}), "not what Monet writes"),
+                     (zipped({k: v for k, v in held.items() if not k.endswith(".glb")}), "version 1 in that archive is not whole"),
+                     (zipped({**held, "packed/versions/0002/rod_foot.py": SOURCE}), "version 2 in that archive is not whole")):
+        with pytest.raises(Problem, match=why):
+            ws.import_project("bad", bad)
+    monkeypatch.setattr(w, "MAX_ARCHIVE", 1000)
+    with pytest.raises(Problem, match="more than a project may be"):
+        ws.import_project("bad", data)
+    with pytest.raises(Problem, match="lowercase"):
+        ws.import_project("../bad", data)
+    assert "bad" not in ws.projects() and not [d.name for d in ws.dir.iterdir() if d.name.startswith(".")]      # nothing half-made is left
+
+
+def test_a_project_is_deleted_whole_but_not_while_it_builds(ws):
+    import time
+    import monet.workspace as w
+    for name in ("unpacked", "loose"):
+        ws.delete_project(name)
+    p = ws.project("packed")
+    w._running[(str(p.dir), "rod_foot")] = time.time()
+    with pytest.raises(Problem, match="being built"):
+        ws.delete_project("packed")
+    w._running.clear()
+    ws.delete_project("packed")
+    assert not {"packed", "unpacked", "loose"} & set(ws.projects()) and not [d.name for d in ws.dir.iterdir() if d.name.startswith(".")]
+    with pytest.raises(Problem, match="no project 'packed'"):
+        ws.delete_project("packed")
+
+
 def test_notes_can_be_built_by_a_runner_elsewhere(project, monkeypatch):
     """Online the web app does not run Notes: it asks the runner (monet/buildd.py), which has the working files only."""
     from starlette.testclient import TestClient
