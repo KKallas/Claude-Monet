@@ -30,7 +30,9 @@ Your tools, in whichever form the harness gives them:
   their canvas under "Connect your agent"), then `python scripts/monet.py status`.
 - **Only the ability to fetch web addresses** (a chat interface with internet access): every tool
   is also a plain HTTPS address, `GET <agent link>/agent/<tool>?arg=value`. Read
-  `<the Monet site>/api` first: it lists every tool.
+  `<the Monet site>/api` first: it lists every tool. A Note is too long for one address, and fetch
+  tools fail on long ones: send it in parts (`write_note` with `upload`, `part`, `of`; a few whole
+  lines per part, every address under about 700 characters), as `/api` shows.
 - **None of these**: ask the user to log in to their Monet site and use "Connect your agent"
   there. It shows the exact addresses for them to give you.
 

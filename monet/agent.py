@@ -7,6 +7,7 @@ a JSON body) for a harness that only has a shell.
 What is deliberately not here: changing or removing a check, acknowledging a load check,
 deleting a Note. Those are the user's, in the canvas.
 """
+import base64
 import inspect
 import json
 import time
@@ -78,13 +79,46 @@ def read_note(c: Caller, project: str, note: str) -> dict:
     return out
 
 
-def write_note(c: Caller, project: str, note: str, source: str) -> dict:
-    """Send the whole source of a Note (one Python file: docstring, PARAMS, TAGS, build()). The server builds it and
-    runs the checks; the answer is the report. `green: true` means it builds, every tag still finds its feature and
-    every check passes. Refused if the load check of the saved Note is red: then stop and tell the user."""
+def _unbase64(text: str) -> str:
+    text = "".join(text.split()).replace("+", "-").replace("/", "_").rstrip("=")
+    try:
+        return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4)).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        raise Problem("source_b64 is not base64 (or base64url) of UTF-8 text")
+
+
+def write_note(c: Caller, project: str, note: str, source: str = "", source_b64: str = "", upload: str = "", part: int = 0, of: int = 0) -> dict:
+    """Send the whole source of a Note (one Python file: docstring, PARAMS, TAGS, build()), as `source` or, where
+    text gets mangled on the way, as `source_b64` (base64 or base64url of it). The server builds it and runs the
+    checks; the answer is the report. `green: true` means it builds, every tag still finds its feature and every
+    check passes. Refused if the load check of the saved Note is red: then stop and tell the user.
+
+    Too long for one request (a fetch tool that fails on long addresses)? Send it in parts: the same call several
+    times, each with `upload` (a short word you make up, a new one for every upload), `part` (1, 2, 3...) and `of`
+    (how many parts in all). Each part's `source` is some whole lines of the file, in order: the server puts a
+    line break between parts. (Parts of `source_b64` are pieces of the one base64 string, cut anywhere.) Parts
+    may arrive in any order, all at once, and again if one failed. Each answer lists what is `missing`; the answer
+    to the part that completes the file is the report, with `written: true`."""
     p = c.ws.project(project)
+    if part or of or upload:
+        got = p.part(note, upload, part, of, source_b64 or source, exact=bool(source_b64))
+        if got.get("done"):      # sent again after the file was put together: here is how that went
+            report = p.report(note) if p.is_note(note) else {"note": note}
+            return {**report, "upload": upload, "written": True, "already": True, "canvas": c.canvas(project, note)}
+        if got["missing"]:
+            return {"note": note, "upload": upload, "written": False, "of": of, "have": got["have"], "missing": got["missing"],
+                    "next": f"send part {', '.join(map(str, got['missing']))} the same way (upload={upload}, of={of}). "
+                            "The Note is written, built and checked when the last one is here: that answer is the report."}
+        source = _unbase64(got["source"]) if source_b64 else got["source"]
+    elif source_b64:
+        source = _unbase64(source_b64)
+    if not source.strip():
+        raise Problem("write_note needs the Note's source (`source`, or `source_b64`)")
     report = p.write(note, source, agent=True)
     report["canvas"] = c.canvas(project, note)
+    if upload:
+        p.uploaded(note, upload)
+        report.update(upload=upload, written=True, parts=of, lines=source.count("\n"))
     return report
 
 
@@ -154,7 +188,7 @@ def selection(c: Caller, project: str) -> dict:
 def add_check(c: Caller, project: str, note: str, what: str, min: float | None = None, max: float | None = None,
               equals: float | bool | None = None, why: str = "", id: str = "") -> dict:
     """Add a check to a Note: a measurement and the range it must stay in. what: volume_cm3, area_cm2, size_x,
-    size_y, size_z, min_x..max_z, solids, fits_bed, or tag.<name>.<measure> such as tag.rod_bore.width,
+    size_y, size_z, min_x..max_z, solids, fits_bed, or tag.NAME.MEASURE (the name of a tag, then one of its measures) such as tag.rod_bore.width,
     tag.rod_bore.through, tag.base.at. Give min and/or max, or equals. why: the rule in the user's words.
     You can add checks; you cannot change or remove one. Propose checks for every rule in the docstring."""
     p = c.ws.project(project)

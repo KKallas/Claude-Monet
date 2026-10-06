@@ -38,6 +38,7 @@ MATERIALS = ("pla", "pom", "aluminium")      # what the canvas can render a part
 BUILD_TIMEOUT = int(os.environ.get("MONET_BUILD_TIMEOUT", "180"))
 BUILD_MEMORY_MB = int(os.environ.get("MONET_BUILD_MEMORY_MB", "0"))     # address space, MB; 0 = no such limit
 MAX_SOURCE = 200_000
+MAX_PARTS = 400      # of a Note that is sent in parts
 
 _locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
@@ -457,6 +458,58 @@ class Project:
             if parsed["error"]:
                 report["warning"] = parsed["error"]
             return report
+
+    def part(self, name: str, upload: str, part: int, of: int, text: str, exact: bool = False) -> dict:
+        """One part of a Note that is too long to send in one request (an agent that can only fetch addresses, and
+        not long ones). Parts come in any order and may come twice; `upload` is a word the sender made up for this
+        one sending of the file, so that parts of an earlier try are never mixed in. Answers {have, missing}, and
+        once every part is here also `source`: the whole file. After uploaded(): {done: True}.
+
+        Parts of text are whole lines, put together with a line break between them; `exact` parts (pieces of one
+        base64 string) are put together as they are."""
+        self._path(name)
+        if not re.match(r"^[A-Za-z0-9_-]{1,40}$", upload or ""):
+            raise Problem("a Note sent in parts needs `upload`: a short word you make up (letters, digits), a new one for every upload")
+        if not 1 <= part <= of <= MAX_PARTS:
+            raise Problem(f"`part` is the number of this part, from 1 to `of`; `of` is how many there are in all (at most {MAX_PARTS})")
+        store = self.out / ".uploads.json"
+        with self.lock:
+            try:
+                uploads = json.loads(store.read_text())
+            except (OSError, json.JSONDecodeError):
+                uploads = {}
+            cur = uploads.get(name)
+            if not cur or cur["upload"] != upload:      # a new sending of this Note: what was held of another is dropped
+                cur = {"upload": upload, "of": of, "exact": exact, "parts": {}}
+            elif cur.get("done"):
+                return {"done": True}
+            elif cur["of"] != of or cur["exact"] != exact:
+                raise Problem(f"upload {upload!r} began as {cur['of']} parts of {'base64' if cur['exact'] else 'text'}: "
+                              "to send it differently, start over with a new word for `upload`")
+            cur["parts"][str(part)] = text
+            if sum(len(t) for t in cur["parts"].values()) > 2 * MAX_SOURCE:
+                raise Problem("that is too long for a Note")
+            have = sorted(int(k) for k in cur["parts"])
+            out = {"have": have, "missing": [k for k in range(1, of + 1) if k not in have]}
+            if not out["missing"]:
+                pieces = [cur["parts"][str(k)] for k in range(1, of + 1)]
+                out["source"] = "".join(pieces) if exact else "\n".join(t.removesuffix("\n").removesuffix("\r") for t in pieces) + "\n"
+            uploads[name] = cur
+            self.out.mkdir(exist_ok=True)
+            store.write_text(json.dumps(uploads))
+            return out
+
+    def uploaded(self, name: str, upload: str) -> None:
+        """The Note of this upload is written: its parts are let go, and it is remembered as done."""
+        store = self.out / ".uploads.json"
+        with self.lock:
+            try:
+                uploads = json.loads(store.read_text())
+            except (OSError, json.JSONDecodeError):
+                return
+            if (uploads.get(name) or {}).get("upload") == upload:
+                uploads[name] = {"upload": upload, "done": True}
+                store.write_text(json.dumps(uploads))
 
     def delete(self, name: str) -> None:
         with self.lock:

@@ -60,7 +60,7 @@ def reg(client):
 def test_the_api_describes_itself(app):
     with browser(app) as nobody:
         text = nobody.get("/api").text
-        assert "agent link" in text and "### write_note" in text and "source_b64" in text and "register" not in text
+        assert "agent link" in text and "### write_note" in text and "source_b64" in text and "upload=k7&part=1&of=3" in text and "<" not in text and "&note" not in text and "register" not in text
         assert nobody.get("/llms.txt").text == text
         v = nobody.get("/api/version").json()
         assert v["license"] == "AGPL-3.0-or-later" and "starter" in v["templates"]
@@ -173,6 +173,47 @@ def test_tools_by_get_with_a_query_string(client, reg):
     assert not r["green"] and [c["id"] for c in r["checks"] if not c["ok"]] == ["tag-pin-diameter"]
     r = client.post(f"{agent}/write_note", params={"project": "starter", "note": "peg"}, content=source, headers={"content-type": "text/plain"}).json()
     assert r["green"]
+
+
+def test_a_note_too_long_for_one_address_is_sent_in_parts(client, reg, admin):
+    """For an agent that can only GET, and not long addresses: parts in any order, twice, and never mixed with
+    those of another try."""
+    agent = f"/w/{reg['id']}/agent"
+    lines = ["from build123d import *", "PARAMS = dict(d=8.0)", "", "def build(p=PARAMS):", "    return Cylinder(p[\"d\"] / 2, 20)"]
+    parts = ["\n".join(lines[:2]), "\n".join(lines[2:4]) + "\n", lines[4]]      # whole lines; a line break at the end or not
+    send = lambda k, text, **more: client.get(f"{agent}/write_note", params={"project": "starter", "note": "parted", "upload": "k7", "part": k, "of": 3, "source": text, **more}).json()
+    r = send(3, parts[2])
+    assert r["written"] is False and r["have"] == [3] and r["missing"] == [1, 2] and "part 1, 2" in r["next"]
+    assert send(3, parts[2])["missing"] == [1, 2]                      # twice does no harm
+    assert send(1, parts[0])["missing"] == [2]
+    assert "parted" not in client.get(f"{agent}/status", params={"project": "starter"}).text      # nothing is written yet
+    r = send(2, parts[1])
+    assert r["written"] is True and r["green"] and r["parts"] == 3 and r["lines"] == 5 and r["measure"]["size_z"] == 20
+    assert client.get(f"{agent}/read_note", params={"project": "starter", "note": "parted"}).json()["source"] == "\n".join(lines) + "\n"
+    again = send(1, parts[0])                                           # the answer got lost: any part again gives the report
+    assert again["written"] is True and again["already"] is True and again["green"]
+    # another upload of the same Note: what was held of an unfinished one is not mixed in
+    other = dict(upload="try2")
+    assert send(1, parts[0], **other)["missing"] == [2, 3]
+    taller = dict(upload="try3")
+    assert send(3, lines[4].replace("20", "30"), **taller)["missing"] == [1, 2]      # try2's part 1 is gone
+    assert send(1, parts[0], **taller)["missing"] == [2]
+    assert send(2, parts[1], **taller)["measure"]["size_z"] == 30
+    # the same in pieces of one base64 string, cut anywhere
+    b64 = base64.urlsafe_b64encode(("\n".join(lines).replace("20", "40") + "\n").encode()).decode()
+    cut = [b64[:7], b64[7:50], b64[50:]]
+    for k in (2, 1):
+        assert client.get(f"{agent}/write_note", params={"project": "starter", "note": "parted", "upload": "b1", "part": k, "of": 3, "source_b64": cut[k - 1]}).json()["written"] is False
+    r = client.get(f"{agent}/write_note", params={"project": "starter", "note": "parted", "upload": "b1", "part": 3, "of": 3, "source_b64": cut[2]}).json()
+    assert r["written"] and r["measure"]["size_z"] == 40
+    # what is wrong is said in words
+    for params, why in (({"part": 1, "of": 2, "source": "x"}, "needs `upload`"), ({"upload": "z", "part": 3, "of": 2, "source": "x"}, "from 1 to `of`"),
+                        ({"upload": "b1x", "part": 1, "of": 0, "source": "x"}, "from 1 to `of`"), ({}, "needs the Note's source")):
+        assert why in client.get(f"{agent}/write_note", params={"project": "starter", "note": "parted", **params}).json()["error"]
+    send(1, "x", upload="w1")
+    assert "began as 3 parts" in client.get(f"{agent}/write_note", params={"project": "starter", "note": "parted", "upload": "w1", "part": 1, "of": 4, "source": "x"}).json()["error"]
+    # the admin's log has a line for every Note written, not for every part
+    assert sum(1 for e in admin.get("/api/users").json()["log"] if e.get("tool") == "write_note" and e.get("note") == "parted") == 3
 
 
 def test_a_mistake_by_get_is_readable_and_by_post_has_its_status(client, reg):

@@ -6,7 +6,6 @@ workspace. In the browser it is /w/<username>, behind the login. Their agent, wh
 log in, comes through /w/<agent key>/agent and /w/<agent key>/mcp: the key is in the link the
 canvas shows them, and it opens only what an agent may do.
 """
-import base64
 import contextlib
 import inspect
 import io
@@ -72,6 +71,11 @@ def coerce(value, annotation):
             return float(value)
         except ValueError:
             raise Problem(f"{value!r} is not a number")
+    if "int" in kind:
+        try:
+            return int(low)
+        except ValueError:
+            raise Problem(f"{value!r} is not a whole number")
     return value
 
 
@@ -101,26 +105,45 @@ is your access to their workspace.
 
 ## 1. Your address
 
-You need the user's **agent link**. It looks like {base}/w/<agent key> and they find it in their canvas under
+You need the user's **agent link**. It looks like {base}/w/AGENT-KEY and they find it in their canvas under
 "Connect your agent" (people are let into an instance by its admin; there is no way to sign up from here). If
 you were not given one, ask for it. Treat it as a password: it is theirs, do not show it to anyone else or put
-it where others can read it. Below, <key> stands for the agent key in that link.
+it where others can read it. Below, KEY stands for the agent key in that link: put the real one in its place.
 
 ## 2. Call tools
 
-    GET  {base}/w/<key>/agent/<tool>?arg=value&arg=value
-    POST {base}/w/<key>/agent/<tool>          with a JSON object of arguments
+    GET  {base}/w/KEY/agent/TOOL?arg=value&arg=value
+    POST {base}/w/KEY/agent/TOOL          with a JSON object of arguments
 
-Both do the same. Answers are JSON. A mistake of yours comes back as {{"error": "what was wrong", "status": 4xx}}:
+Both do the same; the order of the arguments does not matter. (This page puts `note` first on purpose: some
+page readers turn the letters "&not" into another sign.) Answers are JSON. A mistake of yours comes back as {{"error": "what was wrong", "status": 4xx}}:
 by POST with that HTTP status, by GET inside a 200 (so that a fetch tool which hides failed pages still shows it
 to you). Always look for `error` in the answer.
 
 Sending a Note (write_note) needs its whole source. Any of these works:
 
     POST .../agent/write_note   JSON {{"project": "...", "note": "...", "source": "..."}}
-    POST .../agent/write_note?project=...&note=...     with the Python source as the body (Content-Type: text/plain)
-    GET  .../agent/write_note?project=...&note=...&source=<URL-encoded source>
-    GET  .../agent/write_note?project=...&note=...&source_b64=<base64url of the source>
+    POST .../agent/write_note?note=...&project=...     with the Python source as the body (Content-Type: text/plain)
+    GET  .../agent/write_note?note=...&project=...&source=THE-SOURCE-URL-ENCODED
+    GET  .../agent/write_note?note=...&project=...&source_b64=THE-SOURCE-AS-BASE64URL
+
+**If you can only GET, send a Note in parts.** Many fetch tools fail on a long address, without saying why, and
+a Note does not fit in a short one. So cut the file into parts of a few whole lines each, small enough that every
+address stays under about 700 characters after encoding, and fetch one address per part:
+
+    GET .../agent/write_note?note=cube&project=demo&upload=k7&part=1&of=3&source=THE-FIRST-LINES-URL-ENCODED
+    GET .../agent/write_note?note=cube&project=demo&upload=k7&part=2&of=3&source=THE-NEXT-LINES
+    GET .../agent/write_note?note=cube&project=demo&upload=k7&part=3&of=3&source=THE-LAST-LINES
+
+- `upload` is a short word you make up: the same in every part of one upload, a new one for every upload.
+- A part is whole lines, with their indentation. The server puts a line break between parts, so do not end a
+  part in the middle of a line. In the address a line break inside a part is %0A, a space %20, a quote %22.
+- Any order, all at once if your tool can, and again if a fetch failed: sending a part twice does no harm.
+- Each answer says `written: false` and lists what is `missing`. The answer to the part that completes the file
+  has `written: true` and is the report (built, checks, green). If that answer got lost, send any part again:
+  you get the report.
+- If you can run code but only GET: base64url the whole file, cut that string anywhere, and send the pieces as
+  `source_b64` instead of `source`, the same way.
 
 Pictures: `look` answers with `image`, the address of a PNG. Fetch it and look at it.
 Files: `export` answers with `url`, the address of the 3MF / STL / STEP / GLB. Both addresses carry the agent
@@ -129,8 +152,8 @@ key. The `canvas` links in the answers are for the user: they open in a browser,
 Start with `guide` (the Note format, tags, checks, the loop to follow, the rules that are not yours to bend),
 then `status`.
 
-    GET {base}/w/<key>/agent/guide
-    GET {base}/w/<key>/agent/status
+    GET {base}/w/KEY/agent/guide
+    GET {base}/w/KEY/agent/status
 
 ## 3. The rules in one breath
 
@@ -145,8 +168,8 @@ successful save: the history is theirs.
 {chr(10).join(tools)}
 ## Also
 
-- `GET {base}/w/<key>/agent` lists the tools as JSON.
-- MCP (Claude Desktop, Claude Code and others): `{base}/w/<key>/mcp` (streamable HTTP).
+- `GET {base}/w/KEY/agent` lists the tools as JSON.
+- MCP (Claude Desktop, Claude Code and others): `{base}/w/KEY/mcp` (streamable HTTP).
 - What only the person can do, logged in at their canvas: change or remove a check, acknowledge a load check,
   delete a Note. The agent key does not open those.
 - Source: {version()["source"]} ({version()["license"]}).
@@ -600,7 +623,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
     # ---- the agent's door, as plain HTTP ------------------------------------------
     def agent_call(request, ws, body):
         """Any tool, by GET with a query string (for an LLM that can only fetch addresses) or by POST with JSON.
-        A Note can also be the body itself (text/plain), or travel as source_b64 when a query string mangles it."""
+        A Note can also be the body itself (text/plain)."""
         name = request.path_params["tool"]
         fn = agent.TOOLS.get(name)
         args = dict(request.query_params)
@@ -608,18 +631,13 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         args.update(body)
         if raw is not None:
             args["source"] = raw
-        if "source_b64" in args:
-            try:
-                args["source"] = base64.urlsafe_b64decode(args.pop("source_b64") + "==").decode("utf-8")
-            except (ValueError, UnicodeDecodeError):
-                raise Problem("source_b64 is not base64url of UTF-8 text")
         if fn:
             args = {k: coerce(v, inspect.signature(fn).parameters[k].annotation) if k in inspect.signature(fn).parameters else v
                     for k, v in args.items()}
         owner = request.state.owner
         try:
             result, png = agent.call(name, caller(ws, owner, request.headers, request.url.scheme), args)
-            if name not in agent.READ_ONLY:      # what agents changed: for the admin's eye
+            if name not in agent.READ_ONLY and result.get("written", True) and not result.get("already"):      # what agents changed: for the admin's eye
                 store.log(type="agent", user=owner["username"], tool=name, project=args.get("project") or args.get("name"), note=args.get("note"),
                           **({"version": result["version"]} if name == "save" and result.get("saved") else {}))
         except Problem as e:
