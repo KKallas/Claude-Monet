@@ -46,6 +46,14 @@ jobs:
           # the port is knocked on all day: ask again rather than fail on a dropped connection
           for try in $(seq 1 10); do ssh-keyscan -T 10 -H "$DROPLET_HOST" >> ~/.ssh/known_hosts 2>/dev/null; [ -s ~/.ssh/known_hosts ] && break; sleep 4; done
           test -s ~/.ssh/known_hosts
+      - name: Say a new build is on its way
+        if: steps.gate.outputs.go == 'true'
+        # the canvas counts down to it (monet/app.py: coming); the server clears the note when this build comes up.
+        # The time is the droplet's own, the clock the server measures with.
+        run: |
+          for try in $(seq 1 10); do ssh -o ConnectTimeout=20 "${DROPLET_USER:-root}@$DROPLET_HOST" \
+            "printf '{\"commit\": \"%s\", \"since\": %s}\n' $(git rev-parse --short HEAD) \$(date +%s) > /opt/monet/data/coming.json" && exit 0; sleep 4; done
+          echo "::warning::could not leave the note that a build is coming"
       - name: Build, send, restart
         if: steps.gate.outputs.go == 'true'
         run: deploy/push-image.sh "${DROPLET_USER:-root}@$DROPLET_HOST"
@@ -63,6 +71,12 @@ jobs:
           # and the way the service builds them: forked from a process that has the kernel loaded (monet/warm.py)
           on "cd /opt/monet && docker compose exec -T runner python -c \"from pathlib import Path; from monet import workspace as w; r = w.run_build_here(Path('/app/notes/starter'), 'rod_foot', Path('/tmp/smoke-warm')); print('warm' if r['ok'] and 'wall' in r else r)\"" | grep -qx warm
           on "cd /opt/monet && docker compose exec -T runner sh -c 'ls /data 2>/dev/null | wc -l'" | grep -qx 0
+      - name: Take the note back, it is not coming
+        if: failure() && steps.gate.outputs.go == 'true'
+        # only if the note is still this build's (what is running stays what it was)
+        run: |
+          ssh -o ConnectTimeout=20 "${DROPLET_USER:-root}@$DROPLET_HOST" \
+            "grep -qs '\"$(git rev-parse --short HEAD)\"' /opt/monet/data/coming.json && rm -f /opt/monet/data/coming.json; true"
       - name: A look from outside
         if: steps.gate.outputs.go == 'true' && vars.DOMAIN != ''
         run: |

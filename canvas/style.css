@@ -205,3 +205,6 @@ dialog.ask { width: min(420px, 92vw); }      /* the page's own alert and confirm
 /* a newer build is online than the one this page runs */
 .newer { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 950; display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 16px; background: var(--bg-elevated); border: 1px solid var(--accent); border-radius: 6px; box-shadow: 0 8px 28px rgba(0, 0, 0, .5); font-size: 12px; font-weight: 500; color: var(--text-bright); }
 .newer button { background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: 6px 12px; }
+.newer.coming { padding-right: 16px; }
+.newer .track { width: 90px; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.newer .track i { display: block; height: 100%; background: var(--accent); transition: width 1s linear; }

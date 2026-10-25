@@ -2,6 +2,7 @@
 import base64
 import contextlib
 import json
+import time
 
 import pytest
 from starlette.testclient import TestClient
@@ -65,6 +66,25 @@ def test_the_api_describes_itself(app):
         v = nobody.get("/api/version").json()
         assert v["license"] == "AGPL-3.0-or-later" and "starter" in v["templates"]
         assert nobody.get("/skill.zip").status_code == 200 and nobody.get("/healthz").json() == {"ok": True}
+
+
+def test_a_deploy_on_its_way_and_how_long_it_took(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    running = TestClient(create_app(tmp_path / "storage", data)).get("/api/version").json()["commit"]
+    # deploy.yml leaves a note as it starts building; until that build runs, the version says it is coming
+    (data / "coming.json").write_text(json.dumps({"commit": "f00ba47", "since": time.time() - 30}))
+    v = TestClient(create_app(tmp_path / "storage", data)).get("/api/version").json()
+    assert v["coming"]["commit"] == "f00ba47" and v["coming"]["expect"] == 240 and v["coming"]["now"] - v["coming"]["since"] >= 30
+    # a note nobody followed up is forgotten
+    (data / "coming.json").write_text(json.dumps({"commit": "f00ba47", "since": time.time() - 3600}))
+    assert TestClient(create_app(tmp_path / "storage", data)).get("/api/version").json()["coming"] is None
+    # the build it named comes up: it is not coming any more, and the time it took makes the next estimate
+    (data / "coming.json").write_text(json.dumps({"commit": running, "since": time.time() - 200}))
+    assert TestClient(create_app(tmp_path / "storage", data)).get("/api/version").json()["coming"] is None
+    assert not (data / "coming.json").exists() and json.loads((data / "deploys.json").read_text()) == [200]
+    (data / "coming.json").write_text(json.dumps({"commit": "f00ba48", "since": time.time()}))
+    assert TestClient(create_app(tmp_path / "storage", data)).get("/api/version").json()["coming"]["expect"] == 200
 
 
 def test_nothing_of_a_workspace_without_a_login(app, reg):

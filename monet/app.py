@@ -13,6 +13,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import zipfile
 from pathlib import Path
 
@@ -46,6 +47,47 @@ def version() -> dict:
             # AGPL: whoever can reach an instance must be able to reach its source
             "source": os.environ.get("MONET_SOURCE_URL", "https://github.com/KKallas/Claude-Monet"),
             "license": "AGPL-3.0-or-later", "note": os.environ.get("MONET_NOTE", "")}
+
+
+# A deploy on its way: as it starts building, deploy.yml writes data/coming.json, {"commit", "since"}. Until that
+# commit is the one running, /api/version says so, with how long it should take: the middle of the last few deploys,
+# timed here as each one comes up.
+DEPLOY_GUESS = 240      # seconds, until there are deploys to go by
+DEPLOY_STALE = 30 * 60      # a note older than this is a deploy that never came
+
+
+def deploy_times(data: Path) -> list[int]:
+    try:
+        return [int(t) for t in json.loads((data / "deploys.json").read_text())]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def coming(data: Path, running: str) -> dict | None:
+    try:
+        note = json.loads((data / "coming.json").read_text())
+        commit, since = str(note["commit"]), float(note["since"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if commit == running or not 0 <= time.time() - since < DEPLOY_STALE:
+        return None
+    times = sorted(deploy_times(data))
+    return {"commit": commit, "since": since, "expect": times[len(times) // 2] if times else DEPLOY_GUESS, "now": time.time()}
+
+
+def arrived(data: Path, running: str) -> None:
+    """At start: if this is the deploy the note announced, keep how long it took and let the note go."""
+    try:
+        note = json.loads((data / "coming.json").read_text())
+        if note["commit"] != running:
+            return
+        took = time.time() - float(note["since"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    if 0 < took < DEPLOY_STALE:
+        (data / "deploys.json").write_text(json.dumps((deploy_times(data) + [round(took)])[-8:]))
+    with contextlib.suppress(OSError):
+        (data / "coming.json").unlink()
 
 
 class Fresh(StaticFiles):
@@ -194,6 +236,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
     secret = auth.session_secret(store)
     throttle = auth.Throttle()
     info = version()
+    arrived(store.dir, info["commit"])
 
     def caller(ws, owner, headers, scheme="http") -> agent.Caller:
         base = base_url(headers, scheme)
@@ -321,7 +364,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         return page("index.html")
 
     async def get_version(_request: Request):
-        return JSONResponse({**info, "templates": workspaces.template_names()}, headers=NO_STORE)
+        return JSONResponse({**info, "templates": workspaces.template_names(), "coming": coming(store.dir, info["commit"])}, headers=NO_STORE)
 
     async def skill_zip(_request: Request):
         buf = io.BytesIO()

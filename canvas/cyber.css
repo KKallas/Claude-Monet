@@ -170,6 +170,8 @@
 [data-skin="cyber"] .projects .item:hover, [data-skin="cyber"] .projects .item.asking { background: linear-gradient(90deg, rgba(94, 246, 255, .09), transparent 80%); }
 [data-skin="cyber"] .newer { border-radius: 0; background: var(--glass), #07090f; border-color: var(--yellow); color: var(--yellow); text-transform: uppercase; letter-spacing: .1em; }
 [data-skin="cyber"] .newer button { background: var(--yellow); color: #000; }
+[data-skin="cyber"] .newer .track { border-radius: 0; height: 5px; background: rgba(252, 238, 10, .08); }
+[data-skin="cyber"] .newer .track i { background: repeating-linear-gradient(-45deg, var(--yellow) 0 6px, #b8ad00 6px 9px); box-shadow: 0 0 10px rgba(252, 238, 10, .6); }
 
 /* the mark: a black hole turning (hole.js), in front of the name */
 .hole { display: block; flex: none; width: 110px; height: 60px; margin: 0 -12px 0 -12px; }

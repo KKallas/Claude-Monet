@@ -2151,28 +2151,50 @@ setInterval(async () => {
 }, 500);
 window.addEventListener('hashchange', () => { const [p, n] = decodeURIComponent(location.hash.slice(1)).split('/'); if (p && (p !== S.project || (n && n !== S.note))) open(p, n); });
 
-// a page left open over a deploy runs the build it was loaded with: say so, and offer the new one (as Adam Designer does)
-let loadedCommit = null;
+// a page left open over a deploy runs the build it was loaded with. While the next one is being built, the server says
+// so with how long it should take, and a note counts down to it; once it answers, the note becomes the button that
+// loads it (as Adam Designer does)
+let loadedCommit = null, coming = null;
 const versionNow = async () => { try { return await (await fetch('/api/version', { cache: 'no-store' })).json(); } catch { return null; } };
+const newer = () => document.querySelector('.newer') ?? document.body.appendChild(Object.assign(document.createElement('div'), { className: 'newer' }));
 async function lookForNewer() {
-  if (document.hidden || !loadedCommit || document.querySelector('.newer')) return;
-  const commit = (await versionNow())?.commit;
-  if (!commit || commit === loadedCommit || document.querySelector('.newer')) return;
-  const bar = document.createElement('div');
-  bar.className = 'newer';
-  bar.innerHTML = `<span>A newer version of Monet is online (${esc(commit)}): this page is still ${esc(loadedCommit)}.</span>`;
-  const go = document.createElement('button');
-  go.textContent = 'Reload'; go.onclick = () => location.reload();
-  bar.append(go);
-  document.body.append(bar);
+  if (document.hidden || !loadedCommit || document.querySelector('.newer.ready')) return;
+  const v = await versionNow();
+  if (!v) return;      // away: most likely the restart itself
+  if (v.commit && v.commit !== loadedCommit) {
+    coming = null;
+    const bar = newer();
+    bar.className = 'newer ready';
+    bar.innerHTML = `<span>A newer version of Monet is online (${esc(v.commit)}): this page is still ${esc(loadedCommit)}.</span>`;
+    const go = document.createElement('button');
+    go.textContent = 'Update'; go.onclick = () => location.reload();
+    bar.append(go);
+    return;
+  }
+  // its times are the server's clock: only the difference is used, so this page's clock may be off
+  const c = v.coming;
+  coming = c ? { commit: c.commit, start: Date.now() - (c.now - c.since) * 1000, ready: Date.now() + (c.since + c.expect - c.now) * 1000 } : null;
+  if (!coming) document.querySelector('.newer')?.remove();
+  showComing();
 }
+function showComing() {
+  if (!coming) return;
+  const left = Math.round((coming.ready - Date.now()) / 1000), done = Math.min(1, (Date.now() - coming.start) / (coming.ready - coming.start));
+  const at = new Date(coming.ready).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const when = left > 90 ? `ready in about ${Math.round(left / 60)} min, around ${at}` : left > 0 ? `ready in about ${left} s` : 'ready any moment now';
+  const bar = newer();
+  bar.className = 'newer coming';
+  bar.innerHTML = `<span>A new version of Monet is being built (${esc(coming.commit)}): ${when}.</span><span class="track"><i style="width:${(done * 100).toFixed(1)}%"></i></span>`;
+}
+setInterval(showComing, 1000);
 // the build this page runs, beside the name, as in Adam Designer: a link to its source
 versionNow().then((v) => {
   if (!v) return;
   loadedCommit = v.commit;
   $('#chip').innerHTML = `${esc(v.version)} · <a href="${esc(v.source)}" target="_blank" rel="noopener" title="the source: ${esc(v.license)}">${esc(v.commit)}</a>`;
+  // then every minute; every ten seconds while a build is on its way, so the button comes soon after it does
+  (function watch() { lookForNewer().finally(() => setTimeout(watch, coming ? 10_000 : 60_000)); })();
 });
-setInterval(lookForNewer, 60_000);
 document.addEventListener('visibilitychange', lookForNewer);
 
 window.monet = { S, groups, cube, lookAlong, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom,
