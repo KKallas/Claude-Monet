@@ -7,6 +7,7 @@
     monet.py pull <project> [dir]            every Note, with the saved .glb and .fingerprint.json, into dir (default .)
     monet.py push <project> <file.py>...     send Notes; prints each report, exit 1 if any is red
     monet.py look <project> <note> [out.png] [views]
+    monet.py pose <project> <note> "j1=30, j2=-10" [out.png]   an assembly moved: what it hits, and its picture
     monet.py save <project> "message"        then: git add -A && git commit
     monet.py export <project> <note> <3mf|stl|step|glb> [out]
     monet.py tool <name> ['{"json": "arguments"}']    any tool, raw
@@ -81,6 +82,13 @@ def main(argv):
         r = call("look", project=a[0], note=a[1], **({"views": a[3]} if len(a) > 3 else {}))
         with urllib.request.urlopen(r["image"], timeout=600) as img:
             out.write_bytes(img.read())
+        print(out)
+    elif cmd == "pose":
+        out = Path(a[3] if len(a) > 3 else f"{a[1]}-pose.png")
+        r = call("pose", project=a[0], note=a[1], values=a[2] if len(a) > 2 else "")
+        with urllib.request.urlopen(r.pop("image"), timeout=600) as img:
+            out.write_bytes(img.read())
+        show(r)
         print(out)
     elif cmd == "save":
         commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()

@@ -19,8 +19,8 @@
     <b>MONET</b>
     <span class="chip" id="chip"></span>
     <button id="project" title="the projects of this workspace: open one, start one, download, upload or delete"><span id="projectName">no project</span><span class="chev"></span></button>
-    <span class="rooms" title="three places to work: a drawing on a face, one part, the parts put together">
-      <button data-room="sketch">Sketch</button><button data-room="part">Part</button><button data-room="assembly">Assembly</button>
+    <span class="rooms" title="four places to work: a drawing on a face, one part, the parts put together, and how they move">
+      <button data-room="sketch">Sketch</button><button data-room="part">Part</button><button data-room="assembly">Assembly</button><button data-room="motion">Motion</button>
     </span>
     <span class="sp"></span>
     <span class="muted" id="wsName"></span>
@@ -43,7 +43,7 @@
       <div class="fold" data-fold="side-notes"><span class="chev"></span><span class="head">Notes</span></div>
       <div class="body" id="notes"></div>
     </section>
-    <section data-card="side-versions" data-rooms="part assembly">
+    <section data-card="side-versions" data-rooms="part assembly motion">
       <div class="fold" data-fold="side-versions"><span class="chev"></span><span class="head">Versions</span></div>
       <div class="body" id="versions"></div>
     </section>
@@ -76,6 +76,12 @@
         <button id="sketchUndo" title="back to before the last change (Ctrl+Z)"><span class="ico">↶</span>Undo</button>
         <button id="sketchSnap" class="on" title="points line up with the part's corners and land on the 1 mm grid (hold Shift for free)"><span class="ico">⌖</span>Snap</button>
       </div>
+      <div class="rail-sec motion" data-rooms="motion">
+        <div class="rail-title">Motion</div>
+        <button id="poseHome" title="every joint back to 0: the parts as built"><span class="ico">⌂</span>As built</button>
+        <button id="jointNew" title="a joint: which part moves, on which, about or along what"><span class="ico">⟳</span>Joint</button>
+        <button id="groupMake" title="the selected parts move as one: a rigid group"><span class="ico">⛓</span>Group</button>
+      </div>
       <div class="rail-sec tools" data-rooms="part assembly">
         <div class="rail-title">Tools</div>
         <button id="measure" title="measure: click one thing, then another, of any kind. The shortest distance between them is drawn in the view"><span class="ico">⟷</span>Measure</button>
@@ -87,7 +93,7 @@
         </div>
       </div>
     </div>
-    <div class="rail right" id="railRight" data-rooms="part assembly">
+    <div class="rail right" id="railRight" data-rooms="part assembly motion">
       <div class="rail-sec look">
         <div class="rail-title">View</div>
         <select id="style" title="how the part is drawn: with its materials, plainly shaded, or as lines with the hidden ones left out"></select>
@@ -99,16 +105,16 @@
         <button data-sel="vertex" title="select corner points"><span class="ico">•</span>Points</button>
         <button data-sel="edge" title="select edges"><span class="ico">╱</span>Lines</button>
         <button data-sel="face" class="on" title="select faces"><span class="ico">◼</span>Faces</button>
-        <button data-sel="part" data-rooms="assembly" title="select whole objects: the parts of an assembly"><span class="ico">▣</span>Objects</button>
+        <button data-sel="part" data-rooms="assembly motion" title="select whole objects: the parts of an assembly"><span class="ico">▣</span>Objects</button>
       </div>
-      <div class="rail-sec assembly">
+      <div class="rail-sec assembly" data-rooms="part assembly">
         <div class="rail-title">Assembly</div>
         <button id="partColours" class="on" title="every part of the assembly in a colour of its own" hidden><span class="ico">◐</span>Parts</button>
         <span class="rail-label" id="explodeLabel" hidden>Explode</span>
         <input type="range" id="explode" min="0" max="1.5" step="0.01" value="0" title="pull the parts of the assembly apart" hidden>
       </div>
     </div>
-    <div class="view-tools" id="viewTools" data-rooms="part assembly">
+    <div class="view-tools" id="viewTools" data-rooms="part assembly motion">
       <div class="row"><button data-cam="iso" title="home: from the front right, a little above">⌂</button><button data-cam="fit" title="fit to view">Fit</button></div>
       <select id="projection" title="orthographic: sizes stay true across the part, as in a drawing; perspective: near is bigger, as the eye sees it"><option value="ortho">Orthographic</option><option value="perspective">Perspective</option></select>
       <select id="lens" title="the camera's angle of view: narrow is a long lens, wide shows the depth strongly" hidden><option value="15">15°</option><option value="25">25°</option><option value="35" selected>35°</option><option value="50">50°</option><option value="70">70°</option></select>

@@ -123,9 +123,30 @@ def _view(verts, tris, segs, tri_colour, eye, up, size, pad=26):
     return img, scale
 
 
-def png(glb: Path, views=("iso", "top", "front", "right"), size=560, faces=None, highlight=None, title="") -> bytes:
-    """highlight: {tag name: [face indices]}, needs faces (the faces.json list of the same build)."""
+def posed(verts, tris, segs, parts, frames):
+    """The mesh with each part moved by its frame ({part name: 4x4}): an assembly at a pose of its joints. Parts are
+    ranges of the triangles and edges (faces.json); no vertex is shared between parts."""
+    verts, segs = verts.copy(), segs.copy()
+    for part in parts:
+        T = frames.get(part["name"])
+        if T is None or np.allclose(T, np.eye(4)):
+            continue
+        T = np.asarray(T, dtype=np.float64)
+        start, n = part["tris"]
+        idx = np.unique(tris[start:start + n].reshape(-1))
+        verts[idx] = verts[idx] @ T[:3, :3].T + T[:3, 3]
+        if "edges" in part and len(segs):
+            a, m = part["edges"]
+            segs[a:a + m] = segs[a:a + m] @ T[:3, :3].T + T[:3, 3]
+    return verts, segs
+
+
+def png(glb: Path, views=("iso", "top", "front", "right"), size=560, faces=None, highlight=None, title="", parts=None, frames=None) -> bytes:
+    """highlight: {tag name: [face indices]}, needs faces (the faces.json list of the same build). parts and frames:
+    the assembly's parts (faces.json) and where each is moved to ({name: 4x4}), to see it at a pose of its joints."""
     verts, tris, segs = load(glb)
+    if parts and frames:
+        verts, segs = posed(verts, tris, segs, parts, frames)
     colour = np.tile(BODY, (len(tris), 1))
     legend = []
     if faces and highlight:

@@ -9,11 +9,16 @@ checks. Through the agent's door a check can be added, never changed or removed.
     {"id": "one", "what": "solids", "equals": 1}
 
 Measurements: volume_cm3, area_cm2, size_x/y/z, min_x..max_z, com_x/y/z, solids, faces,
-valid, tag.<name>.resolved, tag.<name>.<measure> (lists as tag.<name>.at[0]).
+valid, tag.<name>.resolved, tag.<name>.<measure> (lists as tag.<name>.at[0]); of an assembly
+interference_mm3 (parts overlapping as built), and of each joint joint.<name>.resolved,
+joint.<name>.stop_min / stop_max (where moving it first hits something, each way) and
+joint.<name>.clash_mm3 (the worst new overlap anywhere in its range).
 """
 import json
 import re
 from pathlib import Path
+
+from . import joints
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,47}$")
 
@@ -37,6 +42,7 @@ def measurements(result: dict) -> dict:
                     m[f"tag.{name}.{k}[{i}]"] = x
             else:
                 m[f"tag.{name}.{k}"] = v
+    m.update(joints.measurements(result.get("motion")))
     return m
 
 
@@ -61,7 +67,9 @@ def evaluate(checks: list, result: dict, printer: dict | None = None) -> list:
             row["ok"], row["value"], row["expect"] = _fits_bed(m, c, printer)
         elif what not in m:
             row.update(ok=False, value=None, expect=_expect(c),
-                       note="tag not found on the part" if what.startswith("tag.") else "nothing by that name to measure")
+                       note="tag not found on the part" if what.startswith("tag.")
+                       else "nothing hit within the sweep" if re.match(r"^joint\.[^.]+\.stop_(min|max)$", what)
+                       else "nothing by that name to measure")
         else:
             v = m[what]
             ok = True

@@ -402,7 +402,7 @@ def test_what_agents_change_is_written_down(app, admin, client, reg):
 
 def test_projects_are_archived_uploaded_and_deleted_by_the_person_only(app, admin, client, reg):
     rows = {p["name"]: p for p in client.get("/w/mari/api/projects").json()["projects"]}
-    assert set(rows) == {"mg400_rakis", "starter"} and rows["starter"]["version"] >= 1 and rows["mg400_rakis"]["notes"] == 8
+    assert set(rows) == {"mg400_rakis", "starter"} and rows["starter"]["version"] >= 1 and rows["mg400_rakis"]["notes"] == 9
     got = client.get("/w/mari/api/p/starter/archive.zip")
     assert got.headers["content-type"] == "application/zip" and 'filename="starter.zip"' in got.headers["content-disposition"]
     zipped = {"content": got.content, "headers": {"content-type": "application/zip"}}
@@ -447,3 +447,50 @@ def test_skill_zip(client):
     import io, zipfile
     names = zipfile.ZipFile(io.BytesIO(client.get("/skill.zip").content)).namelist()
     assert "monet/SKILL.md" in names and "monet/scripts/monet.py" in names and "monet/references/tags-and-checks.md" in names
+
+
+LIDBOX = '''"""A box with a lid on a hinge pin, behind the box's back wall."""
+from build123d import *
+
+TAGS = {}
+
+
+def build():
+    base = Pos(3, 0, 0) * Box(34, 40, 10, align=(Align.CENTER, Align.CENTER, Align.MIN))
+    lid = Pos(0, 0, 10) * Box(40, 40, 4, align=(Align.CENTER, Align.CENTER, Align.MIN)) - Pos(-15, 0, 12) * Rot(90, 0, 0) * Cylinder(1, 40)
+    base.label, lid.label = "base", "lid"
+    return Compound(children=[base, lid])
+'''
+
+
+def test_a_joint_made_in_the_canvas_and_a_pose_for_the_agent(client, reg):
+    """The person picks the hinge's hole in Motion: the hole is tagged and the joint turns about it, in one write.
+    What a pose hits is the canvas's to ask and the agent's to look at."""
+    w, h = f"/w/{reg['id']}", f"/w/{reg['name']}"
+    assert client.post(f"{w}/agent/write_note", params={"project": "starter", "note": "lidbox"}, content=LIDBOX, headers={"content-type": "text/plain"}).json()["green"]
+    n = f"{h}/api/p/starter/n/lidbox"
+    hole = next(f for f in client.get(f"{n}/faces.json").json()["faces"] if f["type"] == "cylinder" and f["concave"])
+    report = client.put(f"{n}/joints/hinge", json={"kind": "revolute", "moves": "lid", "on": "base", "face": hole, "range": [0, 120]}).json()
+    assert report["green"], [c for c in report["checks"] if not c["ok"]]
+    hinge = report["motion"]["joints"]["hinge"]
+    assert hinge["resolved"] and abs(hinge["dir"][1]) == 1.0 and hinge["origin"][0] == -15.0 and hinge["origin"][2] == 12.0
+    note = client.get(n).json()
+    assert note["joints"]["hinge"]["axis"] == "hinge_axis" and note["tags"]["hinge_axis"]["kind"] == "round_hole"
+    assert client.put(f"{n}/ground", json={"ground": "base"}).json()["motion"]["ground"] == ["base"]
+    assert "GROUND = \"base\"" in client.get(n).json()["source"]
+
+    # one way the lid lifts off its box, the other it goes into it
+    one, other = (client.post(f"{n}/pose", json={"values": {"hinge": a}}).json()["clashes"] for a in (30, -30))
+    assert sorted([one, other], key=len)[0] == [] and [p[:2] for p in sorted([one, other], key=len)[1]] == [["base", "lid"]]
+    assert client.post(f"{n}/pose", json={"values": {"nope": 1}}).status_code == 400
+
+    # the agent sees the same, with a picture
+    seen = client.get(f"{w}/agent/pose", params={"project": "starter", "note": "lidbox", "values": "hinge=30"}).json()
+    assert seen["values"]["hinge"] == 30 and "pose=hinge%3D30" in seen["image"]
+    png = client.get(seen["image"].split("testserver", 1)[1])
+    assert png.status_code == 200 and png.content[:4] == b"\x89PNG"
+    assert client.get(f"{w}/agent/check", params={"project": "starter", "note": "lidbox"}).json()["motion"]["sweeps"]["hinge"]["clash_mm3"] >= 0
+
+    # and the person takes it away again
+    assert "hinge" not in client.delete(f"{n}/joints/hinge").json()["motion"]["joints"]
+    assert client.put(f"{n}/joints/bad name", json={"kind": "rigid", "moves": "lid", "on": "base"}).status_code == 400

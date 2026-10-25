@@ -1,0 +1,122 @@
+{
+ "source": "https://github.com/Dobot-Arm/MG400_ROS (mg400_description, MIT licence): each link mesh measured in its own URDF frame, mm",
+ "links": {
+  "base": {
+   "urdf_link": "base_link",
+   "bbox": [
+    -95.0,
+    -95.0,
+    0.0,
+    95.0,
+    95.0,
+    113.0
+   ],
+   "volume_cm3": 3620.1,
+   "triangles": 2082
+  },
+  "turret": {
+   "urdf_link": "link1",
+   "bbox": [
+    -76.0,
+    -75.5,
+    -0.0,
+    84.0,
+    79.0,
+    152.0
+   ],
+   "volume_cm3": 1769.5,
+   "triangles": 12328
+  },
+  "upper_rod": {
+   "urdf_link": "link2_1",
+   "bbox": [
+    -19.99,
+    0.0,
+    -22.89,
+    20.12,
+    76.5,
+    185.0
+   ],
+   "volume_cm3": 86.2,
+   "triangles": 11400
+  },
+  "upper_arm": {
+   "urdf_link": "link2_2",
+   "bbox": [
+    -36.27,
+    -0.0,
+    -10.0,
+    10.0,
+    61.0,
+    185.0
+   ],
+   "volume_cm3": 66.2,
+   "triangles": 11370
+  },
+  "forearm_rod": {
+   "urdf_link": "link3_1",
+   "bbox": [
+    -47.97,
+    -9.0,
+    -13.93,
+    184.87,
+    9.0,
+    13.15
+   ],
+   "volume_cm3": 37.5,
+   "triangles": 3820
+  },
+  "elbow": {
+   "urdf_link": "link3_2",
+   "bbox": [
+    -9.99,
+    -0.0,
+    -32.5,
+    77.85,
+    48.0,
+    32.48
+   ],
+   "volume_cm3": 36.5,
+   "triangles": 13388
+  },
+  "wrist": {
+   "urdf_link": "link4_1",
+   "bbox": [
+    -11.0,
+    -5.0,
+    -41.0,
+    88.0,
+    39.0,
+    45.47
+   ],
+   "volume_cm3": 62.9,
+   "triangles": 9284
+  },
+  "forearm": {
+   "urdf_link": "link4_2",
+   "bbox": [
+    -10.0,
+    -1.5,
+    -19.66,
+    184.97,
+    48.5,
+    22.21
+   ],
+   "volume_cm3": 45.3,
+   "triangles": 13698
+  },
+  "tool": {
+   "urdf_link": "link5",
+   "bbox": [
+    -20.0,
+    -20.0,
+    -85.0,
+    20.0,
+    20.0,
+    0.0
+   ],
+   "volume_cm3": 96.5,
+   "triangles": 1314
+  }
+ }
+}

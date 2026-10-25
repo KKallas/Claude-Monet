@@ -70,7 +70,13 @@ wrong:
   against `ARCHIVED` and writes each under that name; it never extracts a zip to a path the
   zip gives. Keep it that way.
 - **A Note is only ever executed in `monet/runner.py`**, in its own process. The server
-  reads Notes with `ast` (`monet/note.py`), so `TAGS` must stay a plain literal.
+  reads Notes with `ast` (`monet/note.py`), so `TAGS`, `JOINTS` and `GROUND` must stay plain literals.
+- **Joints are as-built** (`monet/joints.py`; the canvas's copy is `canvas/motion.js`, and a test
+  holds the two together): 0 is where `build()` puts the parts, a joint only says how they may
+  still move. No solver: a loop is `follows`, a linear sum of other joints. A clash is *new*
+  overlap as a joint moves; what overlaps as built is the interference, reported apart. The
+  server answers what a pose hits from the build's preview mesh (`Project.pose`), never by
+  running the Note.
 - **`skill/monet/` is the single source of the agent's instructions**: the skill zip and the
   `guide` tool both serve it. When behaviour changes, change it there.
 
@@ -88,6 +94,7 @@ uv sync
 uv run monet                      # http://localhost:8000; prints the admin's first link
 uv run pytest                     # about a minute and a half: builds every Note; runs the node tests too
 node --test tests/measure.test.mjs   # the measuring geometry alone
+node --test tests/motion.test.mjs    # where the canvas puts parts at a pose of their joints
 uv run python notes/mg400_rakis/_verify.py     # the port against the Fusion numbers, as a table
 node scripts/shot.mjs http://localhost:8000/w/<id>#starter/rod_foot shot.png   # the canvas in headless Chrome
 ```

@@ -15,7 +15,7 @@ import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import render, tags as tagging
+from . import joints, render, tags as tagging
 from .workspace import EXPORTS, Problem, Workspace
 
 GUIDE = Path(__file__).resolve().parent.parent / "skill" / "monet"
@@ -128,10 +128,37 @@ def check(c: Caller, project: str, note: str) -> dict:
     return c.ws.project(project).report(note)
 
 
-def picture(p, note: str, views: str = "iso,top,front,right", version: str = "draft", tags: bool = True) -> bytes:
-    """The PNG behind look() and behind the picture's own address."""
+def pose_values(values) -> dict:
+    """Joint values as given: {"j1": 30} (JSON), or "j1=30, j2=-10" (a query string)."""
+    if isinstance(values, dict):
+        items = values.items()
+    else:
+        items = []
+        for bit in str(values or "").replace(";", ",").split(","):
+            if bit.strip():
+                k, _, v = bit.partition("=") if "=" in bit else bit.partition(":")
+                items.append((k, v))
+    try:
+        return {str(k).strip(): float(v) for k, v in items}
+    except (TypeError, ValueError):
+        raise Problem(f"joint values are name=number, comma separated, or {{name: number}}; not {values!r}") from None
+
+
+def picture(p, note: str, views: str = "iso,top,front,right", version: str = "draft", tags: bool = True, pose=None) -> bytes:
+    """The PNG behind look() and pose(), and behind the picture's own address."""
     glb = p.model(note, version)
-    faces = highlight = None
+    faces = highlight = parts = frames = None
+    given = pose_values(pose) if pose else None
+    if given:      # an assembly at a pose of its joints: the parts that clash there painted
+        if str(version) != "draft":
+            raise Problem("a pose is shown of the draft only")
+        r, at = p.result(note), p.pose(note, given)
+        described = json.loads((p.out / note / "faces.json").read_text())
+        faces, parts = described["faces"], described["parts"]
+        frames = joints.part_frames(r["motion"], given)
+        span = {q["name"]: range(q["faces"][0], q["faces"][0] + q["faces"][1]) for q in parts}
+        highlight = {f"{a} hits {b}: {v} mm³": [*span[a], *span[b]] for a, b, v in at["clashes"][:6]}
+        tags = False
     if tags and str(version) == "draft":
         r = p.result(note)
         faces = json.loads((p.out / note / "faces.json").read_text())["faces"]
@@ -139,7 +166,8 @@ def picture(p, note: str, views: str = "iso,top,front,right", version: str = "dr
         if not highlight and len(r.get("parts") or []) > 1:    # an assembly: every part in its own colour
             highlight = {q["name"]: list(range(q["faces"][0], q["faces"][0] + q["faces"][1])) for q in r["parts"]}
     names = tuple(v.strip() for v in views.split(",") if v.strip())
-    return render.png(glb, names, faces=faces, highlight=highlight, title=f"{p.name}/{note} ({version})")
+    title = f"{p.name}/{note} ({version})" + (f"  at {', '.join(f'{k} {v:g}' for k, v in given.items())}" if given else "")
+    return render.png(glb, names, faces=faces, highlight=highlight, title=title, parts=parts, frames=frames)
 
 
 def look(c: Caller, project: str, note: str, views: str = "iso,top,front,right", version: str = "draft", tags: bool = True):
@@ -153,6 +181,21 @@ def look(c: Caller, project: str, note: str, views: str = "iso,top,front,right",
     query = urllib.parse.urlencode({"views": views, "v": version, "tags": int(bool(tags)), "r": p.rev[-8:]})
     return {"note": note, "version": str(version), "views": views, "units": "mm, Z up",
             "image": f"{c.base}/file/p/{project}/n/{note}/render.png?{query}"}, png
+
+
+def pose(c: Caller, project: str, note: str, values: str = "", views: str = "iso,front"):
+    """An assembly with its joints moved: what it hits there, and a picture of it. values: the joints moved by hand
+    (read_note() or check() lists them under motion.joints; a joint with `follows` is worked out from the others),
+    as "j1=30, j2=-10" or {"j1": 30}: degrees for a revolute joint, mm for a slider, 0 is as built. Returns every
+    joint's value, the pairs of parts that newly overlap (mm³; what overlapped as built already is under
+    motion.interference) and the picture, those parts painted. Each joint's own sweep, where it first hits each
+    way, is in check()'s motion.sweeps."""
+    p = c.ws.project(project)
+    given = pose_values(values)
+    out = p.pose(note, given)
+    png = picture(p, note, views, "draft", False, given)
+    query = urllib.parse.urlencode({"views": views, "pose": ",".join(f"{k}={v:g}" for k, v in given.items()), "r": p.rev[-8:]})
+    return {"note": note, **out, "image": f"{c.base}/file/p/{project}/n/{note}/render.png?{query}"}, png
 
 
 def selection(c: Caller, project: str) -> dict:
@@ -189,7 +232,8 @@ def add_check(c: Caller, project: str, note: str, what: str, min: float | None =
               equals: float | bool | None = None, why: str = "", id: str = "") -> dict:
     """Add a check to a Note: a measurement and the range it must stay in. what: volume_cm3, area_cm2, size_x,
     size_y, size_z, min_x..max_z, solids, fits_bed, or tag.NAME.MEASURE (the name of a tag, then one of its measures) such as tag.rod_bore.width,
-    tag.rod_bore.through, tag.base.at. Give min and/or max, or equals. why: the rule in the user's words.
+    tag.rod_bore.through, tag.base.at. Of an assembly with joints: interference_mm3, joint.NAME.stop_min / stop_max
+    (where moving that joint first hits something) and joint.NAME.clash_mm3 (the worst new overlap within its range). Give min and/or max, or equals. why: the rule in the user's words.
     You can add checks; you cannot change or remove one. Propose checks for every rule in the docstring."""
     p = c.ws.project(project)
     added = p.add_check(note, {"id": id, "what": what, "min": min, "max": max, "equals": equals, "why": why}, by="agent")
@@ -240,9 +284,9 @@ def export(c: Caller, project: str, note: str, format: str = "3mf", version: str
             "bytes": path.stat().st_size, "format": format, "mime": EXPORTS[format]}
 
 
-TOOLS = {f.__name__: f for f in (guide, status, new_project, read_note, write_note, check, look, selection, add_check,
+TOOLS = {f.__name__: f for f in (guide, status, new_project, read_note, write_note, check, look, pose, selection, add_check,
                                  load_check, save, versions, diff, export)}
-READ_ONLY = {"guide", "status", "read_note", "check", "look", "selection", "load_check", "versions", "diff", "export"}
+READ_ONLY = {"guide", "status", "read_note", "check", "look", "pose", "selection", "load_check", "versions", "diff", "export"}
 
 
 def call(name: str, caller: Caller, args: dict):

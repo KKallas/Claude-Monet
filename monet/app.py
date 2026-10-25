@@ -25,7 +25,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Redire
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import __version__, agent, auth, note as notes, tags as tagging
+from . import __version__, agent, auth, joints as joint_rules, note as notes, tags as tagging
 from .store import Store, now
 from .workspace import EXPORTS, MAX_ARCHIVE, Problem, Workspaces
 
@@ -527,6 +527,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         source = p.read(name)
         parsed = notes.parse(source)
         out = {"note": name, "source": source, "doc": parsed["doc"], "params": parsed["params"], "tags": parsed["tags"],
+               "joints": parsed["joints"], "ground": parsed["ground"],
                "is_note": parsed["is_note"]}
         if parsed["is_note"]:
             out["report"] = p.report(name)
@@ -563,7 +564,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
     def picture(request, ws, _body):
         p, name = note_of(request, ws)
         q = request.query_params
-        png = agent.picture(p, name, q.get("views", "iso,top,front,right"), q.get("v", "draft"), q.get("tags", "1") not in ("0", "false"))
+        png = agent.picture(p, name, q.get("views", "iso,top,front,right"), q.get("v", "draft"), q.get("tags", "1") not in ("0", "false"), q.get("pose") or None)
         return Response(png, media_type="image/png", headers=NO_STORE)
 
     def put_tag(request, ws, body):
@@ -620,6 +621,57 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         current = notes.parse(p.read(name))["tags"]
         current.pop(request.path_params["tag"], None)
         return p.set_tags(name, current)
+
+    def put_joint(request, ws, body):
+        """A joint made or changed in Motion: it goes into the Note's JOINTS, in place of one of that name."""
+        p, name = note_of(request, ws)
+        which = request.path_params["joint"]
+        if not re.match(r"^[A-Za-z][A-Za-z0-9_]{0,39}$", which):
+            raise Problem("a joint's name is letters, digits and underscores")
+        source = p.read(name)
+        parsed = notes.parse(source)
+        current = dict(parsed["joints"] or {})
+        if request.method == "DELETE":
+            current.pop(which, None)
+            return p.set_joints(name, current)
+        if body.get("face"):        # the axis picked in the view: the face is tagged (or its tag used), the joint turns about it
+            try:
+                selector = tagging.propose(body["face"])
+            except (KeyError, TypeError, ValueError) as e:
+                raise Problem(f"that face cannot be an axis: {e}")
+            if selector["kind"] not in ("round_hole", "boss", "planar_face"):
+                raise Problem("an axis is a round hole, a boss or a flat face")
+            tags = dict(parsed["tags"] or {})
+            same = next((k for k, t in tags.items() if {x: y for x, y in t.items() if x != "role"} == selector), None)
+            if same is None:
+                same = f"{which}_axis"
+                tags[same] = {**selector, "role": f"the axis of the joint {which}"}
+                source = notes.set_tags(source, tags)
+            body = {**body, "axis": same}
+        try:
+            current[which] = joint_rules.clean(body)
+        except ValueError as e:
+            raise Problem(f"that is not a joint: {e}")
+        with p.lock:
+            return p.write(name, notes.set_joints(source, current))
+
+    def put_ground(request, ws, body):
+        """What stays put: a part or a rigid group, or several."""
+        p, name = note_of(request, ws)
+        ground = body.get("ground")
+        if not (isinstance(ground, str) and ground) and not (isinstance(ground, list) and all(isinstance(g, str) and g for g in ground)):
+            raise Problem("ground is a body's name, or a list of them")
+        return p.set_joints(name, notes.parse(p.read(name))["joints"] or {}, ground)
+
+    def pose(request, ws, body):
+        """What the parts hit with the joints at these values; free parts where the page has dragged them."""
+        p, name = note_of(request, ws)
+        try:
+            given = {str(k): float(v) for k, v in (body.get("values") or {}).items()}
+            free = {str(k): [[float(x) for x in row] for row in m] for k, m in (body.get("free") or {}).items()}
+        except (TypeError, ValueError, AttributeError):
+            raise Problem("values is {joint: number}; free is {body: 4x4 rows}")
+        return p.pose(name, given, free)
 
     def add_check(request, ws, body):
         p, name = note_of(request, ws)
@@ -747,6 +799,9 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route(n + "/tags", api(put_tag), methods=["POST"]),
         Route(n + "/tags/{tag}", api(delete_tag), methods=["DELETE"]),
         Route(n + "/planes/{plane}", api(move_plane), methods=["PUT"]),
+        Route(n + "/joints/{joint}", api(put_joint), methods=["PUT", "DELETE"]),
+        Route(n + "/ground", api(put_ground), methods=["PUT"]),
+        Route(n + "/pose", api(pose), methods=["POST"]),
         Route(n + "/checks", api(add_check), methods=["POST"]),
         Route(n + "/checks/{check}", api(put_check), methods=["PUT", "DELETE"]),
         Route(n + "/ack", api(acknowledge), methods=["POST"]),

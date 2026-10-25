@@ -17,6 +17,7 @@ dependencies = [
     "mcp",
     "httpx",
     "segno>=1.6.6",
+    "manifold3d>=3.5.4",
 ]
 
 [project.scripts]

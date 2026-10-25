@@ -1,7 +1,8 @@
 """The Note: one Python file per part.
 
 Read here statically (ast): the docstring is the intent, PARAMS the numbers people
-change, TAGS the named features, build() the geometry. A Note is only ever *run* in
+change, TAGS the named features, build() the geometry; in an assembly, JOINTS and GROUND
+say how its parts may still move (monet/joints.py). A Note is only ever *run* in
 the runner subprocess, never imported into the server.
 """
 import ast
@@ -20,7 +21,7 @@ def _literal(node):
 
 def parse(source: str) -> dict:
     """What a Note says about itself, without running it."""
-    out = {"doc": "", "params": {}, "tags": {}, "is_note": False, "error": None}
+    out = {"doc": "", "params": {}, "tags": {}, "joints": {}, "ground": None, "is_note": False, "error": None}
     try:
         tree = ast.parse(source)
     except SyntaxError as e:
@@ -40,6 +41,11 @@ def parse(source: str) -> dict:
                     # user tags a face in the canvas, so they have to be readable without running anything
                     if name == "TAGS":
                         out["error"] = "TAGS must be a plain literal (no expressions): it is read and rewritten without running the Note"
+            elif name in ("JOINTS", "GROUND"):
+                try:
+                    out[name.lower()] = _literal(node.value)
+                except (ValueError, TypeError, SyntaxError):
+                    out["error"] = f"{name} must be a plain literal (no expressions): it is read and rewritten without running the Note"
     return out
 
 
@@ -60,19 +66,37 @@ def format_tags(tags: dict) -> str:
     return "TAGS = {\n" + rows + "}"
 
 
-def set_tags(source: str, tags: dict) -> str:
-    """The Note with its TAGS replaced. Everything else stays as written."""
+def _replace(source: str, name: str, block: list) -> str:
+    """The Note with the assignment to `name` replaced by these lines (put in before build() where there is none)."""
     tree = ast.parse(source)
     lines = source.splitlines()
-    block = format_tags(tags).splitlines()
     for node in tree.body:
-        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "TAGS" for t in node.targets):
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
             lines[node.lineno - 1:node.end_lineno] = block
             break
     else:
         at = next((n.lineno - 1 for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "build"), len(lines))
         lines[at:at] = block + ["", ""]
     return "\n".join(lines) + "\n"
+
+
+def set_tags(source: str, tags: dict) -> str:
+    """The Note with its TAGS replaced. Everything else stays as written."""
+    return _replace(source, "TAGS", format_tags(tags).splitlines())
+
+
+def format_joints(joints: dict) -> str:
+    if not joints:
+        return "JOINTS = {}"
+    rows = "".join(f"    {json.dumps(k)}: {_lit(v)},\n" for k, v in joints.items())
+    return "JOINTS = {\n" + rows + "}"
+
+
+def set_joints(source: str, joints: dict, ground=None) -> str:
+    """The Note with its JOINTS (and GROUND) replaced. Everything else stays as written."""
+    if ground is not None:
+        source = _replace(source, "GROUND", [f"GROUND = {_lit(ground)}"])
+    return _replace(source, "JOINTS", format_joints(joints).splitlines())
 
 
 def imports(source: str) -> set:

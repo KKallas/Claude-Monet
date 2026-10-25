@@ -134,6 +134,10 @@ asks to drop it: it is theirs.
 | `solids` | number of separate solids (a printed part should be 1) |
 | `fits_bed` | fits the project printer's bed lying flat, either way round; no min/max needed |
 | `tag.<name>.<measure>` | any measurement of a tag: `tag.rod_bore.width`, `tag.rod_bore.through` (use `equals: true`), `tag.base.at`, `tag.bore.at[0]` |
+| `interference_mm3` | an assembly: how much its parts overlap as built, all pairs together |
+| `joint.<name>.resolved` | the joint finds its parts and its axis |
+| `joint.<name>.stop_min`, `stop_max` | moving that joint alone, where it first hits something, each way (degrees or mm; past the range too) |
+| `joint.<name>.clash_mm3` | the worst new overlap anywhere inside the joint's range: max 1 says it moves its whole range freely |
 
 Always present, without being asked for: every tag must resolve, and the solid must be valid.
 
@@ -147,6 +151,9 @@ Good checks come straight from the rules in the docstring:
 | "printable on a 256 x 256 bed" | `fits_bed` |
 | "one piece" | `solids` equals 1 |
 | "no more than 60 g of PLA" (1.24 g/cm³) | `volume_cm3` max 48 |
+| "the lid opens to 110° without hitting anything" | `joint.lid.clash_mm3` max 1 |
+| "the top slides 79 mm, then stops on the brackets" | `joint.slide.stop_min` min -79.05 max -78.95 |
+| "the parts do not overlap" | `interference_mm3` max 1 |
 
 Rules that cannot be measured yet (maximum solid thickness, overhang angles, minimum wall): say
 so to the user rather than inventing a check that sounds like it covers them.

@@ -113,7 +113,34 @@ def build(p=PARAMS):
     return part.part
 ```
 
-An **assembly** is just another Python file that imports Notes and places them.
+An **assembly** is just another Python file that imports Notes and places them. It can say how
+its parts still move from there, with `JOINTS` and `GROUND`: plain literals beside `TAGS`, read
+and rewritten without running the Note.
+
+```python
+GROUND = "rails"
+JOINTS = {
+    "rails": {"kind": "rigid", "parts": ["L_back_pos", "L_front_pos", "pipe_long_pos"]},   # these move as one
+    "slide": {"kind": "slider", "moves": "top", "on": "rails", "axis": "pipe_tunnel", "range": [-79, 0]},
+    "lid": {"kind": "revolute", "moves": "lid", "on": "box", "axis": "hinge_pin", "range": [0, 110]},
+    "rod": {"kind": "revolute", "moves": "rod", "on": "crank", "axis": "rod_pin", "follows": {"lid": -1}},
+}
+```
+
+Every joint is an *as-built* joint: 0 is where `build()` put the parts, so nothing is snapped
+together and nothing is solved. A joint turns or slides about an axis taken from a tag (so it
+follows the geometry when it changes) or given as origin and direction. A part no joint names is
+free; `GROUND` never moves. The joints form a tree from the ground; a loop (a parallelogram, a
+four-bar, gears) is written as `follows`: the follower's value is a sum of other joints' values
+times factors. The MG400 robot arm (`notes/mg400_rakis/mg400.py`) is built so, two
+parallelograms and all, and moves to the hundredth of a millimetre as Dobot's own robot
+description says (`reference/mg400/`, tested at six poses).
+
+Every build of an assembly also measures where its parts **overlap as built**, and moves each
+joint alone through its range and past it: where it first hits something each way, and the worst
+new overlap inside its range. Those are numbers a check can hold (`joint.slide.stop_min`,
+`joint.lid.clash_mm3`, `interference_mm3`). Meshes in, volumes out: the parts' own preview
+meshes, intersected with [manifold3d](https://github.com/elalish/manifold), about 3 ms a pose.
 **Git** is the history, and it lives with the user: the agent keeps the Notes in a local
 folder and commits after every successful save. The server keeps each save as a numbered
 version (the sources, and per Note a GLB and a fingerprint) so versions can be opened,
@@ -121,9 +148,9 @@ compared and exported.
 
 ### Canvas: the browser view
 
-Three places to work, as tabs: **Sketch** (a drawing on a face), **Part** (one object) and
-**Assembly** (objects put together). Opening an assembly goes to Assembly, opening one of its
-parts goes to Part, starting a drawing goes to Sketch.
+Four places to work, as tabs: **Sketch** (a drawing on a face), **Part** (one object),
+**Assembly** (objects put together) and **Motion** (how they move). Opening an assembly goes to
+Assembly, opening one of its parts goes to Part, starting a drawing goes to Sketch.
 
 - Orbit, section plane and X-ray, to see inside parts (tunnels, pockets, cable channels).
 - **Three ways to draw the part**: *Rendered* with its material, *Shaded* plainly (an assembly
@@ -173,6 +200,14 @@ parts goes to Part, starting a drawing goes to Sketch.
 - **Assembly**: a Note that puts other Notes together is shown as what it is: every part
   in its own colour or material, a parts list (hide one, show only one, open its Note), and
   an Explode slider that pulls the parts apart.
+- **Motion**: the joints of an assembly, as in Fusion. Drag a part and it moves only as its
+  joint lets it, round its axis or along it, up to the ends of its range; a free part goes
+  anywhere. Every joint moved by hand has a slider and ▶, which moves it back and forth through
+  its range; the joints that follow it go with it. What a pose runs into turns red, and the panel
+  says which parts and by how much; what overlaps as built is listed apart, with each joint's
+  stops. Make a joint by selecting the moving part and the hole, boss or face to turn about or
+  slide along (it is tagged for the joint), group parts that move as one, lock a joint, choose
+  the ground: all of it written into the Note's `JOINTS`.
 
 Candidate starting point: [yet-another-cad-viewer](https://github.com/yeicor-3d/yet-another-cad-viewer),
 which already shows build123d models in the browser with face, edge and vertex
@@ -233,12 +268,14 @@ What actually decides whether a jig works, kept as data the agent must respect:
 ## Layout
 
 ```
-monet/        note.py        read a Note without running it; rewrite its TAGS
+monet/        note.py        read a Note without running it; rewrite its TAGS and JOINTS
               runner.py      the one place a Note is executed: its own process, a time limit;
                              writes the preview GLB and what the parts of an assembly are
               warm.py        what a build needs, loaded once: builds are forked from a process that
                              has the CAD kernel in it already, instead of loading it every time
               tags.py        find tagged features on a build (planar faces, square and round holes)
+              joints.py      an assembly's joints found on a build: where each part is at a pose,
+                             what moving a joint hits (manifold3d), what overlaps as built
               feynman.py     the checks
               semmelweis.py  fingerprint + load check
               diff.py        distance colour maps between two versions
@@ -250,7 +287,9 @@ monet/        note.py        read a Note without running it; rewrite its TAGS
               agent.py       the agent's tools, served over MCP and over plain HTTP
               app.py         the web app (Starlette): logins, canvas API, agent door, /api for LLMs
 canvas/       the browser view (three.js), no build step:
-              canvas.js      the page: the three areas, selection, panels, compare
+              canvas.js      the page: the four areas, selection, panels, compare, Motion
+              motion.js      where the parts are at a pose of the joints (tested in node, and
+                             against joints.py)
               measure.js     shortest distances and angles (plain arrays; tested in node)
               look.js        the styles and materials, printed PLA
               sketch.js      drawing on a plane
@@ -259,7 +298,8 @@ profiles/     printer and material profiles
 notes/        templates a new workspace starts with: starter, mg400_rakis
 skill/monet/  the skill for Claude: how to work in Monet (also served as /skill.zip and by guide())
 deploy/       Dockerfile's companions: compose, Caddy, droplet setup (docs/SETUP-ONLINE.md)
-reference/    material from the Fusion prototype (see below)
+reference/    material from the Fusion prototype (see below); mg400/: Dobot's robot description
+              (URDF, MIT licence) and the sizes of its links, what the MG400 Note is held to
 tests/        pytest: the core, every Note, the Fusion acceptance numbers, both agent doors
 ```
 
@@ -289,8 +329,15 @@ machine to, and back up `storage/` if the work matters. A sandbox per build is t
 - Tag kinds: flat faces, square and round holes, bosses, edges, points, objects, groups,
   planes, sketches and single sketch lines. No slots or patterns yet; a curved face is only found by a point near it.
 - Checks that need more geometry than a fingerprint: minimum wall, maximum solid
-  thickness, overhangs, interference between the parts of an assembly (in the sample the
-  nest's mouse ears overlap their neighbours by about 55 mm³ each; nothing reports it yet).
+  thickness, overhangs. (Overlap between the parts of an assembly is measured now: in the
+  sample the nest's snap-off mouse ears overlap the first grid tiles by 59.7 mm³ and the back
+  L brackets by 53.7 mm³ each.)
+- Motion: joints are rigid, revolute and slider; no cylindrical, pin-slot, planar or ball yet.
+  A loop is written as `follows` (linear), never solved: a toggle clamp or a four-bar whose
+  links do not stay parallel needs a solver. A sweep moves one joint at a time, the others as
+  built: no studies of several joints in steps (keyframes), no clearance (smallest distance)
+  or reach checks, no traced path of a point. Free parts dragged in the canvas are not saved.
+  A joint's axis drawn in the view is the only gizmo: no arrows to drag.
 - Canvas: Series (versions side by side), section caps, screen-space reflections (Adam
   Designer has them on WebGPU). A sketch's points cannot be dragged yet: remove a curve
   and draw it again. Dimensions and constraints in a sketch. Offsetting an outline that has

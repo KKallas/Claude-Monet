@@ -7,6 +7,12 @@ Rules
 - the long pipes tie each nest half to the grid; the dowels join the grid halves across y = 0
 - the table is 700 mm deep along the pipes: back edge at x = 163.5, front edge at x = -536.5
 - children carry the body names of the Fusion model (label)
+
+Motion
+- the L brackets clamp to the table and hold the long pipes: together they are the rails, and they stay put
+- the nest halves, the grid tiles and the dowels are one rigid top that slides along the pipes
+- as built the back L brackets butt against the nest; the top can slide 79 mm forward before the
+  grid meets the front L brackets (the table is 700 mm deep, the top 621 mm)
 """
 from build123d import *
 from rakis_common import P, levels
@@ -14,7 +20,17 @@ import nest_back, nest_front, grid_pos_0, grid_pos_1, grid_neg_0, grid_neg_1, l_
 
 PARAMS = dict(P)
 
-TAGS = {}
+TAGS = {
+    "pipe_tunnel": {"kind": "square_hole", "axis": "X", "size": 16.4, "at": [110.51, -6.92], "role": "the tunnel the +Y long pipe runs in: the top slides along it"},
+}
+
+GROUND = "rails"
+
+JOINTS = {
+    "rails": {"kind": "rigid", "parts": ["L_back_pos", "L_back_neg", "L_front_pos", "L_front_neg", "pipe_long_pos", "pipe_long_neg"]},
+    "top": {"kind": "rigid", "parts": ["nest_back", "nest_front", "grid_pos_0", "grid_pos_1", "grid_neg_0", "grid_neg_1", "pipe_dowel_0", "pipe_dowel_1"]},
+    "slide": {"kind": "slider", "moves": "top", "on": "rails", "axis": "pipe_tunnel", "range": [-79.0, 0.0]},
+}
 
 
 def build(p=PARAMS):

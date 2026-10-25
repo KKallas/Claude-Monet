@@ -10,6 +10,7 @@ import { angle, closest } from './measure.js';
 import { MATERIALS, STYLES, createLook } from './look.js';
 import { EDITING, basis, createSketcher, describe as curveWords, frameOf, outline, strokes } from './sketch.js';
 import { lengthOf } from './sketch2d.js';
+import { IDENTITY, apply, bodyOf, drivers, frames as poseFrames, handle, span, values as jointValues } from './motion.js';
 import { createNavCube } from './navcube.js';
 
 const $ = (s) => document.querySelector(s);
@@ -27,7 +28,7 @@ const tell = (text) => ask(text, { no: null });
 const wid = location.pathname.split('/')[2];
 const root = `/w/${wid}/api`;
 const PALETTE = ['#e26f28', '#2896c8', '#3caa5a', '#be46aa', '#d2aa1e', '#5a64dc', '#dc4650', '#14a096'];
-const BASE = new THREE.Color('#b9c2d6'), PICK = new THREE.Color('#ffd23f');
+const BASE = new THREE.Color('#b9c2d6'), PICK = new THREE.Color('#ffd23f'), CLASHED = new THREE.Color('#ff3b30');
 // an assembly: every part in a colour of its own, quiet enough that a tag or a pointed-at face still stands out
 const PARTS = ['#8fa8d6', '#d6a58f', '#9cc7a4', '#c9a3d0', '#d4c58a', '#8fc7cf', '#d49aa8', '#a9b0e0', '#b8cf94', '#e0b48a', '#9fb8b0', '#c7b1a0'];
 
@@ -53,7 +54,9 @@ function curveOf(id) {
 // what is on screen
 const S = { state: null, project: null, proj: null, note: null, data: null, faces: [], parts: [], edges: [], points: [], hotPart: null, hidden: new Set(),
   room: 'part', lastPart: null, lastAssembly: null, sketchName: '', sketchRole: '',
-  mode: 'face', sel: nothing(), boxTool: false, measuring: false, inspect: null, point: null, hot: null, tagSel: null, rev: null, compare: null, message: '', saveResult: null };
+  mode: 'face', sel: nothing(), boxTool: false, measuring: false, inspect: null, point: null, hot: null, tagSel: null, rev: null, compare: null, message: '', saveResult: null,
+  // Motion: the joints moved by hand and their values, free parts dragged somewhere, what that hits, the joint being made or changed
+  pose: {}, freePose: {}, clash: [], edit: null, hotJoint: null, playing: null };
 
 // ---- the 3D view -------------------------------------------------------------------------------------
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);   // millimetres, Z up, as in the Notes
@@ -120,6 +123,9 @@ scene.add(holo);
 // the sketches of the part: what the user drew on its faces, always in sight
 const drawn = new THREE.Group();
 scene.add(drawn);
+// in Motion, the axis of the joint pointed at: a line through the part, the dot at its end the positive way
+const axes = new THREE.Group();
+scene.add(axes);
 // the planes of the part, shown where one is chosen to draw on: Front, Top and Left through its origin are always
 // there; the others are planes the user put on faces (tags of kind "plane")
 const sheets = new THREE.Group();
@@ -207,7 +213,7 @@ function dress() {
 function resize() {
   const w = view.clientWidth, h = view.clientHeight;
   renderer.setSize(w, h, false);
-  for (const o of [selLines, dimLine, ...holo.children, ...drawn.children, ...sheets.children]) o.material.resolution?.set(w, h);
+  for (const o of [selLines, dimLine, ...holo.children, ...drawn.children, ...sheets.children, ...axes.children]) o.material.resolution?.set(w, h);
   for (const m of neonMaterials) m.resolution.set(w, h);
   sketch.resize();
   const half = radius * 1.2, aspect = w / Math.max(1, h);
@@ -249,7 +255,10 @@ function lookFrom(name) {
 }
 
 function frame(object, keepCamera) {
-  if (object === groups.part) for (const one of object.children) one.position.set(0, 0, 0);   // measured put together; spread() follows
+  if (object === groups.part) {      // measured put together and as built; spread() follows
+    for (const one of object.children) { one.position.set(0, 0, 0); one.quaternion.identity(); one.updateMatrix(); }
+    object.updateMatrixWorld(true);
+  }
   box.setFromObject(object);
   if (box.isEmpty()) return;
   box.getSize(size); box.getCenter(centre);
@@ -334,16 +343,28 @@ function assemble({ mesh, lines }) {
 
 const ZERO = new THREE.Vector3();
 const offsetOf = (part) => groups.part.children[part]?.position ?? ZERO;   // where an exploded part has gone
+const v3 = new THREE.Vector3();
+// where a point of a part is in the view: moved with the part, pulled out of the assembly or turned on its joint
+const placed = (part, x, y, z) => { const m = groups.part.children[part]?.matrix; v3.set(x, y, z); if (m) v3.applyMatrix4(m); return [v3.x, v3.y, v3.z]; };
 
-// pull the parts away from the middle of the assembly, each along its own direction
+// pull the parts away from the middle of the assembly, each along its own direction; in Motion, put each where its
+// joints have it
+const posed = new THREE.Matrix4(), ONE = new THREE.Vector3(1, 1, 1);
 function spread() {
+  const at = moving() ? partPose() : null;
   for (const one of groups.part.children) {
-    const b = S.parts[one.userData.part]?.bbox;
-    if (b) one.position.set((b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2).sub(home).multiplyScalar(explode);
+    const q = S.parts[one.userData.part], b = q?.bbox;
+    if (at?.[q?.name]) posed.set(...at[q.name]).decompose(one.position, one.quaternion, one.scale);
+    else {
+      one.quaternion.identity(); one.scale.copy(ONE);
+      if (b) one.position.set((b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2).sub(home).multiplyScalar(at ? 0 : explode);
+    }
+    one.updateMatrix();
     one.visible = !S.hidden.has(one.userData.part);
   }
+  groups.part.updateMatrixWorld(true);
   neonDirty = true;
-  showSelection();
+  showSelection(); showAxes();
 }
 
 // the outline of the cut, part by part: where each triangle crosses the plane, a segment
@@ -424,6 +445,10 @@ function paint() {
     if (coloured) range(part.tris[0], part.tris[1], new THREE.Color(PARTS[i % PARTS.length]).lerp(picked ? PICK : new THREE.Color('#ffffff'), lit ? 0.5 : 0));
     else if (lit) range(part.tris[0], part.tris[1], bare.clone().lerp(PICK, picked ? 0.6 : 0.3));
   });
+  if (S.room === 'motion') {      // what the pose runs into: both parts of every clash
+    const hit = new Set(S.clash.flatMap(([a, b]) => [a, b]));
+    S.parts.forEach((part, i) => { if (hit.has(part.name)) range(part.tris[0], part.tris[1], CLASHED); });
+  }
   const tags = Object.keys(S.data?.tags ?? {});
   tags.forEach((name, n) => { if (S.hot === name || S.tagSel === name) fill(S.data.tag_hits?.[name]?.faces ?? [], new THREE.Color(PALETTE[n % PALETTE.length])); });
   fill(S.sel.face, PICK);
@@ -465,7 +490,7 @@ function pick(x, y, mode = S.mode) {
   ray.setFromCamera(new THREE.Vector2((x / r.width) * 2 - 1, -(y / r.height) * 2 + 1), camera);
   const hit = ray.intersectObjects(meshes.filter((m) => m.parent.visible), false).find((h) => !sectionOn || cut.distanceToPoint(h.point) >= 0);
   // where on the part, not where on the screen: an exploded part has been moved
-  S.point = hit ? hit.point.clone().sub(hit.object.parent.position).toArray().map((v) => Math.round(v * 100) / 100) : null;
+  S.point = hit ? hit.object.parent.worldToLocal(hit.point.clone()).toArray().map((v) => Math.round(v * 100) / 100) : null;
   if (mode === 'face') return hit ? { kind: 'face', i: faceOfTriangle(hit.faceIndex).i } : null;
   if (mode === 'part') return hit ? { kind: 'part', i: hit.object.userData.part } : null;
   // points and lines are too thin to hit: take the nearest one within reach of the cursor that is not behind the surface
@@ -544,19 +569,18 @@ function boxPick(x0, y0, x1, y1, touching) {
   } else {
     // faces and objects: by the corners of their triangles
     const pos = shared.position, index = shared.index;
-    const test = (start, count, o) => {
+    const test = (start, count, p) => {
       let any = false, all = true;
       for (let k = start * 3; k < (start + count) * 3 && (touching ? !any : all); k++) {
         const v = index[k] * 3;
-        if (inside(to(pos[v] + o.x, pos[v + 1] + o.y, pos[v + 2] + o.z))) any = true; else all = false;
+        if (inside(to(...placed(p, pos[v], pos[v + 1], pos[v + 2])))) any = true; else all = false;
       }
       return touching ? any : all;
     };
     S.parts.forEach((part, p) => {
       if (S.hidden.has(p)) return;
-      const o = offsetOf(p);
-      if (S.mode === 'part') { if (test(part.tris[0], part.tris[1], o)) out.push({ kind: 'part', i: p }); return; }
-      for (let i = part.faces[0]; i < part.faces[0] + part.faces[1]; i++) if (test(S.faces[i].tris[0], S.faces[i].tris[1], o)) out.push({ kind: 'face', i });
+      if (S.mode === 'part') { if (test(part.tris[0], part.tris[1], p)) out.push({ kind: 'part', i: p }); return; }
+      for (let i = part.faces[0]; i < part.faces[0] + part.faces[1]; i++) if (test(S.faces[i].tris[0], S.faces[i].tris[1], p)) out.push({ kind: 'face', i });
     });
     // a box drawn wholly inside one big face touches it without holding any of its corners
     const under = touching && pick((x0 + x1) / 2, (y0 + y1) / 2);
@@ -713,9 +737,9 @@ function showTag() {
   if (!hits || !shared || S.compare) return;
   const colour = new THREE.Color(PALETTE[Object.keys(S.data.tags).indexOf(name) % PALETTE.length]);
   const pos = shared.position, ix = shared.index, tris = [];
-  const add = (start, n, o) => { for (let k = start * 3; k < (start + n) * 3; k++) { const v = ix[k] * 3; tris.push(pos[v] + o.x, pos[v + 1] + o.y, pos[v + 2] + o.z); } };
-  for (const i of hits.faces) { const f = S.faces[i]; if (f) add(f.tris[0], f.tris[1], offsetOf(partOfFace(i))); }
-  for (const i of hits.parts) { const q = S.parts[i]; if (q) add(q.tris[0], q.tris[1], offsetOf(i)); }
+  const add = (start, n, p) => { for (let k = start * 3; k < (start + n) * 3; k++) { const v = ix[k] * 3; tris.push(...placed(p, pos[v], pos[v + 1], pos[v + 2])); } };
+  for (const i of hits.faces) { const f = S.faces[i]; if (f) add(f.tris[0], f.tris[1], partOfFace(i)); }
+  for (const i of hits.parts) { const q = S.parts[i]; if (q) add(q.tris[0], q.tris[1], i); }
   if (tris.length) {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(tris, 3));
@@ -724,10 +748,10 @@ function showTag() {
   const lines = [], dots = [];
   for (const i of hits.edges) {
     const e = S.edges[i]; if (!e) continue;
-    const o = offsetOf(e.p), g = shared.segs;
-    for (let k = e.segs[0] * 6; k < (e.segs[0] + e.segs[1]) * 6; k += 3) lines.push(g[k] + o.x, g[k + 1] + o.y, g[k + 2] + o.z);
+    const g = shared.segs;
+    for (let k = e.segs[0] * 6; k < (e.segs[0] + e.segs[1]) * 6; k += 3) lines.push(...placed(e.p, g[k], g[k + 1], g[k + 2]));
   }
-  for (const i of hits.points) { const v = S.points[i]; if (v) { const o = offsetOf(v.p); dots.push(v.at[0] + o.x, v.at[1] + o.y, v.at[2] + o.z); } }
+  for (const i of hits.points) { const v = S.points[i]; if (v) dots.push(...placed(v.p, ...v.at)); }
   for (const id of hits.curves ?? []) { const c = curveOf(id); if (c) for (let k = 0; k + 1 < c.points.length; k++) lines.push(...c.points[k], ...c.points[k + 1]); }
   if (lines.length) {
     const l = new LineSegments2(new LineSegmentsGeometry().setPositions(lines), new LineMaterial({ color: colour, linewidth: 4, depthTest: false, transparent: true }));
@@ -812,6 +836,65 @@ window.addEventListener('pointerup', (e) => {
   if (zone) lookAlong(zone.dir);
 });
 
+// In Motion a part dragged in the view moves as its joint lets it: round its axis, along it, or (a free part)
+// anywhere in the plane of the view. A drag that starts beside the parts turns the view as ever.
+let drag = null;
+view.addEventListener('pointerdown', (e) => {
+  if (!moving() || e.target !== canvas || e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey || S.boxTool) return;
+  if (cube.contains(view.clientWidth, ...inView(e))) return;
+  const r = canvas.getBoundingClientRect(), one = pick(e.clientX - r.left, e.clientY - r.top, 'part');
+  if (!one) return;
+  const mo = model(), h = handle(mo, bodyOf(mo)[S.parts[one.i]?.name]);
+  if (!h) return;          // held by the ground: a click selects it, a drag turns the view
+  if (h.joint && mo.joints[h.joint].locked) { notice(`${h.joint} is locked: unlock it in the panel to move it`); return; }
+  e.stopImmediatePropagation(); e.preventDefault();
+  stopPlaying();
+  drag = { ...h, part: one.i, x: e.clientX, y: e.clientY, moved: false, turned: 0, start: h.joint ? (S.pose[h.joint] ?? 0) : 0,
+    free0: h.free ? [...(S.freePose[h.body] ?? IDENTITY())] : null, ...(h.joint ? screenAxis(h.joint) : {}) };
+  if (drag.c) drag.a0 = Math.atan2(-(e.clientY - r.top - drag.c[1]), e.clientX - r.left - drag.c[0]);      // where the pointer starts, round the axis
+  S.hotJoint = h.joint ?? null; showAxes();
+}, true);
+window.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  if (!drag.moved && Math.hypot(dx, dy) <= 3) return;
+  drag.moved = true;
+  const mm = seenHalf() * 2 / view.clientHeight;      // millimetres to a pixel, about where the part is
+  if (drag.joint && drag.kind === 'revolute') {
+    if (Math.abs(drag.facing) > 0.25) {      // the axis looks at us: the turn of the pointer about it
+      const r = canvas.getBoundingClientRect(), a = Math.atan2(-(e.clientY - r.top - drag.c[1]), e.clientX - r.left - drag.c[0]);
+      let d = a - (drag.last ?? drag.a0);
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      drag.turned += d; drag.last = a;
+      setJoint(drag.joint, drag.start + drag.turned * 180 / Math.PI * Math.sign(drag.facing));
+    } else setJoint(drag.joint, drag.start - dy * 0.5);      // it lies across the view: up turns it one way, down the other
+  } else if (drag.joint) {
+    const [sx, sy] = drag.s, len2 = sx * sx + sy * sy;      // the axis on the screen: pixels for 10 mm
+    setJoint(drag.joint, drag.start + (len2 > 4 ? (dx * sx + dy * sy) / len2 * 10 : -dy * mm));
+  } else {
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).multiplyScalar(dx * mm);
+    const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).multiplyScalar(-dy * mm);
+    const m = [...drag.free0];
+    m[3] += right.x + up.x; m[7] += right.y + up.y; m[11] += right.z + up.z;
+    S.freePose[drag.body] = m;
+    spread(); checkPose();
+  }
+});
+window.addEventListener('pointerup', () => {
+  if (!drag) return;
+  const d = drag;
+  drag = null;
+  S.hotJoint = null; showAxes();
+  if (!d.moved) select([{ kind: 'part', i: d.part }], {});
+});
+// a joint's axis where it is now, on the screen: its middle, which way 10 mm along it goes, and whether it looks at us
+function screenAxis(name) {
+  const mo = model(), row = mo.joints[name], f = poseFrames(mo, S.pose, S.freePose)[row.on];
+  const o = apply(f, row.origin), d = turn(f, row.dir), to = projector(), c = to(...o), tip = to(...o.map((v, k) => v + d[k] * 10));
+  const facing = camera.position.clone().sub(new THREE.Vector3(...o)).normalize().dot(new THREE.Vector3(...d));
+  return { kind: row.kind, c, s: [tip[0] - c[0], tip[1] - c[1]], facing };
+}
+
 let press = null;
 const marquee = $('#marquee');
 view.addEventListener('pointerdown', (e) => {   // before the orbit controls see it: a drag that draws a box must not turn the view
@@ -872,13 +955,14 @@ $('#boxTool').onclick = (e) => { S.boxTool = !S.boxTool; e.target.classList.togg
 // points, lines and faces are chosen between only while measuring; otherwise a click takes a face (an object in an assembly)
 function measureBar() {
   document.querySelectorAll('[data-sel]:not([data-sel="part"])').forEach((b) => { b.hidden = !S.measuring; });
-  if (!S.measuring && (S.mode === 'vertex' || S.mode === 'edge')) setMode(S.room === 'assembly' ? 'part' : 'face');
+  if (!S.measuring && (S.mode === 'vertex' || S.mode === 'edge')) setMode(S.room === 'assembly' || S.room === 'motion' ? 'part' : 'face');
 }
 $('#measure').onclick = (e) => { S.measuring = !S.measuring; e.target.classList.toggle('on', S.measuring); measureBar(); styleAll(); renderPanel(); };
 measureBar();
 
 const label = $('#dim'), spot = new THREE.Vector3();
-// ---- three places to work: Sketch (a drawing on a face), Part (one object), Assembly (objects put together) -----
+// ---- four places to work: Sketch (a drawing on a face), Part (one object), Assembly (objects put together), Motion
+// (how they move: joints) -----------------------------------------------------------------------------------------
 const kindOf = (name) => S.proj?.notes.find((n) => n.name === name)?.kind;
 function roomBar() {
   document.body.dataset.room = S.room;
@@ -896,6 +980,7 @@ function roomBar() {
   $('.hint').innerHTML = S.room === 'sketch' ? (sketch.state.active
     ? 'click: place a point · click the first point: close · Enter: end the line · Esc: drop it · Backspace: step back · Ctrl+Z: undo<br>lines up with corners (pink) and the 1 mm grid · Shift: free · right-drag: move the page · wheel: zoom'
     : 'click a plane, or a flat face of the part, to draw on it<br>drag: orbit · right-drag: pan · wheel: zoom')
+    : S.room === 'motion' ? 'drag a part: it moves as its joint lets it · drag beside it: orbit · right-drag: pan · wheel: zoom<br>click: select · Shift: add · Ctrl: take away'
     : 'drag: orbit · right-drag: pan · wheel: zoom<br>click: select · Shift: add · Ctrl: take away · Shift- or Ctrl-drag: box';
   canvas.style.cursor = S.room === 'sketch' ? 'crosshair' : S.boxTool ? 'crosshair' : '';
   showPlanes();
@@ -928,11 +1013,18 @@ async function goRoom(room) {
     return;
   }
   if (S.room === 'sketch') sketch.end();
-  if (room === 'assembly') {
+  if (room === 'assembly' || room === 'motion') {
+    if (kindOf(S.note) === 'assembly' && S.data?.report?.built) {      // the same assembly, in the other room: nothing to load
+      stopPlaying(); S.room = room; setMode('part'); roomBar(); renderSide(); spread(); paint(); renderPanel(true);
+      if (room === 'motion') checkPose();
+      return;
+    }
     const a = S.proj.notes.find((n) => n.kind === 'assembly' && n.name === S.lastAssembly) ?? S.proj.notes.find((n) => n.kind === 'assembly');
     if (!a) { S.room = kindOf(S.note) === 'assembly' ? 'assembly' : 'part'; roomBar(); renderPanel(true); return notice('no assembly in this project yet: ask your agent to put the parts together in a Note'); }
+    S.room = room;      // open() keeps an assembly in Motion when it is asked for there
     return open(S.project, a.name);
   }
+  stopPlaying();
   // to a part: the object selected in the assembly if it has a Note, else the part that was open last
   const picked = S.sel.part.size === 1 ? S.parts[[...S.sel.part][0]]?.name : null;
   const part = S.proj.notes.find((n) => n.kind === 'note' && n.name === picked) ?? S.proj.notes.find((n) => n.kind === 'note' && n.name === (kindOf(S.note) === 'note' ? S.note : S.lastPart))
@@ -1012,10 +1104,288 @@ $('#explode').oninput = (e) => {
 };
 $('#partColours').onclick = (e) => { partColours = !partColours; e.target.classList.toggle('on', partColours); paint(); };
 function assemblyBar() {
-  const on = S.parts.length > 1 && !S.compare;
+  const on = S.parts.length > 1 && !S.compare && S.room !== 'motion';
   for (const id of ['#explodeLabel', '#explode']) $(id).hidden = !on;
   $('#partColours').hidden = !(on && look.style === 'shaded');
   $('#explode').value = explode;
+}
+
+// ---- Motion: how the parts of an assembly move, and what moving them hits --------------------------------------
+// The build carries the model (report.motion: bodies, joints and their axes as built, sweeps, what overlaps). The
+// page poses the parts itself (motion.js, as monet/joints.py does); what a pose hits it asks of the server.
+const model = () => (S.data?.report?.built ? S.data.report.motion ?? null : null);
+const moving = () => S.room === 'motion' && !S.compare && !!model();
+const turn = (f, [x, y, z]) => [f[0] * x + f[1] * y + f[2] * z, f[4] * x + f[5] * y + f[6] * z, f[8] * x + f[9] * y + f[10] * z];
+function partPose() {
+  const mo = model(), f = poseFrames(mo, S.pose, S.freePose), out = {};
+  for (const [p, b] of Object.entries(bodyOf(mo))) out[p] = f[b];
+  return out;
+}
+const atHome = () => !Object.values(S.pose).some((v) => v) && !Object.keys(S.freePose).length;
+/** After a rebuild: the values of the joints still there are kept. */
+function keepPose() {
+  const mo = model();
+  if (!mo) { Object.assign(S, { pose: {}, freePose: {}, clash: [] }); return; }
+  const live = new Set(drivers(mo));
+  S.pose = Object.fromEntries(Object.entries(S.pose).filter(([k]) => live.has(k)));
+  S.freePose = Object.fromEntries(Object.entries(S.freePose).filter(([k]) => mo.free.includes(k)));
+  spread();
+  if (moving()) checkPose();
+}
+
+// what the pose hits, asked of the server (it reads the build's own mesh): at most one question at a time, and
+// one more after the last change
+let poseBusy = false, poseAgain = false;
+function checkPose() {
+  if (poseBusy) { poseAgain = true; return; }
+  poseBusy = true;
+  setTimeout(async () => {
+    try {
+      if (!moving()) return;
+      if (atHome()) { S.clash = []; return; }
+      const free = Object.fromEntries(Object.entries(S.freePose).map(([b, m]) => [b, [0, 1, 2, 3].map((r) => m.slice(r * 4, r * 4 + 4))]));
+      S.clash = (await api(`/p/${S.project}/n/${S.note}/pose`, 'POST', { values: S.pose, free })).clashes;
+    } catch { /* the server is away: nothing to show */ } finally {
+      paint(); showClashes();
+      poseBusy = false;
+      if (poseAgain) { poseAgain = false; checkPose(); }
+    }
+  }, 90);
+}
+const clashWords = () => (S.clash.length ? S.clash.map(([a, b, v]) => `<div class="why err"><b>${esc(a)}</b> runs into <b>${esc(b)}</b>: ${fmt(v)} mm³</div>`).join('')
+  : `<p class="ok" style="margin:0">${atHome() ? 'As built.' : 'Nothing is hit here.'}</p>`);
+function showClashes() { const el = $('#poseClashes'); if (el) el.innerHTML = clashWords(); }
+
+/** A joint moved by hand to a value, kept within its range: the view and the panel follow. */
+function setJoint(name, value) {
+  const row = model()?.joints[name];
+  if (!row || !Number.isFinite(value)) return;
+  const [lo, hi] = span(row);
+  S.pose[name] = Math.min(hi, Math.max(lo, Math.round(value * 100) / 100));
+  spread(); syncSliders(); checkPose();
+}
+function syncSliders() {
+  const mo = model();
+  if (!mo) return;
+  const v = jointValues(mo, S.pose);
+  document.querySelectorAll('[data-pose]').forEach((el) => { if (document.activeElement !== el) el.value = S.pose[el.dataset.pose] ?? 0; });
+  document.querySelectorAll('[data-posenum]').forEach((el) => { if (document.activeElement !== el) el.value = fmt(S.pose[el.dataset.posenum] ?? 0); });
+  document.querySelectorAll('[data-follow]').forEach((el) => { el.textContent = `${fmt(Math.round((v[el.dataset.follow] ?? 0) * 100) / 100)}${mo.joints[el.dataset.follow]?.unit ?? ''}`; });
+}
+function goHome() { stopPlaying(); Object.assign(S, { pose: {}, freePose: {}, clash: [] }); spread(); syncSliders(); paint(); showClashes(); }
+
+// a joint driven back and forth through its range, the whole way in four seconds
+let playing = 0;
+function stopPlaying() {
+  cancelAnimationFrame(playing); playing = 0;
+  if (S.playing) { S.playing = null; document.querySelectorAll('[data-act="play"]').forEach((b) => { b.textContent = '▶'; }); }
+}
+function play(name) {
+  if (S.playing === name) { stopPlaying(); return; }
+  stopPlaying();
+  const [lo, hi] = span(model().joints[name]), speed = (hi - lo) / 4;
+  let dir = 1, last = performance.now();
+  S.playing = name;
+  document.querySelectorAll(`[data-act="play"][data-name="${name}"]`).forEach((b) => { b.textContent = '■'; });
+  const step = (now) => {
+    if (!moving() || S.playing !== name) { stopPlaying(); return; }
+    let v = (S.pose[name] ?? 0) + dir * speed * Math.min(0.1, (now - last) / 1000);
+    last = now;
+    if (v >= hi) { v = hi; dir = -1; } else if (v <= lo) { v = lo; dir = 1; }
+    setJoint(name, v);
+    playing = requestAnimationFrame(step);
+  };
+  playing = requestAnimationFrame(step);
+}
+
+// the axis of the joint pointed at in the panel, being dragged or being made
+function axisNow() {
+  const mo = model(), e = S.edit;
+  if (!mo) return null;
+  if (e && (e.kind === 'revolute' || e.kind === 'slider') && e.axisSel !== 'keep') {
+    if (e.axisSel === 'face') {
+      const f = theFace();
+      if (!f || !(f.type === 'plane' || f.type === 'cylinder')) return null;
+      const p = partOfFace(f.i), d = new THREE.Vector3(...(f.type === 'plane' ? f.normal : f.axis)).applyQuaternion(groups.part.children[p].quaternion);
+      return { origin: placed(p, ...(f.type === 'plane' ? f.center : f.origin)), dir: d.toArray(), kind: e.kind };
+    }
+    const k = 'XYZ'.indexOf(e.axisSel);
+    return k < 0 ? null : { origin: [0, 0, 0], dir: [0, 1, 2].map((i) => (i === k ? 1 : 0)), kind: e.kind };
+  }
+  const name = S.hotJoint ?? (e && !e.isNew ? e.name : null), row = name ? mo.joints[name] : null;
+  if (!row?.origin) return null;
+  const f = poseFrames(mo, S.pose, S.freePose)[row.on];
+  return { origin: apply(f, row.origin), dir: turn(f, row.dir), kind: row.kind };
+}
+function showAxes() {
+  for (const o of axes.children) { o.geometry.dispose(); o.material.dispose(); }
+  axes.clear();
+  const a = moving() ? axisNow() : null;
+  if (!a) return;
+  const colour = a.kind === 'slider' ? 0x2fd0ff : 0xff9f1c, L = radius * 0.6;
+  const ends = [...a.origin.map((v, k) => v - a.dir[k] * L), ...a.origin.map((v, k) => v + a.dir[k] * L)];
+  const line = new LineSegments2(new LineSegmentsGeometry().setPositions(ends), new LineMaterial({ color: colour, linewidth: 3, depthTest: false, transparent: true }));
+  line.material.resolution.set(view.clientWidth, view.clientHeight);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(ends.slice(3), 3));
+  const tip = new THREE.Points(g, new THREE.PointsMaterial({ color: colour, size: 12, sizeAttenuation: false, depthTest: false, transparent: true }));
+  for (const o of [line, tip]) { o.renderOrder = 9; o.frustumCulled = false; o.material.toneMapped = false; axes.add(o); }
+}
+
+const KIND = { revolute: '⟳', slider: '⇄', rigid: '⛓' };
+const UNITS = { revolute: '°', slider: 'mm' };
+function sweepWords(s, unit) {
+  if (!s) return '';
+  if (s.skipped) return esc(s.skipped);
+  const hits = [s.stop_min != null ? `hits at ${fmt(s.stop_min)}${unit} going down` : '', s.stop_max != null ? `at ${fmt(s.stop_max)}${unit} going up` : ''].filter(Boolean);
+  const first = (s.clashes ?? []).map((c) => `${fmt(c[0])} … ${fmt(c[1])}${unit}: ${c[2].slice(0, 2).map(([a, b]) => `${esc(a)} × ${esc(b)}`).join(', ')}`);
+  return (hits.length ? `moved alone it ${hits.join(', ')}` : `moved alone it hits nothing from ${fmt(s.searched?.[0])} to ${fmt(s.searched?.[1])}${unit}`)
+    + (s.clash_mm3 > 1 ? ` · <span class="err">clashes within its range</span>` : '')
+    + (first.length ? `<div class="mono">${first.slice(0, 3).join('<br>')}</div>` : '');
+}
+
+function motionCards() {
+  const mo = model(), spec = S.data.joints ?? {};
+  if (!mo) return [card('motion', 'Motion', '<p class="muted">Motion is for an assembly that builds: open one.</p>')];
+  const bodies = Object.keys(mo.bodies), v = jointValues(mo, S.pose), n = Object.keys(spec).length;
+  const head = (name, kind, what, right) => `<div class="row"><span><span class="kind">${KIND[kind] ?? '?'}</span><b>${esc(name)}</b> <span class="muted">${what}</span></span>${right}
+    <button class="x" data-act="jointedit" data-name="${esc(name)}" title="change this joint">✎</button></div>`;
+  const groupRows = Object.entries(spec).filter(([, j]) => j.kind === 'rigid' && j.parts).map(([name, j]) => `<div class="check joint" data-joint="${esc(name)}">
+    ${head(name, 'rigid', `${(j.parts ?? []).length} parts move as one`, '')}<div class="why mono">${(j.parts ?? []).map(esc).join(', ')}</div></div>`);
+  const rows = Object.entries(mo.joints).map(([name, row]) => {
+    const what = `${esc(row.moves)} on ${esc(row.on)}`;
+    const lock = row.kind !== 'rigid' && !row.follows && row.resolved
+      ? `<button class="x lock ${row.locked ? 'on' : ''}" data-act="lock" data-name="${esc(name)}" title="${row.locked ? 'locked: it stays where it is; click to free it' : 'lock it: it stays where it is'}">${row.locked ? 'locked' : 'lock'}</button>` : '';
+    const top = head(name, row.kind, what + (row.resolved ? '' : ' <span class="err">not found</span>'), lock);
+    if (!row.resolved) return `<div class="check joint" data-joint="${esc(name)}">${top}<div class="why err">${esc(row.why)}</div></div>`;
+    if (row.kind === 'rigid') return `<div class="check joint" data-joint="${esc(name)}">${top}<div class="why">held fast</div></div>`;
+    if (row.follows) return `<div class="check joint" data-joint="${esc(name)}">${top}<div class="row"><span class="why">follows ${Object.entries(row.follows).map(([k, f]) => `${esc(k)} × ${fmt(f)}`).join(' + ')}</span>
+      <span class="v mono" data-follow="${esc(name)}">${fmt(Math.round(v[name] * 100) / 100)}${row.unit}</span></div></div>`;
+    const [lo, hi] = span(row), off = row.locked ? 'disabled' : '';
+    return `<div class="check joint" data-joint="${esc(name)}">${top}
+      <div class="line"><input type="range" data-pose="${esc(name)}" min="${lo}" max="${hi}" step="${row.kind === 'revolute' ? 0.5 : 0.1}" value="${S.pose[name] ?? 0}" ${off}>
+        <input class="num" data-posenum="${esc(name)}" value="${fmt(S.pose[name] ?? 0)}" inputmode="decimal" ${off}><span class="muted unit">${row.unit}</span>
+        <button class="x" data-act="play" data-name="${esc(name)}" title="move it back and forth through its range" ${off}>${S.playing === name ? '■' : '▶'}</button></div>
+      <div class="why">${row.range ? `${fmt(lo)} … ${fmt(hi)}${row.unit}` : 'no range'} · ${sweepWords(mo.sweeps?.[name], row.unit)}</div></div>`;
+  });
+  const picked = [...S.sel.part].map((i) => S.parts[i]?.name).filter(Boolean);
+  const cards = [card('motion', `Motion · ${n} joint${n === 1 ? '' : 's'}`, `
+    ${mo.problems.map((t) => `<div class="why err">${esc(t)}</div>`).join('')}
+    <div class="row"><span class="k">ground</span><span class="v"><select id="groundSel" title="what stays put: the parts the others move on">
+      ${(mo.ground.length ? [] : ['']).concat(bodies).map((b) => `<option value="${esc(b)}" ${mo.ground[0] === b ? 'selected' : ''}>${b ? esc(b) : '(nothing yet)'}</option>`).join('')}</select></span></div>
+    ${groupRows.join('')}${rows.join('') || (groupRows.length ? '' : '<p class="muted">No joints yet: every part is free. Make one with New joint, or ask your agent.</p>')}
+    ${mo.free.length ? `<p class="muted">Free, no joint holds them: ${mo.free.map(esc).join(', ')}. Drag them anywhere.</p>` : ''}
+    <div class="line"><button data-act="posehome" title="every joint back to 0">As built</button><span style="flex:1"></span>
+      <button data-act="groupmake" ${picked.length > 1 ? '' : 'disabled'} title="select two or more objects first: they move as one">Group${picked.length > 1 ? ` ${picked.length}` : ''}</button>
+      <button class="primary" data-act="jointnew">New joint</button></div>
+    <p class="muted">Drag a part in the view: it moves as its joint lets it. A joint that follows others moves with them.</p>`)];
+  if (S.edit) cards.push(editCard(mo));
+  const inter = mo.interference ?? { pairs: [] };
+  cards.push(card('clash', `Clashes${S.clash.length ? ` · ${S.clash.length}` : ''}`, `<div id="poseClashes">${clashWords()}</div>
+    <div class="row" style="margin-top:8px"><span class="k">as built</span><span class="v">${inter.pairs.length ? `${fmt(inter.total_mm3)} mm³ overlap` : 'nothing overlaps'}</span></div>
+    ${inter.pairs.map(([a, b, vol]) => `<div class="why warn"><b>${esc(a)}</b> and <b>${esc(b)}</b>: ${fmt(vol)} mm³</div>`).join('')}
+    ${mo.unchecked?.length ? `<p class="muted">Not checked, their mesh is not closed: ${mo.unchecked.map(esc).join(', ')}</p>` : ''}
+    <p class="muted">A clash is new overlap as parts move; what overlaps as built is listed apart. A check can hold joint.NAME.stop_min, stop_max and clash_mm3.</p>`));
+  return cards;
+}
+
+function editCard(mo) {
+  const e = S.edit, bodies = Object.keys(mo.bodies), face = theFace();
+  const opts = (list, cur) => list.map(([v, label]) => `<option value="${esc(v)}" ${String(v) === String(cur) ? 'selected' : ''}>${esc(label)}</option>`).join('');
+  const name = `<div class="line"><input data-edit="name" value="${esc(e.name)}" placeholder="name: hinge, slide, j1…" maxlength="40" ${e.isNew ? '' : 'readonly'}></div>`;
+  const buttons = `<div class="line">${e.isNew ? '' : '<button class="danger" data-act="jointdelete">Remove</button>'}<span style="flex:1"></span>
+    <button data-act="jointcancel">Cancel</button><button class="primary" data-act="jointsave">Save</button></div>`;
+  if (e.kind === 'group') {
+    return card('jointedit', e.isNew ? 'New rigid group' : `Group · ${esc(e.name)}`, `${name}
+      <p class="muted">These move as one: ${(e.parts ?? []).map(esc).join(', ')}. Name the group and give it joints like a part.</p>${buttons}`);
+  }
+  const usable = face && (face.type === 'plane' || face.type === 'cylinder');
+  const axisTags = Object.entries(S.data.tags ?? {}).filter(([, t]) => ['round_hole', 'square_hole', 'boss', 'planar_face'].includes(t.kind)
+    || (t.kind === 'group' && (t.of ?? []).length === 2 && t.of.every((x) => x.kind === 'point')));
+  const keep = e.original?.axis;
+  const axisList = [...(keep ? [['keep', `as it is: ${typeof keep === 'string' ? `the tag ${keep}` : `${keep.dir} through ${(keep.origin ?? [0, 0, 0]).map((x) => Math.round(x * 10) / 10).join(', ')}`}`]] : []),
+    ...(usable ? [['face', `the selected face: ${words(face)}`]] : []), ...axisTags.map(([k, t]) => [`tag:${k}`, `the tag ${k} (${t.kind})`]),
+    ['X', 'X, through the origin'], ['Y', 'Y, through the origin'], ['Z', 'Z, through the origin']];
+  if (!axisList.some(([v]) => v === e.axisSel)) e.axisSel = axisList[0][0];
+  const unit = UNITS[e.kind] ?? '';
+  const turns = e.kind === 'revolute' || e.kind === 'slider';
+  return card('jointedit', e.isNew ? 'New joint' : `Joint · ${esc(e.name)}`, `${name}
+    <div class="line"><select data-edit="kind">${opts([['revolute', '⟳ revolute: turns about an axis'], ['slider', '⇄ slider: moves along an axis'], ['rigid', '⛓ rigid: held fast']], e.kind)}</select></div>
+    ${row('moves', `<select data-edit="moves">${opts(bodies.map((b) => [b, b]), e.moves)}</select>`)}
+    ${row('on', `<select data-edit="on">${opts(bodies.map((b) => [b, b]), e.on)}</select>`)}
+    ${turns ? `${row('axis', `<select data-edit="axisSel">${opts(axisList, e.axisSel)}</select>`)}
+      ${!usable && e.axisSel !== 'keep' ? '<p class="muted">Or select a round hole, a boss or a flat face (Faces, on the right) and choose it here.</p>' : ''}
+      <div class="line"><span class="muted" style="flex:1">range, ${unit}</span><input data-edit="lo" value="${esc(e.lo)}" placeholder="from" inputmode="decimal" style="flex:0 0 70px">
+        <input data-edit="hi" value="${esc(e.hi)}" placeholder="to" inputmode="decimal" style="flex:0 0 70px"></div>
+      <div class="line"><input data-edit="follows" value="${esc(e.follows)}" placeholder="follows: j2: 1, j3: -1 (or empty: moved by hand)"></div>
+      <div class="line"><label><input type="checkbox" data-edit="flip" ${e.flip ? 'checked' : ''}> the other way positive</label><span style="flex:1"></span>
+        <label><input type="checkbox" data-edit="locked" ${e.locked ? 'checked' : ''}> locked</label></div>` : ''}
+    ${buttons}
+    <p class="muted">0 is where the parts are as built. The axis drawn in the view is the one chosen; its dot is the positive way.</p>`);
+}
+
+function editJoint(name) {
+  const spec = S.data.joints?.[name];
+  if (!spec) return;
+  S.edit = { isNew: false, name, original: spec, kind: spec.kind === 'rigid' && spec.parts ? 'group' : spec.kind, moves: spec.moves, on: spec.on, parts: spec.parts,
+    axisSel: 'keep', lo: spec.range?.[0] ?? '', hi: spec.range?.[1] ?? '', flip: !!spec.flip, locked: !!spec.locked,
+    follows: spec.follows ? Object.entries(spec.follows).map(([k, f]) => `${k}: ${f}`).join(', ') : '' };
+  renderPanel(true); showAxes();
+}
+function newJoint(kind = 'revolute') {
+  const mo = model();
+  if (!mo) { notice('open an assembly that builds first'); return; }
+  const bodies = Object.keys(mo.bodies), of = bodyOf(mo), face = theFace();
+  const picked = [...S.sel.part].map((i) => of[S.parts[i]?.name]).filter(Boolean);
+  const moves = picked[0] ?? (face ? of[S.parts[partOfFace(face.i)]?.name] : null) ?? bodies.find((b) => !mo.ground.includes(b)) ?? bodies[0];
+  const unique = (stem) => { let k = 1; while (S.data.joints?.[`${stem}_${k}`] || mo.bodies[`${stem}_${k}`]) k++; return `${stem}_${k}`; };
+  if (kind === 'group') {
+    const parts = [...S.sel.part].map((i) => S.parts[i]?.name).filter(Boolean);
+    if (parts.length < 2) { notice('select two or more objects first (Objects, on the right)'); return; }
+    S.edit = { isNew: true, kind: 'group', name: unique('group'), parts };
+  } else {
+    S.edit = { isNew: true, kind, name: unique('joint'), moves, on: picked[1] ?? mo.ground[0] ?? bodies.find((b) => b !== moves),
+      axisSel: face && (face.type === 'plane' || face.type === 'cylinder') ? 'face' : 'Z', lo: '', hi: '', follows: '', flip: false, locked: false };
+  }
+  renderPanel(true); showAxes();
+}
+function saveJoint() {
+  const e = S.edit, name = String(e.name ?? '').trim(), number = (x) => (String(x ?? '').trim() === '' ? null : Number(String(x).replace(',', '.')));
+  if (!/^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(name)) { tell('A joint is named with letters, digits and underscores, beginning with a letter.'); return; }
+  let body;
+  if (e.kind === 'group') body = { kind: 'rigid', parts: e.parts };
+  else {
+    body = { kind: e.kind, moves: e.moves, on: e.on };
+    if (e.kind !== 'rigid') {
+      if (e.axisSel === 'keep') body.axis = e.original.axis;
+      else if (e.axisSel === 'face') {
+        const f = theFace();
+        if (!f) { tell('Select the face to turn about or slide along, in the view.'); return; }
+        const { tris, ...rest } = f;
+        body.face = rest;
+      } else if (e.axisSel.startsWith('tag:')) body.axis = e.axisSel.slice(4);
+      else body.axis = { origin: [0, 0, 0], dir: e.axisSel };
+      const lo = number(e.lo), hi = number(e.hi);
+      if ([lo, hi].some((x) => x != null && !Number.isFinite(x))) { tell('A range is two numbers.'); return; }
+      if (lo != null || hi != null) body.range = [lo ?? (e.kind === 'revolute' ? -180 : -100), hi ?? (e.kind === 'revolute' ? 180 : 100)];
+      if (String(e.follows ?? '').trim()) {
+        body.follows = {};
+        for (const bit of String(e.follows).split(/[,;]/)) {
+          const [k, f = '1'] = bit.split(/[:=×*]/).map((x) => x.trim());
+          if (!k) continue;
+          if (!Number.isFinite(Number(f))) { tell(`follows: "${bit.trim()}" is a joint and a factor, as j2: 1`); return; }
+          body.follows[k] = Number(f);
+        }
+      }
+      if (e.flip) body.flip = true;
+      if (e.locked) body.locked = true;
+    }
+  }
+  act(async () => {
+    building([S.note]);
+    await api(`/p/${S.project}/n/${S.note}/joints/${name}`, 'PUT', body);
+    S.edit = null;
+  });
 }
 
 // ---- compare: the diff as the thing you trust --------------------------------------------------------------
@@ -1146,11 +1516,12 @@ function renderSketchSide() {
 function renderSide() {
   renderSketchSide();
   // Assembly shows the assemblies; Part and Sketch show the parts (and the modules they share)
-  const mine = (S.proj?.notes ?? []).filter((n) => (S.room === 'assembly' ? n.kind === 'assembly' : n.kind !== 'assembly'));
+  const asm = S.room === 'assembly' || S.room === 'motion';
+  const mine = (S.proj?.notes ?? []).filter((n) => (asm ? n.kind === 'assembly' : n.kind !== 'assembly'));
   const sorted = [...mine].sort((a, b) => order[a.kind] - order[b.kind] || a.name.localeCompare(b.name));
   $('#notes').innerHTML = sorted.map((n) => `<div class="item ${n.name === S.note ? 'sel' : ''}" data-note="${esc(n.name)}" title="${n.kind === 'module' ? 'a helper module, imported by Notes' : n.kind === 'assembly' ? 'an assembly: Notes put together' : n.state === 'error' ? 'does not build' : n.changed ? 'changed since the last save' : 'saved'}">
     <span class="dot ${state(n)}"></span>${esc(n.name)}${n.kind === 'note' ? '' : ` <small>${n.kind}</small>`}</div>`).join('')
-    || `<div class="item muted">${!S.proj ? 'no project open' : S.room === 'assembly' ? 'no assembly yet' : 'no parts yet: ask your agent for one'}</div>`;
+    || `<div class="item muted">${!S.proj ? 'no project open' : asm ? 'no assembly yet' : 'no parts yet: ask your agent for one'}</div>`;
   $('#versions').innerHTML = [...(S.proj?.versions ?? [])].reverse().map((v) => {
     const mine = v.notes[S.note]?.v === v.n;
     return `<div class="item" data-version="${v.n}" title="${esc(v.message)}\n${new Date(v.at).toLocaleString()}${v.commit ? '\ngit ' + esc(v.commit) : ''}\nclick: compare with the draft">
@@ -1198,12 +1569,15 @@ async function open(project, note) {
   S.note = names.includes(note) ? note : (S.proj.notes.find((n) => n.kind === 'assembly')?.name ?? S.proj.notes.find((n) => n.kind === 'note')?.name ?? names[0] ?? null);
   history.replaceState(null, '', `#${project}${S.note ? '/' + S.note : ''}`);
   $('#projectName').textContent = project;
-  if (changedNote) { S.sel = nothing(); S.inspect = null; S.tagSel = null; S.saveResult = null; S.hotPart = null; S.hidden = new Set(); explode = 0; sketch.end(); }
-  // the room follows the Note: an assembly is worked on in Assembly, a part in Part (or in Sketch, while one is drawn)
+  if (changedNote) {
+    S.sel = nothing(); S.inspect = null; S.tagSel = null; S.saveResult = null; S.hotPart = null; S.hidden = new Set(); explode = 0; sketch.end();
+    stopPlaying(); Object.assign(S, { pose: {}, freePose: {}, clash: [], edit: null, hotJoint: null });
+  }
+  // the room follows the Note: an assembly is worked on in Assembly (or Motion), a part in Part (or in Sketch, while one is drawn)
   const kind = kindOf(S.note);
   if (changedNote || S.room !== 'sketch') {
-    const room = kind === 'assembly' ? 'assembly' : 'part';
-    if (room !== S.room || changedNote) S.mode = room === 'assembly' ? 'part' : (S.mode === 'part' ? 'face' : S.mode);
+    const room = kind === 'assembly' ? (S.room === 'motion' ? 'motion' : 'assembly') : 'part';
+    if (room !== S.room || changedNote) S.mode = room !== 'part' ? 'part' : (S.mode === 'part' ? 'face' : S.mode);
     S.room = room;
   }
   if (kind === 'assembly') S.lastAssembly = S.note; else if (kind === 'note') S.lastPart = S.note;
@@ -1231,7 +1605,8 @@ async function open(project, note) {
     } else { S.faces = []; S.parts = []; S.edges = []; S.points = []; S.sel = nothing(); assemble({}); showSelection(); }
     assemblyBar();
     S.proj = await api(`/p/${project}`);
-    if (S.room !== 'sketch') S.room = kindOf(S.note) === 'assembly' ? 'assembly' : 'part';      // now that it is built, it is known for what it is
+    if (S.room !== 'sketch') S.room = kindOf(S.note) === 'assembly' ? (S.room === 'motion' ? 'motion' : 'assembly') : 'part';      // now that it is built, it is known for what it is
+    keepPose();
     roomBar(); renderSide();
   } catch (e) { S.data = { error: e.message }; }
   busy();
@@ -1347,7 +1722,8 @@ function renderPanel(force) {
       <p class="muted">Grey is unchanged; colour starts at ${s.tolerance} mm.</p>`));
   }
 
-  if (d.is_note && r.built && S.parts.length > 1 && !S.compare) {
+  if (moving()) cards.push(...motionCards());
+  if (d.is_note && r.built && S.parts.length > 1 && !S.compare && S.room !== 'motion') {
     const known = new Set(S.proj.notes.filter((n) => n.kind !== 'module').map((n) => n.name));
     cards.push(card('assembly', `Assembly · ${S.parts.length} parts`, `
       ${S.parts.map((q, i) => `<div class="check part ${S.sel.part.has(i) ? 'sel' : ''}" data-part="${i}"><div class="row">
@@ -1363,13 +1739,13 @@ function renderPanel(force) {
   if (d.is_note && r.built) {
     const m = r.measure;
     if (!S.compare) cards.push(selectionCard());
-    cards.push(card('part', S.room === 'assembly' ? 'Assembly, as a whole' : 'Part', `${row('size', `${fmt(m.size_x)} × ${fmt(m.size_y)} × ${fmt(m.size_z)} mm`)}
+    if (S.room !== 'motion') cards.push(card('part', S.room === 'assembly' ? 'Assembly, as a whole' : 'Part', `${row('size', `${fmt(m.size_x)} × ${fmt(m.size_y)} × ${fmt(m.size_z)} mm`)}
       ${row('volume', `${fmt(m.volume_cm3)} cm³`)}${row('surface', `${fmt(m.area_cm2)} cm²`)}${row('z', `${fmt(m.min_z)} … ${fmt(m.max_z)}`)}${row('solids', m.solids)}
       ${Object.entries(d.params).map(([k, v]) => row(k, fmt(v))).join('')}`));
 
     const targets = S.parts.length > 1 ? [...S.sel.part].map((i) => S.parts[i].name) : [S.note];
     const first = lookOf(S.parts.length > 1 ? ([...S.sel.part][0] ?? 0) : 0);
-    cards.push(card('look', 'Look', S.parts.length > 1 && !targets.length
+    if (S.room !== 'motion') cards.push(card('look', 'Look', S.parts.length > 1 && !targets.length
       ? `<p class="muted">Select objects (the Objects selector, or the parts list) to give them a material and a colour.</p>
          ${S.parts.map((q, i) => { const l = lookOf(i); return `<div class="row"><span class="k"><span class="swatch" style="background:${l.color}"></span>${esc(q.name)}</span><span class="v muted">${esc(MATERIALS[l.material].name)}</span></div>`; }).join('')}`
       : `<p class="muted" style="margin-top:0">${S.parts.length > 1 ? `For ${targets.map(esc).join(', ')}` : 'What this part is made of'}${look.style === 'rendered' ? '' : ' (shown in the Rendered style)'}.</p>
@@ -1388,7 +1764,8 @@ function renderPanel(force) {
         <div class="why mono">${Object.entries(res?.measure ?? {}).map(([k, v]) => `${k} ${fmt(v)}`).join(' · ')}</div></div>`;
     }).join('') || '<p class="muted">No tags yet. Select something and name it.</p>'));
 
-    const names = [...Object.keys(m), 'fits_bed', ...Object.entries(r.tags).flatMap(([k, t]) => Object.keys(t.measure).map((x) => `tag.${k}.${x}`))];
+    const names = [...Object.keys(m), 'fits_bed', ...Object.entries(r.tags).flatMap(([k, t]) => Object.keys(t.measure).map((x) => `tag.${k}.${x}`)),
+      ...(r.motion ? ['interference_mm3', ...Object.keys(r.motion.joints).flatMap((k) => ['resolved', 'stop_min', 'stop_max', 'clash_mm3'].map((x) => `joint.${k}.${x}`))] : [])];
     const failing = r.checks.filter((c) => !c.ok).length;
     cards.push(card('checks', `Checks · ${r.checks.length}`, `<p class="muted" style="margin-top:0">Yours: the agent can add one, never change or remove one.</p>
       ${r.checks.map((c) => `<div class="check"><div class="row"><span class="${c.ok ? 'ok' : 'err'}">${c.ok ? '✓' : '✗'} <span class="mono">${esc(c.what)}</span></span>
@@ -1442,7 +1819,23 @@ async function setLook(change) {
 $('#panel').addEventListener('change', (e) => {
   if (e.target.id === 'lookMaterial') setLook({ material: e.target.value, color: null });
   if (e.target.id === 'lookColor') setLook({ color: e.target.value });
+  if (e.target.id === 'groundSel' && e.target.value) act(async () => { building([S.note]); await api(`/p/${S.project}/n/${S.note}/ground`, 'PUT', { ground: e.target.value }); });
+  if (e.target.dataset.posenum) setJoint(e.target.dataset.posenum, Number(e.target.value.replace(',', '.')));
+  if (e.target.dataset.edit && S.edit && e.target.tagName === 'SELECT') { renderPanel(true); showAxes(); }
 });
+// Motion: a joint's slider moves it as it is dragged; what is typed into the joint being made is kept as it is typed
+$('#panel').addEventListener('input', (e) => {
+  if (e.target.dataset.pose) { stopPlaying(); setJoint(e.target.dataset.pose, Number(e.target.value)); }
+  const k = e.target.dataset.edit;
+  if (k && S.edit) S.edit[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+});
+$('#panel').addEventListener('mouseover', (e) => {
+  const j = e.target.closest('[data-joint]')?.dataset.joint ?? null;
+  if (j !== S.hotJoint && !drag && moving()) { S.hotJoint = j; showAxes(); }
+});
+$('#poseHome').onclick = () => goHome();
+$('#jointNew').onclick = () => newJoint();
+$('#groupMake').onclick = () => newJoint('group');
 $('#panel').addEventListener('mouseover', (e) => {
   const t = e.target.closest('[data-tag]'), q = e.target.closest('[data-part]');
   const hot = t ? t.dataset.tag : null, hotPart = q ? Number(q.dataset.part) : null;
@@ -1462,6 +1855,24 @@ $('#panel').addEventListener('click', (e) => {
   }
   const a = b.dataset.act;
   if (a === 'clear') { select([], {}); return; }
+  if (a === 'posehome') { goHome(); return; }
+  if (a === 'play') { play(b.dataset.name); return; }
+  if (a === 'jointnew') { newJoint(); return; }
+  if (a === 'groupmake') { newJoint('group'); return; }
+  if (a === 'jointedit') { editJoint(b.dataset.name); return; }
+  if (a === 'jointcancel') { S.edit = null; renderPanel(true); showAxes(); return; }
+  if (a === 'jointsave') { saveJoint(); return; }
+  if (a === 'jointdelete') {
+    const name = S.edit.name;
+    ask(`Remove the joint "${name}" from the Note? Checks about it will fail.`, { yes: 'Remove', danger: true })
+      .then((yes) => yes && act(async () => { building([S.note]); await api(`/p/${S.project}/n/${S.note}/joints/${name}`, 'DELETE'); S.edit = null; }));
+    return;
+  }
+  if (a === 'lock') {      // locked is written into the Note: the joint holds where it is
+    const spec = S.data.joints?.[b.dataset.name];
+    if (spec) act(async () => { building([S.note]); await api(`/p/${S.project}/n/${S.note}/joints/${b.dataset.name}`, 'PUT', { ...spec, locked: !spec.locked }); });
+    return;
+  }
   if (a === 'lookreset') { setLook({ color: null }); return; }
   if (a === 'sketchhere') { startSketch({ face: theFace() }); return; }
   if (a === 'planehere') {      // a plane on the selected face (or off it), kept with the part as a tag; then draw on it
@@ -1691,6 +2102,7 @@ versionNow().then((v) => {
 setInterval(lookForNewer, 60_000);
 document.addEventListener('visibilitychange', lookForNewer);
 
-window.monet = { S, groups, cube, lookAlong, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom };   // for looking in from the console, and from scripts/shot.mjs
+window.monet = { S, groups, cube, lookAlong, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom,
+  axes, setJoint, goHome, play, stopPlaying, partPose };   // for looking in from the console, and from scripts/shot.mjs
 resize();
 start().catch((e) => { $('#panel').innerHTML = `<div class="card"><p class="err">${esc(e.message)}</p></div>`; });

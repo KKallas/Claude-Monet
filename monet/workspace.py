@@ -34,7 +34,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import feynman, note as notes, runner, semmelweis
+from . import feynman, joints, note as notes, runner, semmelweis
 
 ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
@@ -68,6 +68,23 @@ class Problem(Exception):
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+_solid_cache: dict = {}
+
+
+def _shapes(out_dir: Path) -> dict:
+    """The parts of a build as closed meshes, for asking what overlaps: read from its preview, kept while it is."""
+    glb = out_dir / "model.glb"
+    key = (str(out_dir), glb.stat().st_mtime_ns)
+    if key not in _solid_cache:
+        from . import render
+        verts, tris, _ = render.load(glb)
+        parts = json.loads((out_dir / "faces.json").read_text())["parts"]
+        if len(_solid_cache) > 8:
+            _solid_cache.clear()
+        _solid_cache[key] = joints.solids(verts, tris, parts)
+    return _solid_cache[key]
 
 
 def _sha(path: Path) -> str:
@@ -533,6 +550,13 @@ class Project:
                  "why": t.get("why") or "every tag must still find its feature", "by": "monet"} for k, t in r["tags"].items()]
         if not r.get("valid", True):
             rows.append({"id": "valid", "what": "valid", "ok": False, "value": False, "expect": "= True", "why": "the solid is not valid geometry", "by": "monet"})
+        mo = r.get("motion")
+        if mo:
+            out["motion"] = mo      # how the parts may move, and what moving them hits: the canvas poses them by it
+            rows += [{"id": f"joint-{k}", "what": f"joint.{k}.resolved", "ok": bool(j["resolved"]), "value": bool(j["resolved"]), "expect": "= True",
+                      "why": j.get("why") or "every joint must find its parts and its axis", "by": "monet"} for k, j in mo["joints"].items()]
+            if mo["problems"]:
+                rows.append({"id": "joints", "what": "joints", "ok": False, "value": False, "expect": "= True", "why": "; ".join(mo["problems"]), "by": "monet"})
         out["checks"] = rows + feynman.evaluate(self.checks(name), r, self.printer)
         out["green"] = all(c["ok"] for c in out["checks"])
         return out
@@ -625,6 +649,24 @@ class Project:
     def set_tags(self, name: str, tags: dict) -> dict:
         with self.lock:
             return self.write(name, notes.set_tags(self.read(name), tags))
+
+    def set_joints(self, name: str, joints: dict, ground=None) -> dict:
+        with self.lock:
+            return self.write(name, notes.set_joints(self.read(name), joints, ground))
+
+    def pose(self, name: str, given: dict | None = None, free: dict | None = None) -> dict:
+        """What the parts hit with the joints at these values (and free parts where `free` puts them): from the
+        build's own mesh. Nothing of the Note is run for it."""
+        r = self.result(name)
+        if not r["ok"] or not r.get("motion"):
+            raise Problem(f"{name} has no joints to move" if r["ok"] else f"{name} does not build", 404)
+        mo = r["motion"]
+        unknown = [k for k in (given or {}) if k not in mo["joints"]]
+        if unknown:
+            raise Problem(f"no joint {', '.join(map(repr, unknown))} in {name}; there are: {', '.join(mo['joints'])}")
+        shapes = _shapes(self.out / name)
+        return {"values": {k: round(v, 4) for k, v in joints.values(mo, given).items()},
+                "clashes": joints.pose_clashes(mo, shapes, given, free), "unchecked": mo.get("unchecked", [])}
 
     # ---- checks (Feynman) --------------------------------------------------------
     def _checks_file(self, name: str) -> Path:

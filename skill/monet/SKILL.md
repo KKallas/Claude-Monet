@@ -23,7 +23,7 @@ patching the previous shape.
 Your tools, in whichever form the harness gives them:
 
 - **MCP tools** from a connector usually called Monet: `guide`, `status`, `new_project`,
-  `read_note`, `write_note`, `check`, `look`, `selection`, `add_check`, `load_check`, `save`,
+  `read_note`, `write_note`, `check`, `look`, `pose`, `selection`, `add_check`, `load_check`, `save`,
   `versions`, `diff`, `export`.
 - **A shell but no MCP tools**: `scripts/monet.py` in this skill does the same over HTTP. Set
   `MONET_URL` to the user's agent link (it looks like `https://host/w/AbC123…`; they find it in
@@ -192,8 +192,50 @@ def build(p=PARAMS):
   Anything printed should be a Note of its own, so it has its own checks and exports.
 - Parts that must fit each other should take their numbers from one shared helper module, and
   be modelled in the frame they have in the assembly when that is simpler than placing them.
-- Checks on an assembly: `solids` equals the number of parts, and its overall size. Whether
-  parts collide is not measured yet: look, with `look` and the section view.
+- Checks on an assembly: `solids` equals the number of parts, and its overall size. Parts that
+  overlap as built are measured: the report's `motion.interference` lists each pair and its mm³,
+  and `interference_mm3` is their sum, for a check.
+
+### Joints: how the parts may still move
+
+An assembly says how its parts move with `JOINTS` (and `GROUND`), plain literals beside `TAGS`.
+The parts stay where `build()` puts them; a joint only says which way a part may still move from
+there and how far. Every value is 0 as built. There is no solver.
+
+```python
+GROUND = "frame"
+
+JOINTS = {
+    "frame": {"kind": "rigid", "parts": ["base", "post"]},         # a rigid group: moves as one, named like a part
+    "lid": {"kind": "revolute", "moves": "lid", "on": "frame", "axis": "hinge_pin", "range": [0, 110]},
+    "jaw": {"kind": "slider", "moves": "jaw", "on": "frame", "axis": {"origin": [0, 0, 12], "dir": "X"}, "range": [-30, 0]},
+    "gear": {"kind": "revolute", "moves": "wheel", "on": "frame", "axis": "wheel_bore", "follows": {"lid": 2.5}},
+}
+```
+
+- `kind`: `rigid` (held fast; with `parts` it makes a group), `revolute` (turns, degrees, right
+  hand about the axis), `slider` (moves along it, mm). `moves` and `on` name a part or a group.
+- `axis`: **a tag** of the assembly (a round or square hole or a boss: its centre line; a flat
+  face: its normal; a group of two points: the line between them), so the joint follows the
+  geometry when it changes; or `{"origin": [x, y, z], "dir": "X" | "-Z" | [x, y, z]}`.
+  `"flip": true` turns the positive way round. `locked: true` holds a joint where it is.
+- A part no joint names is **free**. `GROUND` is what never moves.
+- Each part hangs on at most one joint: the joints are a tree from the ground. **A loop**
+  (a parallelogram, a four-bar, gears) is made with `follows`: the follower's value is the sum of
+  other joints' values times factors. Work the relation out yourself, write it, and back it with
+  a check. The MG400 Note in the `mg400_rakis` template is the worked example: two
+  parallelograms, every follower a sum of J2 and J3.
+- The report's `motion` holds the joints as found (`resolved`, `why`, their axes), and for every
+  joint moved by hand a **sweep**: it is moved through its range and past it, the others as built.
+  `stop_min` / `stop_max` say where it first hits something each way, `clash_mm3` the worst new
+  overlap inside its range, `clashes` the stretches and the pairs of parts. A clash is *new*
+  overlap; what overlapped as built is the interference's.
+- `pose(project, note, values="j1=30, j2=-10")` shows the assembly moved and lists what it hits
+  there. Look at it moved before you say it works.
+- In the canvas's **Motion** area the user drags parts (each moves only as its joint lets it),
+  plays a joint through its range, sees clashes in red, and makes, changes, locks and removes
+  joints. What they make is written into `JOINTS` (an axis they pick is tagged as `<joint>_axis`):
+  keep it, as you keep their tags.
 
 ## Tags and checks
 
@@ -218,9 +260,9 @@ on are tags of kind `plane`: leave them be.
 A **check** is a measurement and the range it must stay in, for example
 `tag.rod_bore.width` between 16.2 and 16.4. Checks belong to the user:
 
-- The canvas has three areas the user moves between: **Sketch** (drawing on a face), **Part**
-  (one object: selecting, measuring, tagging, its material) and **Assembly** (objects put
-  together). The link from `status(project)` opens the project; a part and an assembly are both
+- The canvas has four areas the user moves between: **Sketch** (drawing on a face), **Part**
+  (one object: selecting, measuring, tagging, its material), **Assembly** (objects put
+  together) and **Motion** (how they move: joints, dragging, clashes). The link from `status(project)` opens the project; a part and an assembly are both
   just Notes to you.
 - You can **add** checks with `add_check`, and you should: when a Note has rules in its docstring
   that no check covers, propose a check for each and tell the user what you added.

@@ -1,0 +1,47 @@
+{
+ "checks": [
+  {
+   "id": "links",
+   "what": "solids",
+   "equals": 10,
+   "why": "base, turret, upper arm and rod, elbow plate, forearm and rod, wrist, tool: nine links, the elbow plate in two halves joined by the pivot pins (as the real one is)",
+   "by": "agent"
+  },
+  {
+   "id": "apart",
+   "what": "interference_mm3",
+   "max": 1.0,
+   "why": "links sit side by side: nothing overlaps as built",
+   "by": "agent"
+  },
+  {
+   "id": "j1-free",
+   "what": "joint.j1.clash_mm3",
+   "max": 1.0,
+   "why": "the turret turns its whole ±160° freely",
+   "by": "agent"
+  },
+  {
+   "id": "j2-free",
+   "what": "joint.j2.clash_mm3",
+   "max": 1.0,
+   "why": "the upper arm tilts -25…85° freely, the forearm level",
+   "by": "agent"
+  },
+  {
+   "id": "j4-free",
+   "what": "joint.j4.clash_mm3",
+   "max": 1.0,
+   "why": "the tool turns ±180° in its housing",
+   "by": "agent"
+  },
+  {
+   "id": "base",
+   "what": "size_x",
+   "min": 189.95,
+   "max": 400.0,
+   "why": "the 190 mm base the nest pocket is made for",
+   "by": "agent"
+  }
+ ]
+}

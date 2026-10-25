@@ -228,6 +228,20 @@ def write_glb(path: Path, verts, tris, segs):
                      + struct.pack("<I4s", len(text), b"JSON") + text + struct.pack("<I4s", len(binary), b"BIN\x00") + binary)
 
 
+def motion(mod, parts, faces, verts, tris, found):
+    """An assembly's joints, found on this build, and what moving them hits; where its parts overlap as built.
+    None for a single part."""
+    joint_spec, ground = getattr(mod, "JOINTS", None) or {}, getattr(mod, "GROUND", None)
+    if len(parts) < 2 and not joint_spec:
+        return None
+    from . import joints
+    t0 = time.time()
+    model = joints.resolve(joint_spec, ground, [p["name"] for p in parts], getattr(mod, "TAGS", {}) or {}, found, faces)
+    model.update(joints.analyse(model, joints.solids(verts, tris, parts)))
+    model["seconds"] = round(time.time() - t0, 2)
+    return model
+
+
 def load_note(project_dir: Path, note: str):
     sys.path.insert(0, str(project_dir))
     spec = importlib.util.spec_from_file_location(note, project_dir / f"{note}.py")
@@ -281,6 +295,7 @@ def run(project_dir: Path, note: str, out_dir: Path, exports=()) -> dict:
         segs, edges, points = edges_and_points(groups, parts)
         result["tags"] = tags.resolve(getattr(mod, "TAGS", {}) or {}, faces, result["fingerprint"]["bbox"],
                                       blocked=crossing(shape), edges=edges, points=points, parts=parts)
+        result["motion"] = motion(mod, parts, faces, verts, tris, result["tags"])
         write_glb(out_dir / "model.glb", verts, tris, segs)
         (out_dir / "faces.json").write_text(json.dumps({"faces": faces, "parts": parts, "edges": edges, "points": points}, separators=(",", ":")))
         result["parts"] = [{k: part[k] for k in ("name", "volume", "bbox", "faces")} for part in parts]

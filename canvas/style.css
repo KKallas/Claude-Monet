@@ -152,6 +152,18 @@ aside .fold { padding: 2px 14px 6px; }
 .tag, .part { cursor: pointer; }
 .part.sel, .tag.sel { box-shadow: inset 2px 0 var(--accent); padding-left: 8px; margin-left: -8px; }
 .measured { margin-top: 8px; }
+/* Motion: a row per joint, its slider under it; a joint pointed at shows its axis in the view */
+.joint .kind { display: inline-block; width: 16px; color: var(--accent); }
+.joint .x.lock { font-size: 11px; }
+.joint .x.lock.on { color: var(--warn); font-weight: 600; }
+.joint .line { margin-top: 4px; }
+.joint input[type=range] { flex: 1; min-width: 0; }
+.joint input.num { flex: 0 0 62px; text-align: right; }
+.joint .unit { flex: none; min-width: 18px; }
+.joint .why .mono { margin-top: 2px; }
+.joint:hover { box-shadow: inset 2px 0 var(--accent); padding-left: 8px; margin-left: -8px; }
+.card label { display: inline-flex; gap: 5px; align-items: center; color: var(--text-muted); }
+.row > .v select { max-width: 100%; min-width: 0; text-overflow: ellipsis; }
 .big { font-size: 15px; color: var(--text-bright); }
 /* the length of a measured line, written beside it in the view */
 #dim { position: absolute; left: 0; top: 0; background: rgba(16, 19, 27, .88); border: 1px solid #5fd0ff; color: #bfeaff; border-radius: 4px; padding: 1px 7px; font-size: 12.5px; font-weight: 600; pointer-events: none; white-space: nowrap; z-index: 2; }
