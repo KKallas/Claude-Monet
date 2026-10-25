@@ -84,6 +84,23 @@ const cut = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
 // where the section cuts through material it glows red: the inside of the part, seen through the cut, is drawn flat
 // (pushed back further than the faces are, so it never shows at their silhouette)
 const capMaterial = new THREE.MeshBasicMaterial({ color: 0xff2a1a, side: THREE.BackSide, toneMapped: false, clippingPlanes: [cut], polygonOffset: true, polygonOffsetFactor: 3, polygonOffsetUnits: 3 });
+// in the 2077 skin the cut is neon: the fill hatched on the slant, the hatch drifting, and its outline (where the plane
+// meets the faces) a tube of light, a pale hot core in a red halo, the layers added onto the picture so they glow
+const cyber = () => document.documentElement.dataset.skin === 'cyber';
+const capLight = { uHatch: { value: 0 }, uTime: { value: 0 }, uPitch: { value: 12 } };
+capMaterial.onBeforeCompile = (shader) => {
+  Object.assign(shader.uniforms, capLight);
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\nuniform float uHatch;\nuniform float uTime;\nuniform float uPitch;')
+    .replace('#include <color_fragment>', `#include <color_fragment>
+      diffuseColor.rgb *= mix(1.0, 0.5 + 0.5 * step(0.5, fract((gl_FragCoord.x + gl_FragCoord.y) / uPitch - uTime)), uHatch);`);
+};
+capMaterial.customProgramCacheKey = () => 'monet-cap';
+const NEON = [[2, 0xffd9de, 1], [5, 0xff2e4c, 0.9], [12, 0xff2e4c, 0.35], [28, 0xff2e4c, 0.12]];     // width px, colour, strength
+// (each layer writes depth and draws only where it is nearer: where its segments overlap, at their joints, it is drawn
+// once, not added up into a bead; and a wider layer shows only outside the narrower ones, as rings)
+const neonMaterials = NEON.map(([linewidth, color, opacity]) => new LineMaterial({ color, linewidth, opacity, transparent: true, depthFunc: THREE.LessDepth, blending: THREE.AdditiveBlending, toneMapped: false }));
+let neonDirty = true, neonOn = false;
 const wipeA = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0), wipeB = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0);
 const box = new THREE.Box3(), size = new THREE.Vector3(), centre = new THREE.Vector3();
 let radius = 100, meshes = [], shared = null, edgesOn = true, xray = false, sectionOn = false, explode = 0, partColours = true;
@@ -177,7 +194,7 @@ function dress() {
   const edge = look.edge();
   for (const one of groups.part.children) {
     for (const o of one.children) {
-      if (o.userData.cap) continue;
+      if (o.userData.cap || o.userData.neon) continue;
       if (o.isMesh) { o.material.dispose(); o.material = look.material(lookOf(one.userData.part)); }
       else if (o.userData.edges) { o.material.color.set(edge.color); o.material.opacity = edge.opacity; o.material.transparent = edge.opacity < 1; }
       else if (o.userData.dots) o.material.color.set(edge.color);
@@ -191,6 +208,7 @@ function resize() {
   const w = view.clientWidth, h = view.clientHeight;
   renderer.setSize(w, h, false);
   for (const o of [selLines, dimLine, ...holo.children, ...drawn.children, ...sheets.children]) o.material.resolution?.set(w, h);
+  for (const m of neonMaterials) m.resolution.set(w, h);
   sketch.resize();
   const half = radius * 1.2, aspect = w / Math.max(1, h);
   Object.assign(ortho, { left: -half * aspect, right: half * aspect, top: half, bottom: -half, near: 0.01, far: radius * 40 });
@@ -268,7 +286,7 @@ async function loadInto(group, url, plain) {
 // The draft arrives as one mesh, its triangles grouped part by part. Give every part an object of its own (they
 // share the vertices), so a part can be hidden, coloured and pulled out of the assembly. A plain Note is one part.
 function assemble({ mesh, lines }) {
-  meshes = []; shared = null;
+  meshes = []; shared = null; neonDirty = true;
   groups.part.clear();
   if (!mesh) return;
   const g = mesh.geometry;
@@ -285,6 +303,7 @@ function assemble({ mesh, lines }) {
     }
     const one = new THREE.Group(), m = new THREE.Mesh(pg, new THREE.MeshBasicMaterial());     // dress() gives it its material
     m.userData.part = one.userData.part = i;
+    one.userData.tris = part.tris;
     one.add(m);
     const cap = new THREE.Mesh(pg, capMaterial);
     cap.userData.cap = true;
@@ -323,13 +342,48 @@ function spread() {
     if (b) one.position.set((b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2).sub(home).multiplyScalar(explode);
     one.visible = !S.hidden.has(one.userData.part);
   }
+  neonDirty = true;
   showSelection();
+}
+
+// the outline of the cut, part by part: where each triangle crosses the plane, a segment
+function traceCut() {
+  neonDirty = false;
+  neonOn = sectionOn && cyber();
+  for (const one of groups.part.children) {
+    for (const o of one.children.filter((c) => c.userData.neon)) { one.remove(o); o.geometry.dispose(); }
+  }
+  if (!neonOn || !shared) return;
+  const at = shared.position, index = shared.index, n = cut.normal;
+  for (const one of groups.part.children) {
+    const [first, count] = one.userData.tris, k = cut.constant + n.dot(one.position);    // the plane, where this part was before it was pulled out
+    const side = (v) => n.x * at[v] + n.y * at[v + 1] + n.z * at[v + 2] + k, out = [];
+    for (let t = first; t < first + count; t++) {
+      const hits = [];
+      for (let e = 0; e < 3; e++) {
+        const a = index[t * 3 + e] * 3, b = index[t * 3 + (e + 1) % 3] * 3, da = side(a), db = side(b);
+        if ((da < 0) === (db < 0)) continue;
+        const f = da / (da - db);
+        hits.push(at[a] + (at[b] - at[a]) * f, at[a + 1] + (at[b + 1] - at[a + 1]) * f, at[a + 2] + (at[b + 2] - at[a + 2]) * f);
+      }
+      if (hits.length === 6) for (const v of hits) out.push(v);
+    }
+    if (!out.length) continue;
+    const g = new LineSegmentsGeometry().setPositions(out);
+    for (const material of neonMaterials) {
+      const tube = new LineSegments2(g, material);
+      tube.userData.neon = true;
+      tube.renderOrder = 6;
+      one.add(tube);
+    }
+  }
 }
 
 function styleAll() {
   for (const [key, g] of Object.entries(groups)) {
     g.traverse((o) => {
       if (o.userData.cap) { o.visible = sectionOn && !xray; return; }
+      if (o.userData.neon) return;
       if (o.userData.dots) { o.visible = S.mode === 'vertex' || S.measuring; o.material.clippingPlanes = sectionOn && key === 'part' ? [cut] : []; return; }
       // lines are always drawn while lines are what is being picked
       if (o.userData.edges) { o.visible = edgesOn || (key === 'part' && (S.mode === 'edge' || S.measuring || look.style === 'hidden')); o.material.clippingPlanes = sectionOn && key === 'part' ? [cut] : []; return; }
@@ -353,6 +407,7 @@ function setSection() {
   cut.constant = lo - past + (hi - lo + 2 * past) * t;
   const mix = S.compare?.mix ?? 0.5, x = box.min.x + (box.max.x - box.min.x) * mix;
   wipeA.constant = x; wipeB.constant = -x;
+  neonDirty = true;
 }
 
 // colour the faces: the parts of an assembly, tagged faces on hover, what is selected
@@ -895,7 +950,15 @@ $('#sketchUndo').onclick = () => sketch.undo();
 (function loop() {
   requestAnimationFrame(loop);
   controls.update();
-  if (sectionOn) capMaterial.color.setRGB(1, 0.13 + 0.07 * Math.sin(performance.now() / 400), 0.08, THREE.SRGBColorSpace);   // a slow glow
+  if (sectionOn) {      // a slow glow; in 2077 a neon red, hatched
+    const now = performance.now(), neon = cyber();
+    if (neon) capMaterial.color.setRGB(1, 0.1 + 0.08 * Math.sin(now / 400), 0.24 + 0.06 * Math.sin(now / 400), THREE.SRGBColorSpace);
+    else capMaterial.color.setRGB(1, 0.13 + 0.07 * Math.sin(now / 400), 0.08, THREE.SRGBColorSpace);
+    capLight.uHatch.value = neon ? 1 : 0;
+    capLight.uTime.value = now / 4000;
+    capLight.uPitch.value = 12 * renderer.getPixelRatio();
+  }
+  if (neonDirty || neonOn !== (sectionOn && cyber())) traceCut();
   renderer.render(scene, camera);
   if (!(S.room === 'sketch' && sketch.state.active)) cube.draw(renderer, camera, controls.target, view.clientWidth, view.clientHeight);
   for (const el of $('#planeLabels').children) {      // the name of each plane, at a corner of its sheet
