@@ -34,6 +34,8 @@ KINDS = ("rigid", "revolute", "slider")
 UNIT = {"revolute": "°", "slider": "mm"}
 AXES = {"X": (1.0, 0.0, 0.0), "Y": (0.0, 1.0, 0.0), "Z": (0.0, 0.0, 1.0)}
 CLASH = 1.0          # mm³ of new overlap between two parts before it counts as a clash (touching is not)
+NOISE = 0.05         # and, where two parts overlap as built (a pin in its hole), this much of that more: a faceted pin
+                     # turning in a faceted hole overlaps it a little more or less at every step
 STEP = 1.0           # mm: how far the farthest moving point goes between two looks during a sweep
 EXACT = 0.01         # mm or degrees: how closely a stop is found
 MAX_SAMPLES = 1500   # per direction of a sweep
@@ -330,18 +332,63 @@ def _apart(a, b):
 
 def overlaps(placed: dict, pairs) -> dict:
     """{(a, b): mm³ of material both take up}, for the pairs whose boxes meet."""
-    boxes = {n: m.bounding_box() for n, m in placed.items()}
+    boxes = {n: m.bounding_box() for n, m in placed.items() if m is not None}
     out = {}
     for a, b in pairs:
-        if a in placed and b in placed and not _apart(boxes[a], boxes[b]):
+        if a in boxes and b in boxes and not _apart(boxes[a], boxes[b]):
             v = (placed[a] ^ placed[b]).volume()
             if v > 1e-6:
                 out[(a, b)] = v
     return out
 
 
+def _excess(now: dict, home: dict) -> list:
+    """[[a, b, mm³]]: the pairs that overlap more than they did as built, by more than the noise of their facets."""
+    out = []
+    for k, v in now.items():
+        extra = v - home.get(k, 0.0)
+        if extra > CLASH + NOISE * home.get(k, 0.0):
+            out.append([k[0], k[1], round(extra, 3)])
+    return sorted(out, key=lambda r: -r[2])
+
+
+def _turns_about(T, box) -> bool:
+    """Does the rigid motion T turn about a line through this box (a pin through where two parts overlap), without
+    sliding along it?"""
+    R, t = np.asarray(T)[:3, :3], np.asarray(T)[:3, 3]
+    angle = math.acos(max(-1.0, min(1.0, (np.trace(R) - 1) / 2)))
+    if angle < 1e-6:
+        return False
+    w = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
+    if np.linalg.norm(w) < 1e-9:       # half a turn: the axis is where R leaves a line in place
+        vals, vecs = np.linalg.eigh((R + np.eye(3)) / 2)
+        w = vecs[:, int(np.argmax(vals))]
+    w = w / np.linalg.norm(w)
+    if abs(float(np.dot(t, w))) > 0.01:
+        return False
+    point = np.linalg.lstsq(np.eye(3) - R, t, rcond=None)[0]
+    c, half = (np.asarray(box[:3]) + box[3:]) / 2, np.linalg.norm(np.asarray(box[3:]) - box[:3]) / 2
+    off = c - point
+    return float(np.linalg.norm(off - np.dot(off, w) * w)) <= half + 0.5
+
+
+def pinned(model: dict, shapes: dict, home: dict, poses) -> set:
+    """The pairs of parts that turn on a pin: overlapping as built (the pin drawn in its hole), and at every one of
+    these poses turned against each other about a line through that overlap (joined by a revolute joint, or
+    closing a loop, as the far pin of a parallelogram). However they turn, that is the pin in its hole."""
+    out = set()
+    for (a, b), v in home.items():
+        if v <= 0:
+            continue
+        box = (shapes[a] ^ shapes[b]).bounding_box()
+        rel = [np.linalg.inv(pf.get(b, np.eye(4))) @ pf.get(a, np.eye(4)) for pf in poses]
+        if all(_turns_about(T, box) or np.allclose(T, np.eye(4)) for T in rel) and not all(np.allclose(T, np.eye(4)) for T in rel):
+            out.add((a, b))
+    return out
+
+
 def interference(shapes: dict) -> dict:
-    """Where parts take up the same material as built."""
+    """Where parts take up the same material as built (pins in their holes too: they are listed, not clashes)."""
     names = [n for n, m in shapes.items() if m is not None]
     hit = overlaps(shapes, [(a, b) for i, a in enumerate(names) for b in names[i + 1:]])
     pairs = sorted(([a, b, round(v, 3)] for (a, b), v in hit.items() if v > CLASH / 2), key=lambda r: -r[2])
@@ -369,6 +416,10 @@ def sweep(model: dict, shapes: dict, joint: str, home: dict | None = None) -> di
         return {"stop_min": None, "stop_max": None, "clash_mm3": 0.0, "clashes": [], "looked": 0}
     if home is None:
         home = overlaps(shapes, pairs)
+    pins = pinned(model, shapes, home, probe)
+    pairs = [k for k in pairs if k not in pins]
+    if not pairs:
+        return {"stop_min": None, "stop_max": None, "clash_mm3": 0.0, "clashes": [], "looked": 0}
     if row["kind"] == "revolute":
         reach = 1.0
         for n in moving:
@@ -383,19 +434,13 @@ def sweep(model: dict, shapes: dict, joint: str, home: dict | None = None) -> di
 
     def at(x):
         looked[0] += 1
-        hit = overlaps(_moved(shapes, part_frames(model, {joint: x})), pairs)
-        worst, who = 0.0, []
-        for k, v in hit.items():
-            extra = v - home.get(k, 0.0)
-            if extra > CLASH:
-                who.append([k[0], k[1], round(extra, 3)])
-            worst = max(worst, extra)
-        return worst, sorted(who, key=lambda r: -r[2])
+        who = _excess(overlaps(_moved(shapes, part_frames(model, {joint: x})), pairs), home)
+        return (who[0][2] if who else 0.0), who
 
     def edge(x_ok, x_bad):      # where between a free place and a clashing one the clash begins
         while abs(x_bad - x_ok) > EXACT:
             mid = (x_ok + x_bad) / 2
-            if at(mid)[0] > CLASH:
+            if at(mid)[1]:
                 x_bad = mid
             else:
                 x_ok = mid
@@ -413,7 +458,7 @@ def sweep(model: dict, shapes: dict, joint: str, home: dict | None = None) -> di
             worst, who = at(nx)
             if lo - 1e-9 <= nx <= hi + 1e-9 and worst > out["clash_mm3"]:
                 out["clash_mm3"], worst_at = worst, (nx, who)
-            bad = worst > CLASH
+            bad = bool(who)
             if bad and not clashing:
                 since = edge(x, nx)
                 key = "stop_max" if sign > 0 else "stop_min"
@@ -450,8 +495,9 @@ def pose_clashes(model: dict, shapes: dict, given: dict | None = None, free: dic
     pairs = [(p, q) for i, p in enumerate(names) for q in names[i + 1:]
              if not np.allclose(pf.get(p, np.eye(4)), pf.get(q, np.eye(4)))]
     home = overlaps(shapes, pairs)
-    now = overlaps(_moved(shapes, pf), pairs)
-    return sorted(([a, b, round(v - home.get((a, b), 0.0), 3)] for (a, b), v in now.items() if v - home.get((a, b), 0.0) > CLASH), key=lambda r: -r[2])
+    pins = pinned(model, shapes, home, [pf])
+    pairs = [k for k in pairs if k not in pins]
+    return _excess(overlaps(_moved(shapes, pf), pairs), home)
 
 
 def measurements(motion: dict) -> dict:

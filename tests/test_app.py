@@ -402,7 +402,7 @@ def test_what_agents_change_is_written_down(app, admin, client, reg):
 
 def test_projects_are_archived_uploaded_and_deleted_by_the_person_only(app, admin, client, reg):
     rows = {p["name"]: p for p in client.get("/w/mari/api/projects").json()["projects"]}
-    assert set(rows) == {"mg400_rakis", "starter"} and rows["starter"]["version"] >= 1 and rows["mg400_rakis"]["notes"] == 9
+    assert set(rows) == {"mg400_rakis", "starter"} and rows["starter"]["version"] >= 1 and rows["mg400_rakis"]["notes"] == 10
     got = client.get("/w/mari/api/p/starter/archive.zip")
     assert got.headers["content-type"] == "application/zip" and 'filename="starter.zip"' in got.headers["content-disposition"]
     zipped = {"content": got.content, "headers": {"content-type": "application/zip"}}

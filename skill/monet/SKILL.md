@@ -229,7 +229,10 @@ JOINTS = {
   joint moved by hand a **sweep**: it is moved through its range and past it, the others as built.
   `stop_min` / `stop_max` say where it first hits something each way, `clash_mm3` the worst new
   overlap inside its range, `clashes` the stretches and the pairs of parts. A clash is *new*
-  overlap; what overlapped as built is the interference's.
+  overlap; what overlapped as built is the interference's. Two parts that overlap as built and turn
+  about a line through that overlap are a pin in its hole: not a clash, wherever the pin is.
+- `mg400.py` (Dobot's own link shapes, from a mesh module) and `mg400_blocks.py` (the same joints on
+  simple links) in the `mg400_rakis` template are the worked examples.
 - `pose(project, note, values="j1=30, j2=-10")` shows the assembly moved and lists what it hits
   there. Look at it moved before you say it works.
 - In the canvas's **Motion** area the user drags parts (each moves only as its joint lets it),

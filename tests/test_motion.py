@@ -1,7 +1,8 @@
 """Joints: an assembly's parts move as its JOINTS say, and what moving them hits is found.
 
 The MG400 must move as Dobot's own robot description says it does (reference/mg400: their URDF):
-every link where the URDF puts it, at any pose. The rakis top must slide 79 mm, stopped by the L brackets."""
+every link where the URDF puts it, at any pose. Both of them: mg400 (Dobot's own link shapes) and
+mg400_blocks (simple links). The rakis top must slide 79 mm, stopped by the L brackets."""
 import json
 import math
 import xml.etree.ElementTree as ET
@@ -108,16 +109,26 @@ def urdf_frames(q):
 POSES = [(0, 0, 0, 0), (30, 10, 20, 45), (-120, 60, 80, -90), (160, -25, -25, 180), (45, 85, 105, 10), (-75, 40, -10, 0)]
 
 
-@pytest.fixture(scope="module")
-def mg400(ws):
-    report = ws.project("mg400_rakis").report("mg400")
+@pytest.fixture(scope="module", params=["mg400", "mg400_blocks"])
+def arm(ws, request):
+    report = ws.project("mg400_rakis").report(request.param)
     assert report["built"], report.get("error")
     return report
 
 
+@pytest.fixture(scope="module")
+def mg400(ws):
+    return ws.project("mg400_rakis").report("mg400")
+
+
+@pytest.fixture(scope="module")
+def blocks(ws):
+    return ws.project("mg400_rakis").report("mg400_blocks")
+
+
 @pytest.mark.parametrize("q", POSES, ids=[",".join(map(str, q)) for q in POSES])
-def test_mg400_moves_as_its_urdf_says(mg400, q):
-    model = mg400["motion"]
+def test_mg400_moves_as_its_urdf_says(arm, q):
+    model = arm["motion"]
     assert model["ok"] and joints.drivers(model) == ["j1", "j2", "j3", "j4"]
     mine = joints.part_frames(model, dict(zip(("j1", "j2", "j3", "j4"), q)))
     home, there = urdf_frames((0, 0, 0, 0)), urdf_frames(q)
@@ -129,8 +140,8 @@ def test_mg400_moves_as_its_urdf_says(mg400, q):
 
 
 @pytest.mark.parametrize("q", POSES[1:], ids=[",".join(map(str, q)) for q in POSES[1:]])
-def test_mg400_parallelograms_hold_and_the_tool_points_down(mg400, q):
-    pf = joints.part_frames(mg400["motion"], dict(zip(("j1", "j2", "j3", "j4"), q)))
+def test_mg400_parallelograms_hold_and_the_tool_points_down(arm, q):
+    pf = joints.part_frames(arm["motion"], dict(zip(("j1", "j2", "j3", "j4"), q)))
     at = lambda part, p: (pf[part] @ [*p, 1.0])[:3]
     # the rear loop: the top of the rear rod, the elbow plate's third pivot and the forearm rod's pivot are one point
     top = (37.4495, 0.0, 402.9969)
@@ -142,19 +153,36 @@ def test_mg400_parallelograms_hold_and_the_tool_points_down(mg400, q):
     assert np.allclose(pf["tool"][:3, 2], (0, 0, 1), atol=1e-9)
 
 
-def test_mg400_links_are_the_size_of_the_real_ones(mg400):
-    """Simplified, each link within 6 mm of the real link's box on every side, in its own frame."""
+@pytest.mark.parametrize("which,within", [("mg400", 0.5), ("mg400_blocks", 6.0)])
+def test_mg400_links_are_the_size_of_the_real_ones(ws, which, within):
+    """Each link's box, in its own frame, against the real link's: Dobot's shapes (simplified to 0.4 mm) within
+    half a millimetre on every side; the blocks within 6 mm."""
     home = urdf_frames((0, 0, 0, 0))
-    for part in mg400["parts"]:
+    for part in ws.project("mg400_rakis").report(which)["parts"]:
         real = REAL[part["name"]]["bbox"]
         o = home[REAL[part["name"]]["urdf_link"]][:3, 3]
         lo = [part["at"][k] - part["size"][k] / 2 - o[k] for k in range(3)]
         hi = [part["at"][k] + part["size"][k] / 2 - o[k] for k in range(3)]
-        assert np.allclose(lo, real[:3], atol=6.0) and np.allclose(hi, real[3:], atol=6.0), (part["name"], lo, hi, real)
+        assert np.allclose(lo, real[:3], atol=within) and np.allclose(hi, real[3:], atol=within), (part["name"], lo, hi, real)
 
 
-def test_mg400_nothing_overlaps_as_built_and_the_wrist_meets_the_rod(mg400):
+def test_mg400_moves_freely_and_its_pins_are_not_clashes(mg400):
+    """Dobot's shapes overlap where a pin sits in its hole. Turning on that pin is no clash, whether a joint joins
+    the two parts or the pin closes a parallelogram: J1, J2 and J4 go their whole ranges freely."""
     m = mg400["motion"]
+    assert m["ok"] and m["unchecked"] == [] and mg400["measure"]["valid"]
+    pins = {(a, b) for a, b, _ in m["interference"]["pairs"]}
+    assert ("turret", "upper_rod") in pins and ("forearm", "wrist") in pins          # the rear axle; the far pin of the front loop
+    for j in ("j1", "j2", "j4"):
+        assert m["sweeps"][j]["clash_mm3"] == 0.0, (j, m["sweeps"][j])
+    # J2 tilted back past its range: the upper arm meets the rear rod. J3, with J2 upright: the wrist meets it too
+    assert -33 < m["sweeps"]["j2"]["stop_min"] < -25
+    s = m["sweeps"]["j3"]
+    assert 80 < s["stop_max"] < 90 and s["clashes"][0][2][0][:2] == ["upper_rod", "wrist"]
+
+
+def test_mg400_blocks_nothing_overlaps_as_built_and_the_wrist_meets_the_rod(blocks):
+    m = blocks["motion"]
     assert m["interference"] == {"total_mm3": 0.0, "pairs": []} and m["unchecked"] == []
     for j in ("j1", "j2", "j4"):          # alone, each goes through its whole range freely
         assert m["sweeps"][j]["clash_mm3"] == 0.0, j

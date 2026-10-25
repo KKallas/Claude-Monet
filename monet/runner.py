@@ -141,17 +141,81 @@ def describe(shape, groups):
     return faces, verts, tris, parts
 
 
+FACET_DEG = 30.0     # a seam between two triangles of a mesh that turn less than this is not an edge
+
+
+class Shapes:
+    """A set of shapes the kernel's way: one shape however it is turned (IsSame). Keyed by the kernel's hash."""
+    def __init__(self):
+        self.by = {}
+
+    def add(self, shape):
+        if shape not in self:
+            self.by.setdefault(hash(shape), []).append(shape)
+
+    def __contains__(self, shape):
+        return any(shape.IsSame(x) for x in self.by.get(hash(shape), ()))
+
+
+def facets(sub):
+    """The seams of a part made from a mesh (one flat triangle per face): the edges between two triangles that
+    meet at less than FACET_DEG. They are not drawn or offered to point at: a part brought in as a mesh keeps
+    only the edges a drawing would show. A face of four sides or more, or a curved one, is never a facet.
+    None for a part drawn as solids (fewer than 100 triangles)."""
+    import math
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.GeomAbs import GeomAbs_Plane
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_REVERSED
+    from OCP.TopExp import TopExp_Explorer
+    sides = {}       # hash of an edge -> [(the edge, normal of a triangle on it, or None)]
+    triangles = 0
+    for f in sub.faces():
+        w = f.wrapped
+        mine, around = [], TopExp_Explorer(w, TopAbs_EDGE)
+        while around.More():
+            if not any(around.Current().IsSame(x) for x in mine):
+                mine.append(around.Current())
+            around.Next()
+        surface, n = BRepAdaptor_Surface(w), None
+        if len(mine) == 3 and surface.GetType() == GeomAbs_Plane:
+            d, k = surface.Plane().Axis().Direction(), (-1.0 if w.Orientation() == TopAbs_REVERSED else 1.0)
+            n = (k * d.X(), k * d.Y(), k * d.Z())
+            triangles += 1
+        for e in mine:
+            row = sides.setdefault(hash(e), [])
+            hit = next((r for r in row if r[0].IsSame(e)), None)
+            if hit is None:
+                row.append((e, [n]))
+            else:
+                hit[1].append(n)
+    if triangles < 100:      # a few triangles are a drawn part's own faces, not a mesh
+        return None
+    near, seams = math.cos(math.radians(FACET_DEG)), Shapes()
+    for row in sides.values():
+        for e, (a, b, *more) in ((e, ns) for e, ns in row if len(ns) == 2):
+            if a and b and a[0] * b[0] + a[1] * b[1] + a[2] * b[2] >= near:
+                seams.add(e)
+    return seams
+
+
 def edges_and_points(groups, parts):
     """The real edges of the part as line segments, so the preview is drawn like a drawing, not like a mesh; and
     each edge and each corner point as plain data, so they can be pointed at. Part by part, like the triangles,
-    so a part can be moved or hidden with its edges."""
+    so a part can be moved or hidden with its edges. Of a part made from a mesh, the seams between its triangles
+    are left out (facets())."""
     from build123d import GeomType
     at = lambda v: [round(v.X, 4), round(v.Y, 4), round(v.Z, 4)]
     segs, edges, points = [], [], []
     for index, ((_, sub), part) in enumerate(zip(groups, parts)):
         start = len(segs)
+        seams, ends = facets(sub), Shapes()
         for e in sub.edges():
+            if seams is not None and e.wrapped in seams:
+                continue
             first, a, b = len(segs), e.position_at(0), e.position_at(1)
+            if seams is not None:
+                for v in e.vertices():
+                    ends.add(v.wrapped)
             d = {"i": len(edges), "p": index, "type": "other", "len": round(e.length, 3), "a": at(a), "b": at(b)}
             if e.geom_type == GeomType.LINE:
                 d["type"] = "line"
@@ -169,7 +233,8 @@ def edges_and_points(groups, parts):
             edges.append(d)
         part["edges"] = [start, len(segs) - start]
         base = len(points)
-        points.extend({"i": base + k, "p": index, "at": at(v)} for k, v in enumerate(sub.vertices()))
+        corners = [v for v in sub.vertices() if seams is None or v.wrapped in ends]
+        points.extend({"i": base + k, "p": index, "at": at(v)} for k, v in enumerate(corners))
     return segs, edges, points
 
 

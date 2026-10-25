@@ -132,13 +132,21 @@ together and nothing is solved. A joint turns or slides about an axis taken from
 follows the geometry when it changes) or given as origin and direction. A part no joint names is
 free; `GROUND` never moves. The joints form a tree from the ground; a loop (a parallelogram, a
 four-bar, gears) is written as `follows`: the follower's value is a sum of other joints' values
-times factors. The MG400 robot arm (`notes/mg400_rakis/mg400.py`) is built so, two
-parallelograms and all, and moves to the hundredth of a millimetre as Dobot's own robot
-description says (`reference/mg400/`, tested at six poses).
+times factors. The MG400 robot arm is built so, two parallelograms and all, and moves to the
+hundredth of a millimetre as Dobot's own robot description says (`reference/mg400/`, tested at six
+poses). Twice: `mg400.py` is its nine links as Dobot drew them, `mg400_blocks.py` the same arm
+drawn as plates, pins and boxes (light, and every face a true plane or cylinder to tag).
+
+A part can come **from a mesh**: `mg400_mesh.py` holds Dobot's link meshes (simplified to 0.4 mm
+with manifold3d, which keeps them closed), and the kernel makes a solid of each, a flat face per
+triangle (`BRepBuilderAPI_MakeShapeOnMesh`). The runner leaves the seams between such triangles out
+of the drawing and out of what can be pointed at, so a mesh part is drawn like a part.
 
 Every build of an assembly also measures where its parts **overlap as built**, and moves each
 joint alone through its range and past it: where it first hits something each way, and the worst
-new overlap inside its range. Those are numbers a check can hold (`joint.slide.stop_min`,
+new overlap inside its range. Two parts that overlap as built and turn against each other about a line
+through that overlap are a pin in its hole, whether a joint joins them or the pin closes a loop: their
+turning is not a clash. Those are numbers a check can hold (`joint.slide.stop_min`,
 `joint.lid.clash_mm3`, `interference_mm3`). Meshes in, volumes out: the parts' own preview
 meshes, intersected with [manifold3d](https://github.com/elalish/manifold), about 3 ms a pose.
 **Git** is the history, and it lives with the user: the agent keeps the Notes in a local
@@ -343,7 +351,10 @@ machine to, and back up `storage/` if the work matters. A sandbox per build is t
   and draw it again. Dimensions and constraints in a sketch. Offsetting an outline that has
   arcs turns them into short lines. Measuring whole objects against each
   other is approximate.
-- Translation to Fusion / Onshape, and STEP import ("step 0").
+- Translation to Fusion / Onshape, and STEP import ("step 0"). A mesh comes in only as data in a
+  helper module, made by hand (as `mg400_mesh.py` was); its triangles cannot be tagged as holes or
+  bosses, so a joint on it takes its axis as origin and direction. Such a part is heavy for the canvas
+  (the MG400's 21,700 faces are a 5.7 MB `faces.json`).
 - Profiles are data only: hole and shaft compensation is not applied to geometry yet.
 - The ten-edit experiment below has not been run.
 
