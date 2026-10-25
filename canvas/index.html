@@ -67,6 +67,8 @@
       <span class="sep"></span>
       <button data-cam="fit" title="fit to view">Fit</button>
       <button data-cam="iso">Iso</button><button data-cam="top">Top</button><button data-cam="front">Front</button><button data-cam="right">Right</button>
+      <select id="projection" title="orthographic: sizes stay true across the part, as in a drawing; perspective: near is bigger, as the eye sees it"><option value="ortho">Orthographic</option><option value="perspective">Perspective</option></select>
+      <select id="lens" title="the camera's angle of view: narrow is a long lens, wide shows the depth strongly" hidden><option value="15">15°</option><option value="25">25°</option><option value="35" selected>35°</option><option value="50">50°</option><option value="70">70°</option></select>
       <span class="sep"></span>
       <select id="style" title="how the part is drawn: with its materials, plainly shaded, or as lines with the hidden ones left out"></select>
       <button id="edges" class="on" title="draw the edges of the part over it">Edges</button>

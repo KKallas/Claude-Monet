@@ -51,8 +51,10 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true 
 renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
 renderer.localClippingEnabled = true;
 const scene = new THREE.Scene();
-const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 10000);
-scene.add(camera);
+// orthographic by default; perspective on request, but a sketch is always drawn square on, orthographic
+const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 10000), persp = new THREE.PerspectiveCamera(35, 1, 0.1, 10000);
+let camera = ortho;
+scene.add(ortho, persp);
 const hemi = new THREE.HemisphereLight(0xffffff, 0x556070, 1.1), head = new THREE.DirectionalLight(0xffffff, 1.6);
 scene.add(hemi);
 head.position.set(0.5, 0.8, 1);
@@ -69,7 +71,8 @@ const groups = { part: new THREE.Group(), a: new THREE.Group(), b: new THREE.Gro
 Object.values(groups).forEach((g) => scene.add(g));
 const cut = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
 // where the section cuts through material it glows red: the inside of the part, seen through the cut, is drawn flat
-const capMaterial = new THREE.MeshBasicMaterial({ color: 0xff2a1a, side: THREE.BackSide, toneMapped: false, clippingPlanes: [cut] });
+// (pushed back further than the faces are, so it never shows at their silhouette)
+const capMaterial = new THREE.MeshBasicMaterial({ color: 0xff2a1a, side: THREE.BackSide, toneMapped: false, clippingPlanes: [cut], polygonOffset: true, polygonOffsetFactor: 3, polygonOffsetUnits: 3 });
 const wipeA = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0), wipeB = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0);
 const box = new THREE.Box3(), size = new THREE.Vector3(), centre = new THREE.Vector3();
 let radius = 100, meshes = [], shared = null, edgesOn = true, xray = false, sectionOn = false, explode = 0, partColours = true;
@@ -179,15 +182,37 @@ function resize() {
   for (const o of [selLines, dimLine, ...holo.children, ...drawn.children, ...sheets.children]) o.material.resolution?.set(w, h);
   sketch.resize();
   const half = radius * 1.2, aspect = w / Math.max(1, h);
-  Object.assign(camera, { left: -half * aspect, right: half * aspect, top: half, bottom: -half, near: 0.01, far: radius * 40 });
-  camera.updateProjectionMatrix();
+  Object.assign(ortho, { left: -half * aspect, right: half * aspect, top: half, bottom: -half, near: 0.01, far: radius * 40 });
+  Object.assign(persp, { aspect, near: radius / 100, far: radius * 100 });
+  ortho.updateProjectionMatrix(); persp.updateProjectionMatrix();
 }
+// how far the perspective camera stands for the part to fill the view as the orthographic one shows it at zoom 1
+const fitDistance = (fov = persp.fov) => radius * 1.2 / Math.tan(THREE.MathUtils.degToRad(fov) / 2);
+// half the height of what is seen around the target, in mm
+const seenHalf = () => camera.isOrthographicCamera ? camera.top / camera.zoom
+  : camera.position.distanceTo(controls.target) * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / camera.zoom;
+
+// change the camera, the view staying as it is: from the same side, the same amount in sight
+let perspective = saved.projection === 'perspective';
+persp.fov = Number(saved.lens) || 35;
+function useCamera(next) {
+  if (next === camera) return;
+  const half = seenHalf(), dir = camera.position.clone().sub(controls.target).normalize();
+  next.up.copy(camera.up);
+  if (next.isPerspectiveCamera) { next.zoom = camera.zoom; next.position.copy(controls.target).addScaledVector(dir, fitDistance() * half * camera.zoom / (radius * 1.2)); }
+  else { next.zoom = radius * 1.2 / half; next.position.copy(controls.target).addScaledVector(dir, radius * 8); }
+  next.add(head);
+  camera = next; controls.object = camera;
+  resize(); controls.update();
+}
+const syncCamera = () => useCamera(perspective && S.room !== 'sketch' ? persp : ortho);
 new ResizeObserver(resize).observe(view);
 
 const LOOK = { iso: [1, -1, 0.8], top: [0, -0.0001, 1], front: [0, -1, 0], right: [1, 0, 0] };
 function lookFrom(name) {
-  if (name !== 'fit') camera.position.copy(centre).addScaledVector(new THREE.Vector3(...LOOK[name]).normalize(), radius * 8);
-  else camera.position.sub(controls.target).normalize().multiplyScalar(radius * 8).add(centre);
+  const far = camera.isPerspectiveCamera ? fitDistance() : radius * 8;
+  if (name !== 'fit') camera.position.copy(centre).addScaledVector(new THREE.Vector3(...LOOK[name]).normalize(), far);
+  else camera.position.sub(controls.target).normalize().multiplyScalar(far).add(centre);
   camera.zoom = 1;
   controls.target.copy(centre);
   resize();
@@ -312,7 +337,9 @@ function styleAll() {
 function setSection() {
   const axis = 'XYZ'.indexOf($('#sectionAxis').value), t = Number($('#sectionAt').value);
   cut.normal.set(0, 0, 0).setComponent(axis, -1);
-  cut.constant = box.min.getComponent(axis) + (box.max.getComponent(axis) - box.min.getComponent(axis)) * t;
+  // the ends reach a little past the part: a cut lying on its top or bottom face would flicker
+  const lo = box.min.getComponent(axis), hi = box.max.getComponent(axis), past = 0.002 * (hi - lo) + 0.01;
+  cut.constant = lo - past + (hi - lo + 2 * past) * t;
   const mix = S.compare?.mix ?? 0.5, x = box.min.x + (box.max.x - box.min.x) * mix;
   wipeA.constant = x; wipeB.constant = -x;
 }
@@ -348,13 +375,17 @@ const partOfFace = (i) => S.parts.findIndex((p) => i >= p.faces[0] && i < p.face
 // A click picks one; Shift adds, Ctrl (or Cmd) takes away. A drag with Shift or Ctrl held, or any drag while the
 // Box tool is on, draws a box: left to right it takes whatever it touches, right to left only what is wholly inside.
 
-// from where a thing is to where it is on the screen (canvas pixels) and how deep (smaller is nearer)
+// from where a thing is to where it is on the screen (canvas pixels) and how deep in mm (smaller is nearer)
 function projector() {
   camera.updateMatrixWorld();
   const e = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).elements;
   const r = canvas.getBoundingClientRect();
-  return (x, y, z) => [(e[0] * x + e[4] * y + e[8] * z + e[12] + 1) / 2 * r.width, (1 - (e[1] * x + e[5] * y + e[9] * z + e[13])) / 2 * r.height,
-    e[2] * x + e[6] * y + e[10] * z + e[14]];
+  const deep = camera.isOrthographicCamera ? (camera.far - camera.near) / 2 : 0;
+  return (x, y, z) => {
+    const w = e[3] * x + e[7] * y + e[11] * z + e[15];     // 1 when orthographic; when perspective, how far in front
+    return [((e[0] * x + e[4] * y + e[8] * z + e[12]) / w + 1) / 2 * r.width, (1 - (e[1] * x + e[5] * y + e[9] * z + e[13]) / w) / 2 * r.height,
+      deep ? (e[2] * x + e[6] * y + e[10] * z + e[14]) * deep : w];       // how deep, in mm
+  };
 }
 
 function toSegment(px, py, ax, ay, bx, by) {   // how far, and how far along
@@ -373,7 +404,7 @@ function pick(x, y, mode = S.mode) {
   if (mode === 'part') return hit ? { kind: 'part', i: hit.object.userData.part } : null;
   // points and lines are too thin to hit: take the nearest one within reach of the cursor that is not behind the surface
   const to = projector(), front = hit ? to(hit.point.x, hit.point.y, hit.point.z)[2] : Infinity;
-  const slack = 2 / (camera.far - camera.near);   // a millimetre of depth: an edge lies on the faces it bounds
+  const slack = 1;   // a millimetre of depth: an edge lies on the faces it bounds
   let best = null;
   if (mode === 'vertex') {
     for (const v of S.points) {
@@ -723,13 +754,20 @@ function setMode(mode) {
 }
 document.querySelectorAll('[data-sel]').forEach((b) => { b.onclick = () => setMode(b.dataset.sel); });
 $('#boxTool').onclick = (e) => { S.boxTool = !S.boxTool; e.target.classList.toggle('on', S.boxTool); canvas.style.cursor = S.boxTool ? 'crosshair' : ''; };
-$('#measure').onclick = (e) => { S.measuring = !S.measuring; e.target.classList.toggle('on', S.measuring); styleAll(); renderPanel(); };
+// points, lines and faces are chosen between only while measuring; otherwise a click takes a face (an object in an assembly)
+function measureBar() {
+  document.querySelectorAll('[data-sel]:not([data-sel="part"])').forEach((b) => { b.hidden = !S.measuring; });
+  if (!S.measuring && (S.mode === 'vertex' || S.mode === 'edge')) setMode(S.room === 'assembly' ? 'part' : 'face');
+}
+$('#measure').onclick = (e) => { S.measuring = !S.measuring; e.target.classList.toggle('on', S.measuring); measureBar(); styleAll(); renderPanel(); };
+measureBar();
 
 const label = $('#dim'), spot = new THREE.Vector3();
 // ---- three places to work: Sketch (a drawing on a face), Part (one object), Assembly (objects put together) -----
 const kindOf = (name) => S.proj?.notes.find((n) => n.name === name)?.kind;
 function roomBar() {
   document.body.dataset.room = S.room;
+  syncCamera();
   document.querySelectorAll('[data-room]').forEach((b) => b.classList.toggle('on', b.dataset.room === S.room));
   document.querySelectorAll('[data-rooms]').forEach((el) => el.classList.toggle('away', !el.dataset.rooms.split(' ').includes(S.room)));
   document.querySelectorAll('[data-sketching]').forEach((el) => el.classList.toggle('away', S.room !== 'sketch' || !sketch.state.active));
@@ -749,6 +787,7 @@ function roomBar() {
 }
 function startSketch(what) {
   S.room = 'sketch';
+  syncCamera();
   S.sketchName = what.name ?? ''; S.sketchRole = what.tag?.role ?? '';
   S.sel = nothing(); S.inspect = null; showSelection();
   sketch.begin(what);
@@ -815,8 +854,25 @@ $('#style').innerHTML = Object.entries(STYLES).map(([k, v]) => `<option value="$
 $('#style').value = look.style;
 $('#style').onchange = (e) => {
   look.set(e.target.value);
-  try { localStorage.setItem('monet.view', JSON.stringify({ style: look.style })); } catch { /* not remembered */ }
+  saveView();
   dress(); renderPanel();
+};
+function saveView() {
+  try { localStorage.setItem('monet.view', JSON.stringify({ style: look.style, projection: perspective ? 'perspective' : 'ortho', lens: persp.fov })); } catch { /* not remembered */ }
+}
+$('#projection').value = perspective ? 'perspective' : 'ortho';
+$('#lens').value = String(persp.fov);
+$('#lens').hidden = !perspective;
+$('#projection').onchange = (e) => { perspective = e.target.value === 'perspective'; $('#lens').hidden = !perspective; syncCamera(); saveView(); };
+// a wider or narrower lens, the part kept the same size in view: the camera walks in or back
+$('#lens').onchange = (e) => {
+  const half = seenHalf();
+  persp.fov = Number(e.target.value);
+  if (camera === persp) {
+    persp.position.sub(controls.target).setLength(half * persp.zoom / Math.tan(THREE.MathUtils.degToRad(persp.fov) / 2)).add(controls.target);
+    persp.updateProjectionMatrix(); controls.update();
+  }
+  saveView();
 };
 $('#xray').onclick = (e) => { xray = !xray; e.target.classList.toggle('on', xray); styleAll(); };
 $('#section').onclick = (e) => {
@@ -1506,6 +1562,6 @@ commitNow().then((c) => { loadedCommit = c; });
 setInterval(lookForNewer, 60_000);
 document.addEventListener('visibilitychange', lookForNewer);
 
-window.monet = { S, groups, camera, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom };   // for looking in from the console, and from scripts/shot.mjs
+window.monet = { S, groups, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom };   // for looking in from the console, and from scripts/shot.mjs
 resize();
 start().catch((e) => { $('#panel').innerHTML = `<div class="card"><p class="err">${esc(e.message)}</p></div>`; });
