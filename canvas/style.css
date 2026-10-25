@@ -25,7 +25,27 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
 
 /* the app */
-.app { display: grid; grid-template: 64px 1fr / 230px 1fr 380px; height: 100vh; }
+.app { --l: var(--side-left-w, 230px); --r: var(--side-right-w, 380px); display: grid; grid-template: 64px minmax(0, 1fr) / var(--l) minmax(0, 1fr) var(--r); height: 100vh; }
+.app > aside { grid-area: 2 / 1; } .app > .view { grid-area: 2 / 2; } .app > .panel { grid-area: 2 / 3; }
+/* the sides can be sized and closed, after Adam Designer (side.js): an edge 0 wide on each side of the view, a grip
+   8 px wide straddling the line, the ‹ › tab on it to close the side, and when closed a knob on the window's edge */
+.app.side-left-closed { --l: 0px; } .app.side-right-closed { --r: 0px; }
+.app.side-left-closed > aside, .app.side-right-closed > .panel { display: none; }
+.app > .side-edge { grid-area: 2 / 2; position: relative; z-index: 6; width: 0; touch-action: none; user-select: none; }
+.side-edge.left { justify-self: start; } .side-edge.right { justify-self: end; }
+.side-edge:not(.closed)::before { content: ''; position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; }
+.side-edge:not(.closed):is(:hover, .dragging)::after { content: ''; position: absolute; top: 0; bottom: 0; left: -1px; width: 2px; background: var(--accent); pointer-events: none; }
+.side-edge .side-tab { position: absolute; top: 50%; left: -7px; width: 14px; height: 40px; margin-top: -20px; padding: 0; display: grid; place-items: center; background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border-strong); border-radius: 4px; font-size: 13px; line-height: 1; opacity: 0; transition: opacity .12s; }
+.side-edge:not(.closed):hover .side-tab { opacity: 1; }
+.side-edge.dragging .side-tab, .side-edge.closed .side-tab { display: none; }
+.side-edge .side-tab:hover { color: var(--text-bright); border-color: var(--accent); }
+.side-edge .side-icon { display: none; }
+.side-edge.closed .side-icon { position: absolute; top: 50%; width: 22px; height: 56px; margin-top: -28px; display: grid; place-items: center; background: var(--bg-surface); color: var(--text-muted); border: 1px solid var(--border-strong); cursor: pointer; }
+.side-edge.closed.left .side-icon { left: 0; border-left: 0; border-radius: 0 6px 6px 0; }
+.side-edge.closed.right .side-icon { right: 0; border-right: 0; border-radius: 6px 0 0 6px; }
+.side-edge.closed .side-icon:hover { color: var(--accent); border-color: var(--accent); }
+.side-edge .side-icon svg { width: 16px; height: 16px; fill: currentColor; }
+body.side-resizing, body.side-resizing *, body.col-resizing, body.col-resizing * { cursor: col-resize !important; user-select: none; }
 header { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 0 14px; background: var(--bg-surface); border-bottom: 1px solid var(--border); }
 header b { color: var(--text-bright); font-weight: 600; letter-spacing: .16em; }
 header .sp { flex: 1; }
@@ -93,9 +113,9 @@ aside .fold { padding: 2px 14px 6px; }
 .bar.top { top: 10px; } .bar.bottom { bottom: 10px; }
 .bar input[type=range] { width: 110px; padding: 0; }
 .bar .sep { width: 1px; align-self: stretch; background: var(--border); }
-/* the rails, after Adam Designer: sections of buttons down each side of the view, each in a colour of its own */
-.view { --rail-w: 116px; }
-.rail { position: absolute; top: 10px; width: var(--rail-w); display: flex; flex-direction: column; gap: 6px; z-index: 3; }
+/* the rails, after Adam Designer: sections of buttons down each side of the view, each in a colour of its own. Their
+   width is set by the grip on the inner edge (rails.js): wide they are .text, with labels, narrow .icon, icons only */
+.rail { position: absolute; top: 10px; width: 116px; display: flex; flex-direction: column; gap: 6px; z-index: 3; }
 .rail.left { left: 10px; } .rail.right { right: 10px; }
 .rail-sec { --rail-accent: var(--text-muted); position: relative; display: flex; flex-direction: column; gap: 2px; padding: 4px; background: rgba(26, 31, 46, .92); border: 1px solid var(--border); border-radius: 6px; }
 .rail.left .rail-sec { border-left: 2px solid var(--rail-accent); }
@@ -112,6 +132,17 @@ aside .fold { padding: 2px 14px 6px; }
 .rail button.on { background: var(--rail-accent); border-color: transparent; color: #10131b; font-weight: 600; }
 .rail select, .rail input { width: 100%; }
 .rail input[type=range] { padding: 0; margin: 4px 0; }
+.rail .txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.rail.icon .rail-sec { padding: 2px; }
+.rail.icon :is(.txt, .rail-title, .rail-label) { display: none; }
+.rail.icon button { justify-content: center; padding: 0; }
+.rail.icon .rail-sec > select { font-size: 0; padding: 5px 0; }
+.rail.icon #sketchValue { width: 100%; padding: 3px 1px; text-align: center; font-size: 11px; }
+.rail-grip { position: absolute; top: 0; bottom: 0; width: 11px; display: flex; justify-content: center; cursor: col-resize; touch-action: none; }
+.rail.left .rail-grip { right: -8px; } .rail.right .rail-grip { left: -8px; }
+.rail-grip::before { content: ''; width: 3px; margin: 6px 0; border-radius: 3px; background: var(--border-strong); opacity: 0; transition: opacity .12s; }
+.rail:hover .rail-grip::before { opacity: 1; }
+.rail-grip:hover::before, .rail-grip.dragging::before { opacity: 1; background: var(--accent); }
 .rail-pop { position: absolute; left: calc(100% + 6px); bottom: 0; width: 150px; display: flex; flex-direction: column; gap: 6px; padding: 6px; background: rgba(26, 31, 46, .96); border: 1px solid var(--border); border-left: 2px solid var(--rail-accent); border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, .45); }
 /* under the navigation cube: the camera */
 .view-tools { position: absolute; top: 124px; width: 110px; display: flex; flex-direction: column; gap: 4px; z-index: 3; }
@@ -200,7 +231,10 @@ dialog.ask { width: min(420px, 92vw); }      /* the page's own alert and confirm
 .start button { width: 100%; margin-top: 12px; padding: 10px; font-size: 13px; }
 .start footer { margin-top: 26px; text-align: center; font-size: 11.5px; color: var(--text-muted); }
 
-@media (max-width: 1000px) { .app { grid-template: 64px 55vh auto / 1fr; height: auto; } aside { display: none; } .panel { border-left: 0; } }
+@media (max-width: 1000px) {
+  .app { grid-template: 64px 55vh auto / 1fr; height: auto; } aside, .app > .side-edge { display: none; }
+  .app > .view { grid-area: 2 / 1; } .app > .panel, .app.side-right-closed > .panel { grid-area: 3 / 1; display: block; border-left: 0; }
+}
 
 /* a newer build is online than the one this page runs */
 .newer { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 950; display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 16px; background: var(--bg-elevated); border: 1px solid var(--accent); border-radius: 6px; box-shadow: 0 8px 28px rgba(0, 0, 0, .5); font-size: 12px; font-weight: 500; color: var(--text-bright); }
@@ -208,3 +242,36 @@ dialog.ask { width: min(420px, 92vw); }      /* the page's own alert and confirm
 .newer.coming { padding-right: 16px; }
 .newer .track { width: 90px; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
 .newer .track i { display: block; height: 100%; background: var(--accent); transition: width 1s linear; }
+
+/* a slider made a number and an icon (dial.js): the icon has a line under it, as long as how far along the value is;
+   a click on it opens the sheet, a slider on top and presets under it */
+.dial { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.dial > input[type=range][data-dialled] { display: none; }
+.dial-ico { position: relative; flex: none; width: 26px; height: 24px; padding: 0; display: grid; place-items: center; font-size: 13px; line-height: 1; }
+.dial-ico::after { content: ''; position: absolute; left: 4px; right: 4px; bottom: 2px; height: 2px; background: linear-gradient(90deg, var(--accent) var(--p, 0%), rgba(255, 255, 255, .12) var(--p, 0%)); }
+.dial-num { width: 58px; padding: 3px 6px; text-align: right; }
+.dial-unit { flex: none; color: var(--text-muted); font-size: 11px; }
+.rail .dial { width: 100%; }
+.rail .dial-ico { width: 26px; height: 24px; padding: 0; justify-content: center; }
+.rail .dial .dial-num { flex: 1; width: auto; }
+.rail.icon .rail-sec > .dial { flex-direction: column; gap: 2px; }
+.rail.icon .rail-sec > .dial .dial-num { width: 100%; padding: 2px 1px; text-align: center; font-size: 11px; }
+.rail.icon .rail-sec > .dial .dial-unit { display: none; }
+.joint .dial { flex: 1; }
+.joint .dial input.num { flex: 1; }
+.dial-pop { position: fixed; z-index: 960; width: 272px; padding: 10px 12px 12px; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, .55); outline: none; user-select: none; }
+.dial-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.dial-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--text-muted); }
+.dial-read { font-size: 22px; font-weight: 600; line-height: 1; color: var(--text-bright); white-space: nowrap; }
+.dial-read small, .dial-ends small { margin-left: 2px; font-size: .6em; color: var(--text-muted); }
+.dial-track { position: relative; height: 24px; margin: 0 2px; cursor: ew-resize; touch-action: none; }
+.dial-track::before { content: ''; position: absolute; left: 0; right: 0; top: 5px; height: 8px; background: rgba(255, 255, 255, .06); }
+.dial-ticks { position: absolute; inset: 0; }
+.dial-ticks i { position: absolute; bottom: 0; width: 1px; height: 5px; background: var(--border-strong); }
+.dial-ticks i.big { height: 9px; }
+.dial-fill { position: absolute; left: 0; top: 5px; height: 8px; width: var(--p); background: var(--accent); }
+.dial-knob { position: absolute; top: 1px; left: var(--p); width: 4px; height: 16px; margin-left: -2px; background: var(--text-bright); }
+.dial-ends { display: flex; justify-content: space-between; margin-top: 2px; font-size: 10.5px; color: var(--text-muted); }
+.dial-presets { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; margin-top: 10px; }
+.dial-presets button { grid-column: span 2; padding: 4px 0; font-size: 12px; }
+.dial-presets [data-p="default"], .dial-presets [data-p="last"] { grid-column: span 5; }

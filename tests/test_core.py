@@ -272,6 +272,18 @@ def test_the_measuring_geometry_of_the_canvas():
     assert done.returncode == 0, done.stdout[-2000:]
 
 
+def test_the_dials_and_rails_of_the_canvas():
+    """canvas/dial.js (a slider's presets and steps) and canvas/rails.js (the rails' width) have their own tests, in node."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on this machine")
+    done = subprocess.run([node, "--test", str(Path(__file__).parent / "dial.test.mjs")], capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stdout[-2000:]
+
+
 RESULT = {"fingerprint": {"volume": 10476.0, "area": 7449.6, "bbox": [-22.5, -11.2, 0, 22.5, 11.2, 22.4], "com": [0, 0, 11.2], "solids": 1, "faces": 10},
           "valid": True, "tags": {"bore": {"resolved": True, "measure": {"width": 16.4, "through": True, "at": [0.0, 11.2]}}}}
 

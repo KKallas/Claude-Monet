@@ -82,8 +82,17 @@
 [data-skin="cyber"] aside .head::after { content: ''; display: inline-block; width: 28px; height: 1px; margin-left: 8px; vertical-align: middle; background: currentColor; opacity: .5; }
 [data-skin="cyber"] .chev { color: var(--red); }
 [data-skin="cyber"] .fold:hover .head, [data-skin="cyber"] .fold:hover .chev { color: var(--cyan); }
-[data-skin="cyber"] .item:hover { background: linear-gradient(90deg, rgba(94, 246, 255, .09), transparent 80%); color: var(--text-bright); }
-[data-skin="cyber"] .item.sel { background: linear-gradient(90deg, rgba(94, 246, 255, .16), rgba(94, 246, 255, .02) 80%); box-shadow: inset 2px 0 var(--cyan), inset 10px 0 12px -10px var(--cyan); color: var(--cyan); }
+/* what is picked, as a Cyberpunk menu picks a line: a bar of light with a solid block at its head, thin lines along
+   it, a cut corner at its tail and a lit square at its end; pointed at, only the head and a faint bar */
+[data-skin="cyber"] :is(.item, .part, .tag) { --pick: var(--cyan); }
+[data-skin="cyber"] :is(.item, .part, .tag):hover { background: linear-gradient(90deg, color-mix(in srgb, var(--pick) 11%, transparent), transparent 75%);
+  box-shadow: inset 2px 0 color-mix(in srgb, var(--pick) 70%, transparent); color: var(--text-bright); }
+[data-skin="cyber"] :is(.item.sel, .part.sel, .tag.sel) { position: relative; color: var(--pick);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--pick) 26%, transparent), color-mix(in srgb, var(--pick) 9%, transparent) 55%, transparent 94%);
+  box-shadow: inset 4px 0 var(--pick), inset 6px 0 rgba(0, 0, 0, .7), inset 0 1px color-mix(in srgb, var(--pick) 45%, transparent), inset 0 -1px color-mix(in srgb, var(--pick) 45%, transparent),
+    inset 18px 0 16px -14px var(--pick);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%); }
+[data-skin="cyber"] .item.sel::after { content: ''; flex: none; width: 5px; height: 5px; margin-left: auto; background: var(--pick); box-shadow: 0 0 6px var(--pick), 0 0 12px var(--pick); }
 [data-skin="cyber"] .dot { border-radius: 0; width: 7px; height: 7px; transform: rotate(45deg); }
 [data-skin="cyber"] .dot.green { box-shadow: 0 0 6px var(--ok); } [data-skin="cyber"] .dot.red { box-shadow: 0 0 6px var(--err); } [data-skin="cyber"] .dot.yellow { box-shadow: 0 0 6px var(--warn); }
 
@@ -100,7 +109,6 @@
 [data-skin="cyber"] .big { color: var(--yellow); font-size: 17px; }
 [data-skin="cyber"] .check { border-top-color: rgba(94, 246, 255, .1); }
 [data-skin="cyber"] .pill { border-radius: 0; text-transform: uppercase; letter-spacing: .1em; clip-path: polygon(5px 0, 100% 0, calc(100% - 5px) 100%, 0 100%); padding: 1px 11px; }
-[data-skin="cyber"] .part.sel, [data-skin="cyber"] .tag.sel { box-shadow: inset 2px 0 var(--cyan); }
 [data-skin="cyber"] pre.src, [data-skin="cyber"] dialog code, [data-skin="cyber"] dialog pre { background: rgba(0, 0, 0, .6); border-color: var(--border); border-radius: 0; color: #9ff9ff; }
 [data-skin="cyber"] details summary { color: var(--cyan); text-transform: uppercase; letter-spacing: .1em; font-size: 12px; }
 
@@ -143,8 +151,14 @@
 [data-skin="cyber"] .rail-title { font-size: 11px; font-weight: 700; letter-spacing: .24em; text-shadow: 0 0 8px var(--rail-accent); }
 [data-skin="cyber"] .rail button { clip-path: none; box-shadow: none; border: 0; text-transform: none; letter-spacing: .04em; font-size: 13.5px; height: 25px; }
 [data-skin="cyber"] .rail button:hover { background: linear-gradient(90deg, color-mix(in srgb, var(--rail-accent) 18%, transparent), transparent); color: var(--rail-accent); }
-[data-skin="cyber"] .rail button.on { background: var(--rail-accent); color: #000; text-shadow: none;
-  box-shadow: 0 0 4px var(--rail-accent), 0 0 16px color-mix(in srgb, var(--rail-accent) 60%, transparent), inset 0 0 6px rgba(255, 255, 255, .45); }
+[data-skin="cyber"] .rail button:not(.on):hover { box-shadow: inset 2px 0 var(--rail-accent); }
+[data-skin="cyber"] .rail button.on { background: linear-gradient(90deg, var(--rail-accent) 0 calc(100% - 14px), color-mix(in srgb, var(--rail-accent) 70%, #000) calc(100% - 14px)); color: #000; text-shadow: none;
+  box-shadow: inset 3px 0 rgba(0, 0, 0, .65), inset 0 0 6px rgba(255, 255, 255, .45);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%);
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--rail-accent) 70%, transparent)); }
+[data-skin="cyber"] .rail.icon button.on { background: var(--rail-accent); }
+[data-skin="cyber"] .rail.icon button { height: 27px; font-size: 15px; }
+[data-skin="cyber"] .rail-grip:hover::before, [data-skin="cyber"] .rail-grip.dragging::before { background: var(--cyan); box-shadow: 0 0 8px var(--cyan); border-radius: 0; }
 [data-skin="cyber"] .view-tools .row button { background: rgba(5, 7, 12, .86); }
 [data-skin="cyber"] .view-tools select { background: rgba(0, 0, 0, .7); }
 [data-skin="cyber"] .hint { color: rgba(94, 246, 255, .4); font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 11px; text-transform: uppercase; }
@@ -155,6 +169,50 @@
 [data-skin="cyber"] #sketchTip { border-radius: 0; background: rgba(0, 0, 0, .8); border-color: var(--yellow); color: var(--yellow); }
 [data-skin="cyber"] #marquee { border-color: var(--cyan); background: rgba(94, 246, 255, .07); }
 [data-skin="cyber"] #planeLabels span { font-family: 'Share Tech Mono', ui-monospace, monospace; text-transform: uppercase; letter-spacing: .12em; text-shadow: 0 0 6px #000, 0 0 2px #000; }
+
+/* the edges of the sides: a cyan line while it is held, the tab and the knob cut and lit */
+[data-skin="cyber"] .side-edge:not(.closed):is(:hover, .dragging)::after { background: var(--cyan); box-shadow: 0 0 8px var(--cyan), 0 0 18px rgba(94, 246, 255, .5); }
+[data-skin="cyber"] .side-edge .side-tab { border-radius: 0; background: rgba(5, 7, 12, .95); color: var(--cyan); clip-path: none; letter-spacing: 0; }
+[data-skin="cyber"] .side-edge .side-tab:hover { background: var(--cyan); color: #000; }
+[data-skin="cyber"] .side-edge.closed .side-icon { border-radius: 0; background: var(--glass), rgba(5, 7, 12, .92); color: var(--cyan); border-color: var(--border-strong);
+  box-shadow: var(--inner), 0 0 12px -4px var(--cyan); }
+[data-skin="cyber"] .side-edge.closed.left .side-icon { clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%); border-left: 0; }
+[data-skin="cyber"] .side-edge.closed.right .side-icon { clip-path: polygon(0 0, 100% 0, 100% 100%, 7px 100%, 0 calc(100% - 7px)); border-right: 0; }
+[data-skin="cyber"] .side-edge.closed .side-icon:hover { background: rgba(94, 246, 255, .15); filter: drop-shadow(0 0 6px var(--cyan)); }
+
+/* the dials: the icon a small key with the value's bar under it in yellow; the sheet black glass, its name red, its
+   value yellow, the slider a hatched bar in a trough of ticks with a white-hot needle */
+[data-skin="cyber"] .dial-ico { clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 5px, 100% 100%, 0 100%); letter-spacing: 0; font-size: 14px; color: var(--cyan); }
+[data-skin="cyber"] .dial-ico::after { height: 2px; background: linear-gradient(90deg, var(--yellow) var(--p, 0%), rgba(252, 238, 10, .12) var(--p, 0%)); box-shadow: 0 0 4px rgba(252, 238, 10, .5); }
+[data-skin="cyber"] .dial-ico.on { background: var(--cyan); color: #000; }
+[data-skin="cyber"] .rail .dial-ico { color: var(--rail-accent); }
+[data-skin="cyber"] .dial-unit { font-family: 'Share Tech Mono', ui-monospace, monospace; }
+[data-skin="cyber"] .dial-pop { border-radius: 0; padding: 12px 14px 14px; background: var(--lines), var(--glass), rgba(5, 7, 12, .97); border: 1px solid var(--border-strong); border-top: 0;
+  box-shadow: var(--inner), 0 0 0 1px rgba(0, 0, 0, .6), 0 14px 34px rgba(0, 0, 0, .7), 0 0 26px -10px var(--cyan);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%); animation: cy-open .16s steps(4); }
+@keyframes cy-open { from { clip-path: polygon(0 0, 100% 0, 100% 0, 0 0); opacity: .4; } }
+[data-skin="cyber"] .dial-pop::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: linear-gradient(90deg, var(--red) 0 54px, var(--cyan) 54px 70%, transparent);
+  box-shadow: 0 0 10px rgba(94, 246, 255, .5); }
+[data-skin="cyber"] .dial-pop::after { content: ''; position: absolute; right: 0; bottom: 0; width: 20px; height: 1.5px; background: var(--yellow); transform-origin: right; transform: translate(-5px, -7px) rotate(-45deg);
+  box-shadow: 0 0 6px var(--yellow); }
+[data-skin="cyber"] .dial-name { color: var(--red); font-weight: 700; letter-spacing: .24em; font-size: 12px; text-shadow: 0 0 6px rgba(255, 70, 85, .7); }
+[data-skin="cyber"] .dial-read { font-family: 'Share Tech Mono', ui-monospace, monospace; font-weight: 400; font-size: 26px; color: var(--yellow);
+  text-shadow: 0 0 1px currentColor, 0 0 8px rgba(252, 238, 10, .6), 0 0 18px rgba(252, 238, 10, .3); }
+[data-skin="cyber"] :is(.dial-read, .dial-ends) small { color: color-mix(in srgb, currentColor 60%, transparent); }
+[data-skin="cyber"] .dial-track::before { top: 4px; height: 10px; background: rgba(0, 0, 0, .7); box-shadow: inset 0 0 0 1px rgba(94, 246, 255, .25); }
+[data-skin="cyber"] .dial-fill { top: 6px; height: 6px; left: 2px; width: max(0px, calc(var(--p) - 4px));
+  background: repeating-linear-gradient(90deg, var(--yellow) 0 5px, transparent 5px 7px); filter: drop-shadow(0 0 4px rgba(252, 238, 10, .7)); }
+[data-skin="cyber"] .dial-ticks i { background: rgba(94, 246, 255, .3); }
+[data-skin="cyber"] .dial-ticks i.big { background: rgba(94, 246, 255, .7); box-shadow: 0 0 4px var(--cyan); }
+[data-skin="cyber"] .dial-knob { top: 0; width: 3px; height: 18px; margin-left: -1.5px; background: #fff; box-shadow: 0 0 4px #fff, 0 0 10px var(--cyan), 0 0 18px var(--cyan); }
+[data-skin="cyber"] .dial-knob::before { content: ''; position: absolute; left: -4px; top: -6px; border: 5.5px solid transparent; border-bottom: 0; border-top-color: var(--cyan); }
+[data-skin="cyber"] .dial-pop.dragging .dial-knob { background: var(--yellow); box-shadow: 0 0 4px var(--yellow), 0 0 14px var(--yellow); }
+[data-skin="cyber"] .dial-ends { font-family: 'Share Tech Mono', ui-monospace, monospace; color: rgba(94, 246, 255, .55); }
+[data-skin="cyber"] .dial-presets { gap: 5px; }
+[data-skin="cyber"] .dial-presets button { padding: 3px 0; font-size: 13px; letter-spacing: .1em; clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 5px, 100% 100%, 5px 100%, 0 calc(100% - 5px)); }
+[data-skin="cyber"] .dial-presets :is([data-p="default"], [data-p="last"]) { color: var(--red); border-color: rgba(255, 70, 85, .5); background: rgba(255, 70, 85, .05); }
+[data-skin="cyber"] .dial-presets :is([data-p="default"], [data-p="last"]):hover { color: #000; background: var(--red); }
+[data-skin="cyber"] .dial-presets button.on { background: var(--yellow); border-color: var(--yellow); color: #000; text-shadow: none; box-shadow: 0 0 12px rgba(252, 238, 10, .5); }
 
 /* dialogs and the note that a newer build is online */
 [data-skin="cyber"] dialog { border-radius: 0; background: var(--glass), var(--bg-elevated); border: 1px solid var(--border-strong); box-shadow: var(--inner), 0 0 40px rgba(94, 246, 255, .12);
@@ -203,9 +261,12 @@
   [data-skin="cyber"] select option:is(:hover, :focus-visible) { outline: none; background: linear-gradient(90deg, rgba(94, 246, 255, .18), transparent); color: var(--cyan); box-shadow: inset 2px 0 var(--cyan); }
   [data-skin="cyber"] select option:checked { color: var(--yellow); text-shadow: 0 0 6px rgba(252, 238, 10, .6); }
   [data-skin="cyber"] select option::checkmark { content: '▸'; color: var(--yellow); }
+  [data-skin="cyber"] .rail.icon .rail-sec > select { justify-content: center; }
+  [data-skin="cyber"] .rail.icon .rail-sec > select::picker-icon { font-size: 11px; }
+  [data-skin="cyber"] .rail.icon .rail-sec > select::picker(select) { min-width: 150px; font-size: 12.5px; }
 }
 
 /* no flicker for those who asked for less motion: the look stays, the movement goes */
 @media (prefers-reduced-motion: reduce) {
-  [data-skin="cyber"] body::after, [data-skin="cyber"] header b, [data-skin="cyber"] header b span::before, [data-skin="cyber"] header b span::after, [data-skin="cyber"] .view canvas { animation: none; }
+  [data-skin="cyber"] .dial-pop, [data-skin="cyber"] body::after, [data-skin="cyber"] header b, [data-skin="cyber"] header b span::before, [data-skin="cyber"] header b span::after, [data-skin="cyber"] .view canvas { animation: none; }
 }

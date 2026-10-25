@@ -12,6 +12,9 @@ import { EDITING, basis, createSketcher, describe as curveWords, frameOf, outlin
 import { lengthOf } from './sketch2d.js';
 import { IDENTITY, apply, bodyOf, drivers, frames as poseFrames, handle, solve as reachFor, span, tipAt, values as jointValues } from './motion.js';
 import { createNavCube } from './navcube.js';
+import { dials } from './dial.js';
+import { railWidth } from './rails.js';
+import { sideEdge } from './side.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -245,6 +248,9 @@ function useCamera(next) {
 }
 const syncCamera = () => useCamera(perspective && S.room !== 'sketch' ? persp : ortho);
 new ResizeObserver(resize).observe(view);
+// the notes on the left and the panel on the right can be sized, and closed to the edge of the window
+sideEdge($('.app'), 'left', 'the notes');
+sideEdge($('.app'), 'right', 'the panel');
 
 const LOOK = { iso: [1, -1, 0.8], top: [0, -0.0001, 1], front: [0, -1, 0], right: [1, 0, 0] };
 function lookFrom(name) {
@@ -798,6 +804,8 @@ function placeCube() {
   cube.rightInset = rail.offsetWidth ? rail.offsetWidth + 8 : 0;
   $('#viewTools').style.right = `${cube.margin + cube.rightInset}px`;
 }
+// the rails can be sized, after Adam Designer: wide they show their labels, narrow only icons
+railWidth([...document.querySelectorAll('.view .rail')], placeCube);
 function lookAlong(dir) {
   const d = dir.clone(), far = camera.position.distanceTo(controls.target);
   if (Math.abs(d.z) > 0.999) d.y -= 0.0001;      // straight down or up is the pole the orbit turns about
@@ -969,13 +977,13 @@ function setMode(mode) {
   styleAll(); renderPanel();
 }
 document.querySelectorAll('[data-sel]').forEach((b) => { b.onclick = () => setMode(b.dataset.sel); });
-$('#boxTool').onclick = (e) => { S.boxTool = !S.boxTool; e.target.classList.toggle('on', S.boxTool); canvas.style.cursor = S.boxTool ? 'crosshair' : ''; };
+$('#boxTool').onclick = (e) => { S.boxTool = !S.boxTool; e.currentTarget.classList.toggle('on', S.boxTool); canvas.style.cursor = S.boxTool ? 'crosshair' : ''; };
 // points, lines and faces are chosen between only while measuring; otherwise a click takes a face (an object in an assembly)
 function measureBar() {
   document.querySelectorAll('[data-sel]:not([data-sel="part"])').forEach((b) => { b.hidden = !S.measuring; });
   if (!S.measuring && (S.mode === 'vertex' || S.mode === 'edge')) setMode(S.room === 'assembly' || S.room === 'motion' ? 'part' : 'face');
 }
-$('#measure').onclick = (e) => { S.measuring = !S.measuring; e.target.classList.toggle('on', S.measuring); measureBar(); styleAll(); renderPanel(); };
+$('#measure').onclick = (e) => { S.measuring = !S.measuring; e.currentTarget.classList.toggle('on', S.measuring); measureBar(); styleAll(); renderPanel(); };
 measureBar();
 
 const label = $('#dim'), spot = new THREE.Vector3();
@@ -1083,7 +1091,7 @@ $('#sketchUndo').onclick = () => sketch.undo();
 
 // ---- toolbar ---------------------------------------------------------------------------------------------
 document.querySelectorAll('[data-cam]').forEach((b) => { b.onclick = () => lookFrom(b.dataset.cam); });
-$('#edges').onclick = (e) => { edgesOn = !edgesOn; e.target.classList.toggle('on', edgesOn); styleAll(); };
+$('#edges').onclick = (e) => { edgesOn = !edgesOn; e.currentTarget.classList.toggle('on', edgesOn); styleAll(); };
 $('#style').innerHTML = Object.entries(STYLES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
 $('#style').value = look.style;
 $('#style').onchange = (e) => {
@@ -1108,9 +1116,9 @@ $('#lens').onchange = (e) => {
   }
   saveView();
 };
-$('#xray').onclick = (e) => { xray = !xray; e.target.classList.toggle('on', xray); styleAll(); };
+$('#xray').onclick = (e) => { xray = !xray; e.currentTarget.classList.toggle('on', xray); styleAll(); };
 $('#section').onclick = (e) => {
-  sectionOn = !sectionOn; e.target.classList.toggle('on', sectionOn);
+  sectionOn = !sectionOn; e.currentTarget.classList.toggle('on', sectionOn);
   $('#sectionPop').hidden = !sectionOn; setSection(); styleAll();
 };
 $('#sectionAxis').onchange = $('#sectionAt').oninput = () => { setSection(); };
@@ -1120,7 +1128,7 @@ $('#explode').oninput = (e) => {
   camera.zoom = 1 / (1 + explode * 0.85);   // step back as it grows, so it stays in view
   camera.updateProjectionMatrix();
 };
-$('#partColours').onclick = (e) => { partColours = !partColours; e.target.classList.toggle('on', partColours); paint(); };
+$('#partColours').onclick = (e) => { partColours = !partColours; e.currentTarget.classList.toggle('on', partColours); paint(); };
 function assemblyBar() {
   const on = S.parts.length > 1 && !S.compare && S.room !== 'motion';
   for (const id of ['#explodeLabel', '#explode']) $(id).hidden = !on;
@@ -1323,7 +1331,8 @@ function motionCards() {
       <span class="v mono" data-follow="${esc(name)}">${fmt(Math.round(v[name] * 100) / 100)}${row.unit}</span></div></div>`;
     const [lo, hi] = span(row), off = row.locked ? 'disabled' : '';
     return `<div class="check joint" data-joint="${esc(name)}">${top}
-      <div class="line"><input type="range" data-pose="${esc(name)}" min="${lo}" max="${hi}" step="${row.kind === 'revolute' ? 0.5 : 0.1}" value="${S.pose[name] ?? 0}" ${off}>
+      <div class="line"><input type="range" data-pose="${esc(name)}" name="pose:${esc(name)}" min="${lo}" max="${hi}" step="${row.kind === 'revolute' ? 0.5 : 0.1}" value="${S.pose[name] ?? 0}" ${off}
+        data-icon="${KIND[row.kind] ?? '◈'}" data-label="${esc(name)}" data-unit="${esc(row.unit)}" data-key="joint:${row.kind}" data-default="0" title="where ${esc(name)} is">
         <input class="num" data-posenum="${esc(name)}" value="${fmt(S.pose[name] ?? 0)}" inputmode="decimal" ${off}><span class="muted unit">${row.unit}</span>
         <button class="x" data-act="play" data-name="${esc(name)}" title="move it back and forth through its range" ${off}>${S.playing === name ? '■' : '▶'}</button></div>
       <div class="why">${row.range ? `${fmt(lo)} … ${fmt(hi)}${row.unit}` : 'no range'} · ${sweepWords(mo.sweeps?.[name], row.unit)}</div></div>`;
@@ -1866,6 +1875,9 @@ function renderPanel(force) {
   panel.innerHTML = cards.join('');
 }
 
+// every slider is a number and an icon (dial.js): those of the page now, those of the panel as it is drawn
+dials();
+new MutationObserver(() => dials($('#panel'))).observe($('#panel'), { childList: true, subtree: true });
 const act = async (fn) => { try { await fn(); await open(S.project, S.note); } catch (e) { tell(e.message); busy(); } };
 $('#panel').addEventListener('focusout', () => { if (S.stale) setTimeout(() => renderPanel(), 50); });
 $('#panel').addEventListener('input', (e) => {
