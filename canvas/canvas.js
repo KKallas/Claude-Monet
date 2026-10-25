@@ -68,6 +68,8 @@ const loader = new GLTFLoader();
 const groups = { part: new THREE.Group(), a: new THREE.Group(), b: new THREE.Group() };
 Object.values(groups).forEach((g) => scene.add(g));
 const cut = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
+// where the section cuts through material it glows red: the inside of the part, seen through the cut, is drawn flat
+const capMaterial = new THREE.MeshBasicMaterial({ color: 0xff2a1a, side: THREE.BackSide, toneMapped: false, clippingPlanes: [cut] });
 const wipeA = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0), wipeB = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0);
 const box = new THREE.Box3(), size = new THREE.Vector3(), centre = new THREE.Vector3();
 let radius = 100, meshes = [], shared = null, edgesOn = true, xray = false, sectionOn = false, explode = 0, partColours = true;
@@ -161,6 +163,7 @@ function dress() {
   const edge = look.edge();
   for (const one of groups.part.children) {
     for (const o of one.children) {
+      if (o.userData.cap) continue;
       if (o.isMesh) { o.material.dispose(); o.material = look.material(lookOf(one.userData.part)); }
       else if (o.userData.edges) { o.material.color.set(edge.color); o.material.opacity = edge.opacity; o.material.transparent = edge.opacity < 1; }
       else if (o.userData.dots) o.material.color.set(edge.color);
@@ -247,6 +250,9 @@ function assemble({ mesh, lines }) {
     const one = new THREE.Group(), m = new THREE.Mesh(pg, new THREE.MeshBasicMaterial());     // dress() gives it its material
     m.userData.part = one.userData.part = i;
     one.add(m);
+    const cap = new THREE.Mesh(pg, capMaterial);
+    cap.userData.cap = true;
+    one.add(cap);
     if (lines && part.edges[1]) {
       const lg = new THREE.BufferGeometry();
       lg.setAttribute('position', lines.geometry.attributes.position);
@@ -287,6 +293,7 @@ function spread() {
 function styleAll() {
   for (const [key, g] of Object.entries(groups)) {
     g.traverse((o) => {
+      if (o.userData.cap) { o.visible = sectionOn && !xray; return; }
       if (o.userData.dots) { o.visible = S.mode === 'vertex' || S.measuring; return; }
       // lines are always drawn while lines are what is being picked
       if (o.userData.edges) { o.visible = edgesOn || (key === 'part' && (S.mode === 'edge' || S.measuring || look.style === 'hidden')); o.material.clippingPlanes = sectionOn && key === 'part' ? [cut] : []; return; }
@@ -296,6 +303,7 @@ function styleAll() {
       const fade = S.compare?.mode === 'fade' ? (key === 'a' ? 1 - S.compare.mix : S.compare.mix) : 1;
       const opacity = key === 'part' ? (xray ? 0.25 : 1) : fade;
       m.transparent = opacity < 1; m.opacity = opacity; m.depthWrite = opacity >= 1;
+      m.side = key === 'part' && sectionOn && !xray ? THREE.FrontSide : THREE.DoubleSide;   // the inside is the cap's to draw
       m.needsUpdate = true;
     });
   }
@@ -788,6 +796,7 @@ $('#sketchUndo').onclick = () => sketch.undo();
 (function loop() {
   requestAnimationFrame(loop);
   controls.update();
+  if (sectionOn) capMaterial.color.setRGB(1, 0.13 + 0.07 * Math.sin(performance.now() / 400), 0.08, THREE.SRGBColorSpace);   // a slow glow
   renderer.render(scene, camera);
   for (const el of $('#planeLabels').children) {      // the name of each plane, at a corner of its sheet
     spot.copy(shown[Number(el.dataset.i)].at).project(camera);
