@@ -1,0 +1,166 @@
+/* The 2077 skin: the same sheet, after Cyberpunk 2077's interface. Black glass, thin lines, red for what names a thing,
+   cyan for what can be used, yellow for what matters most. Interlaced like an old screen, the part fringed red and
+   cyan at its edges, a glitch now and then. Everything here is under html[data-skin="cyber"]: without it, nothing
+   changes. skin.js switches it. */
+:root[data-skin="cyber"] {
+  --bg-body: #040509; --bg-surface: #07090f; --bg-elevated: #0b0e16; --border: rgba(94, 246, 255, .16); --border-strong: rgba(94, 246, 255, .34);
+  --text: #c8d3d8; --text-bright: #f4fbff; --text-muted: #63727b; --accent: #5ef6ff;
+  --btn-bg: rgba(94, 246, 255, .03); --btn-hover: rgba(94, 246, 255, .1); --ok: #3effa4; --err: #ff2e4c; --warn: #fcee0a;
+  --red: #ff4655; --yellow: #fcee0a; --cyan: #5ef6ff;
+  --cut: 10px;
+  --glass: linear-gradient(180deg, rgba(94, 246, 255, .045), rgba(94, 246, 255, 0) 38%), linear-gradient(115deg, transparent 52%, rgba(255, 255, 255, .025) 56%, transparent 61%);
+  --inner: inset 0 0 0 1px rgba(94, 246, 255, .05), inset 0 1px 0 rgba(255, 255, 255, .07), inset 0 22px 36px -28px rgba(94, 246, 255, .35);
+}
+[data-skin="cyber"] body { font: 500 14px/1.4 Rajdhani, 'Share Tech Mono', system-ui, sans-serif; letter-spacing: .02em; background: var(--bg-body); }
+[data-skin="cyber"] .mono, [data-skin="cyber"] pre, [data-skin="cyber"] code, [data-skin="cyber"] .row > .v,
+[data-skin="cyber"] #dim, [data-skin="cyber"] #sketchTip, [data-skin="cyber"] .last, [data-skin="cyber"] header .chip { font-family: 'Share Tech Mono', ui-monospace, monospace; letter-spacing: 0; }
+[data-skin="cyber"] ::selection { background: var(--yellow); color: #000; }
+[data-skin="cyber"] * { scrollbar-width: thin; scrollbar-color: rgba(94, 246, 255, .3) transparent; }
+
+/* the screen: interlaced lines over everything, and a faint band that rolls down it */
+[data-skin="cyber"] body::before, [data-skin="cyber"] body::after { content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 900; }
+[data-skin="cyber"] body::before { background: repeating-linear-gradient(180deg, transparent 0 2px, rgba(0, 0, 0, .32) 2px 3px); mix-blend-mode: multiply; }
+[data-skin="cyber"] body::after { background: linear-gradient(180deg, transparent, rgba(94, 246, 255, .045) 48%, rgba(255, 255, 255, .06) 50%, rgba(94, 246, 255, .045) 52%, transparent);
+  height: 140px; top: -140px; animation: cy-roll 9s linear infinite; }
+@keyframes cy-roll { to { transform: translateY(calc(100vh + 140px)); } }
+
+/* controls: cut corners, thin lines, a light inside the glass */
+[data-skin="cyber"] button { background: var(--btn-bg); border: 1px solid var(--border-strong); border-radius: 0; color: var(--text); font-weight: 600; font-size: 13px;
+  letter-spacing: .08em; text-transform: uppercase; box-shadow: var(--inner);
+  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px)); transition: background .12s, color .12s; }
+[data-skin="cyber"] button:hover { background: var(--btn-hover); color: var(--cyan); }
+[data-skin="cyber"] button.on { border-color: var(--cyan); color: var(--cyan); background: rgba(94, 246, 255, .08); }
+[data-skin="cyber"] button.primary { border-color: var(--yellow); color: var(--yellow); background: rgba(252, 238, 10, .05); }
+[data-skin="cyber"] button.primary:hover { background: var(--yellow); color: #000; }
+[data-skin="cyber"] button.danger { border-color: var(--err); color: var(--err); }
+[data-skin="cyber"] button.danger:hover { background: var(--err); color: #000; }
+[data-skin="cyber"] button.x, [data-skin="cyber"] .row .x { clip-path: none; box-shadow: none; letter-spacing: 0; }
+[data-skin="cyber"] input, [data-skin="cyber"] select, [data-skin="cyber"] textarea { background: rgba(0, 0, 0, .55); border: 0; border-bottom: 1px solid var(--border-strong); border-radius: 0;
+  color: var(--text-bright); font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 12.5px; box-shadow: inset 0 0 0 1px rgba(94, 246, 255, .07); }
+[data-skin="cyber"] input:focus, [data-skin="cyber"] select:focus, [data-skin="cyber"] textarea:focus { border-color: var(--cyan); box-shadow: inset 0 0 0 1px rgba(94, 246, 255, .25), 0 1px 0 var(--cyan), 0 6px 14px -8px var(--cyan); }
+[data-skin="cyber"] input[type=range] { accent-color: var(--yellow); box-shadow: none; border: 0; background: none; }
+[data-skin="cyber"] a { color: var(--cyan); }
+
+/* the header: the name in yellow, glitching now and then, a red-to-cyan line under it */
+[data-skin="cyber"] header { position: relative; background: var(--glass), var(--bg-surface); border-bottom: 1px solid var(--border); box-shadow: var(--inner); }
+[data-skin="cyber"] header::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
+  background: linear-gradient(90deg, var(--red) 0 120px, var(--cyan) 120px 40%, transparent); }
+[data-skin="cyber"] header b { position: relative; color: var(--yellow); font-weight: 700; font-size: 19px; letter-spacing: .32em; text-shadow: 0 0 10px rgba(252, 238, 10, .35); }
+[data-skin="cyber"] header b::before, [data-skin="cyber"] header b::after { content: 'MONET'; position: absolute; inset: 0; opacity: 0; }
+[data-skin="cyber"] header b::before { color: var(--red); animation: cy-slice 6s steps(1) infinite; }
+[data-skin="cyber"] header b::after { color: var(--cyan); animation: cy-slice 6s steps(1) infinite reverse; }
+@keyframes cy-slice {
+  0%, 91%, 100% { opacity: 0; transform: none; clip-path: inset(0); }
+  92% { opacity: .9; transform: translate(-3px, 0); clip-path: inset(10% 0 55% 0); }
+  94% { opacity: .9; transform: translate(3px, 1px); clip-path: inset(60% 0 8% 0); }
+  96% { opacity: .9; transform: translate(-2px, -1px); clip-path: inset(30% 0 40% 0); }
+}
+[data-skin="cyber"] header .chip, [data-skin="cyber"] header a.quiet { text-transform: uppercase; letter-spacing: .1em; }
+[data-skin="cyber"] header a.quiet:hover, [data-skin="cyber"] header .chip a:hover { color: var(--cyan); }
+[data-skin="cyber"] #project { color: var(--text-bright); text-transform: none; letter-spacing: .04em; }
+/* the rooms: a slanted strip, the one you are in lit yellow */
+[data-skin="cyber"] .rooms { border: 0; border-radius: 0; gap: 3px; overflow: visible; }
+[data-skin="cyber"] .rooms button { clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); box-shadow: none; padding: 5px 20px;
+  background: rgba(94, 246, 255, .07); color: var(--text-muted); border: 0; }
+[data-skin="cyber"] .rooms button + button { border-left: 0; margin-left: -5px; }
+[data-skin="cyber"] .rooms button.on { background: var(--yellow); color: #000; }
+[data-skin="cyber"] .rooms button:not(.on):hover { color: var(--cyan); background: var(--btn-hover); }
+[data-skin="cyber"] #skin { padding: 4px 10px; color: var(--red); border-color: var(--red); }
+
+/* the side and the panel: black glass with a fine grid in it */
+[data-skin="cyber"] aside, [data-skin="cyber"] .panel { background: var(--glass), linear-gradient(rgba(94, 246, 255, .025) 1px, transparent 1px) 0 0 / 100% 24px, var(--bg-surface); }
+[data-skin="cyber"] aside { border-right: 1px solid var(--border); }
+[data-skin="cyber"] .panel { border-left: 1px solid var(--border); }
+[data-skin="cyber"] .head { color: var(--red); font-weight: 700; font-size: 11.5px; letter-spacing: .22em; }
+[data-skin="cyber"] aside .head::after { content: ''; display: inline-block; width: 28px; height: 1px; margin-left: 8px; vertical-align: middle; background: currentColor; opacity: .5; }
+[data-skin="cyber"] .chev { color: var(--red); }
+[data-skin="cyber"] .fold:hover .head, [data-skin="cyber"] .fold:hover .chev { color: var(--cyan); }
+[data-skin="cyber"] .item:hover { background: linear-gradient(90deg, rgba(94, 246, 255, .09), transparent 80%); color: var(--text-bright); }
+[data-skin="cyber"] .item.sel { background: linear-gradient(90deg, rgba(94, 246, 255, .16), rgba(94, 246, 255, .02) 80%); box-shadow: inset 2px 0 var(--cyan); color: var(--cyan); }
+[data-skin="cyber"] .dot { border-radius: 0; width: 7px; height: 7px; transform: rotate(45deg); }
+[data-skin="cyber"] .dot.green { box-shadow: 0 0 6px var(--ok); } [data-skin="cyber"] .dot.red { box-shadow: 0 0 6px var(--err); } [data-skin="cyber"] .dot.yellow { box-shadow: 0 0 6px var(--warn); }
+
+/* cards: a cut corner with a yellow tick at it, a line of light along the top inside */
+[data-skin="cyber"] .card { position: relative; border-radius: 0; background: var(--glass), var(--bg-elevated); border: 1px solid var(--border); box-shadow: var(--inner);
+  clip-path: polygon(0 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% 100%, 0 100%); }
+[data-skin="cyber"] .card::before { content: ''; position: absolute; top: 0; left: calc(100% - var(--cut)); width: calc(var(--cut) * 1.415); height: 1.5px; background: var(--yellow);
+  transform-origin: left top; transform: rotate(45deg); pointer-events: none; }      /* along the cut, its width inside the card */
+[data-skin="cyber"] .card::after { content: ''; position: absolute; left: -1px; top: -1px; width: 22px; height: 1px; background: var(--red); pointer-events: none; }
+[data-skin="cyber"] .card h2 { color: var(--text-bright); font-weight: 700; font-size: 17px; letter-spacing: .06em; text-transform: uppercase; }
+[data-skin="cyber"] .row { border-bottom: 1px dashed rgba(94, 246, 255, .07); }
+[data-skin="cyber"] .row > .k { color: var(--text-muted); text-transform: uppercase; font-size: 12px; letter-spacing: .08em; }
+[data-skin="cyber"] .row > .v { color: var(--text-bright); }
+[data-skin="cyber"] .big { color: var(--yellow); font-size: 17px; text-shadow: 0 0 8px rgba(252, 238, 10, .3); }
+[data-skin="cyber"] .check { border-top-color: rgba(94, 246, 255, .1); }
+[data-skin="cyber"] .pill { border-radius: 0; text-transform: uppercase; letter-spacing: .1em; clip-path: polygon(5px 0, 100% 0, calc(100% - 5px) 100%, 0 100%); padding: 1px 11px; }
+[data-skin="cyber"] .part.sel, [data-skin="cyber"] .tag.sel { box-shadow: inset 2px 0 var(--cyan); }
+[data-skin="cyber"] pre.src, [data-skin="cyber"] dialog code, [data-skin="cyber"] dialog pre { background: rgba(0, 0, 0, .6); border-color: var(--border); border-radius: 0; color: #9ff9ff; }
+[data-skin="cyber"] details summary { color: var(--cyan); text-transform: uppercase; letter-spacing: .1em; font-size: 12px; }
+
+/* the view: a dark floor of lines; the part fringed red and cyan where it meets it; the screen over it */
+[data-skin="cyber"] .view { background:
+    radial-gradient(ellipse at 50% 40%, rgba(94, 246, 255, .07), transparent 60%),
+    radial-gradient(ellipse at 50% 120%, rgba(255, 70, 85, .12), transparent 55%),
+    linear-gradient(rgba(94, 246, 255, .045) 1px, transparent 1px) 0 0 / 48px 48px,
+    linear-gradient(90deg, rgba(94, 246, 255, .045) 1px, transparent 1px) 0 0 / 48px 48px,
+    #020306; }
+[data-skin="cyber"] .view canvas { filter: drop-shadow(1.6px 0 0 rgba(255, 46, 76, .55)) drop-shadow(-1.6px 0 0 rgba(60, 240, 255, .5)); animation: cy-jolt 11s steps(1) infinite; }
+@keyframes cy-jolt {
+  0%, 96.6%, 100% { transform: none; }
+  96.8% { transform: translateX(4px) skewX(-1.5deg); }
+  97.1% { transform: translateX(-3px); }
+  97.4% { transform: translateX(1px) skewX(.8deg); }
+}
+/* over the view: brackets at its corners and a closer interlace */
+[data-skin="cyber"] .view::before, [data-skin="cyber"] .view::after { content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+[data-skin="cyber"] .view::before { inset: 6px; --b: rgba(94, 246, 255, .55);
+  background: linear-gradient(var(--b), var(--b)) 0 0 / 18px 1px, linear-gradient(var(--b), var(--b)) 0 0 / 1px 18px,
+    linear-gradient(var(--b), var(--b)) 100% 0 / 18px 1px, linear-gradient(var(--b), var(--b)) 100% 0 / 1px 18px,
+    linear-gradient(var(--b), var(--b)) 0 100% / 18px 1px, linear-gradient(var(--b), var(--b)) 0 100% / 1px 18px,
+    linear-gradient(var(--b), var(--b)) 100% 100% / 18px 1px, linear-gradient(var(--b), var(--b)) 100% 100% / 1px 18px;
+  background-repeat: no-repeat; }
+[data-skin="cyber"] .view::after { background: repeating-linear-gradient(180deg, rgba(255, 255, 255, .018) 0 1px, transparent 1px 2px, rgba(0, 0, 0, .18) 2px 3px);
+  box-shadow: inset 0 0 120px rgba(0, 0, 0, .75); }
+
+/* rails and bars over the view: glass with a coloured edge, buttons lit in that colour */
+[data-skin="cyber"] .rail-sec.draw { --rail-accent: #3effa4; } [data-skin="cyber"] .rail-sec.change { --rail-accent: #fcee0a; } [data-skin="cyber"] .rail-sec.edit { --rail-accent: #ff9f1c; }
+[data-skin="cyber"] .rail-sec.tools { --rail-accent: #5ef6ff; } [data-skin="cyber"] .rail-sec.look { --rail-accent: #c45cff; } [data-skin="cyber"] .rail-sec.select { --rail-accent: #00ffd0; }
+[data-skin="cyber"] .rail-sec.assembly { --rail-accent: #ff2e88; }
+[data-skin="cyber"] .rail-sec, [data-skin="cyber"] .bar, [data-skin="cyber"] .rail-pop, [data-skin="cyber"] .busy, [data-skin="cyber"] .last {
+  border-radius: 0; background: var(--glass), rgba(5, 7, 12, .86); border: 1px solid var(--border); box-shadow: var(--inner), 0 8px 24px rgba(0, 0, 0, .5); backdrop-filter: blur(6px); }
+[data-skin="cyber"] .rail.left .rail-sec { border-left: 2px solid var(--rail-accent); }
+[data-skin="cyber"] .rail.right .rail-sec { border-right: 2px solid var(--rail-accent); }
+[data-skin="cyber"] .rail-pop { border-left: 2px solid var(--rail-accent); }
+[data-skin="cyber"] .rail-title { font-size: 11px; font-weight: 700; letter-spacing: .24em; text-shadow: 0 0 8px var(--rail-accent); }
+[data-skin="cyber"] .rail button { clip-path: none; box-shadow: none; border: 0; text-transform: none; letter-spacing: .04em; font-size: 13.5px; height: 25px; }
+[data-skin="cyber"] .rail button:hover { background: linear-gradient(90deg, color-mix(in srgb, var(--rail-accent) 18%, transparent), transparent); color: var(--rail-accent); }
+[data-skin="cyber"] .rail button.on { background: var(--rail-accent); color: #000; box-shadow: 0 0 12px color-mix(in srgb, var(--rail-accent) 55%, transparent); }
+[data-skin="cyber"] .view-tools .row button { background: rgba(5, 7, 12, .86); }
+[data-skin="cyber"] .view-tools select { background: rgba(0, 0, 0, .7); }
+[data-skin="cyber"] .hint { color: rgba(94, 246, 255, .4); font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 11px; text-transform: uppercase; }
+[data-skin="cyber"] .busy { color: var(--yellow); }
+[data-skin="cyber"] .busy .track { border-radius: 0; height: 5px; background: rgba(252, 238, 10, .08); }
+[data-skin="cyber"] .busy .track i { border-radius: 0; background: repeating-linear-gradient(-45deg, var(--yellow) 0 6px, #b8ad00 6px 9px); box-shadow: 0 0 10px rgba(252, 238, 10, .6); }
+[data-skin="cyber"] #dim { border-radius: 0; background: rgba(0, 0, 0, .8); border-color: var(--cyan); color: var(--cyan); box-shadow: 0 0 10px rgba(94, 246, 255, .35); }
+[data-skin="cyber"] #sketchTip { border-radius: 0; background: rgba(0, 0, 0, .8); border-color: var(--yellow); color: var(--yellow); }
+[data-skin="cyber"] #marquee { border-color: var(--cyan); background: rgba(94, 246, 255, .07); }
+[data-skin="cyber"] #planeLabels span { font-family: 'Share Tech Mono', ui-monospace, monospace; text-transform: uppercase; letter-spacing: .12em; text-shadow: 0 0 6px #000, 0 0 2px #000; }
+
+/* dialogs and the note that a newer build is online */
+[data-skin="cyber"] dialog { border-radius: 0; background: var(--glass), var(--bg-elevated); border: 1px solid var(--border-strong); box-shadow: var(--inner), 0 0 40px rgba(94, 246, 255, .12);
+  clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px)); }
+[data-skin="cyber"] dialog::backdrop { background: repeating-linear-gradient(180deg, rgba(0, 0, 0, .6) 0 2px, rgba(0, 0, 0, .75) 2px 3px); }
+[data-skin="cyber"] dialog h2 { text-transform: uppercase; letter-spacing: .1em; font-size: 18px; }
+[data-skin="cyber"] dialog h3 { color: var(--red); letter-spacing: .2em; }
+[data-skin="cyber"] .projects .item:hover, [data-skin="cyber"] .projects .item.asking { background: linear-gradient(90deg, rgba(94, 246, 255, .09), transparent 80%); }
+[data-skin="cyber"] .newer { border-radius: 0; background: var(--glass), #07090f; border-color: var(--yellow); color: var(--yellow); text-transform: uppercase; letter-spacing: .1em; }
+[data-skin="cyber"] .newer button { background: var(--yellow); color: #000; }
+
+/* the start page */
+[data-skin="cyber"] .start h1 { color: var(--yellow); letter-spacing: .34em; text-shadow: 1.5px 0 var(--red), -1.5px 0 var(--cyan); }
+[data-skin="cyber"] .start .tag { color: var(--red); text-transform: uppercase; letter-spacing: .16em; }
+
+/* no flicker for those who asked for less motion: the look stays, the movement goes */
+@media (prefers-reduced-motion: reduce) {
+  [data-skin="cyber"] body::after, [data-skin="cyber"] header b::before, [data-skin="cyber"] header b::after, [data-skin="cyber"] .view canvas { animation: none; }
+}
