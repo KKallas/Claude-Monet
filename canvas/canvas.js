@@ -1545,10 +1545,10 @@ window.addEventListener('hashchange', () => { const [p, n] = decodeURIComponent(
 
 // a page left open over a deploy runs the build it was loaded with: say so, and offer the new one (as Adam Designer does)
 let loadedCommit = null;
-const commitNow = async () => { try { return (await (await fetch('/api/version', { cache: 'no-store' })).json()).commit; } catch { return null; } };
+const versionNow = async () => { try { return await (await fetch('/api/version', { cache: 'no-store' })).json(); } catch { return null; } };
 async function lookForNewer() {
   if (document.hidden || !loadedCommit || document.querySelector('.newer')) return;
-  const commit = await commitNow();
+  const commit = (await versionNow())?.commit;
   if (!commit || commit === loadedCommit || document.querySelector('.newer')) return;
   const bar = document.createElement('div');
   bar.className = 'newer';
@@ -1558,7 +1558,12 @@ async function lookForNewer() {
   bar.append(go);
   document.body.append(bar);
 }
-commitNow().then((c) => { loadedCommit = c; });
+// the build this page runs, beside the name, as in Adam Designer: a link to its source
+versionNow().then((v) => {
+  if (!v) return;
+  loadedCommit = v.commit;
+  $('#chip').innerHTML = `${esc(v.version)} · <a href="${esc(v.source)}" target="_blank" rel="noopener" title="the source: ${esc(v.license)}">${esc(v.commit)}</a>`;
+});
 setInterval(lookForNewer, 60_000);
 document.addEventListener('visibilitychange', lookForNewer);
 

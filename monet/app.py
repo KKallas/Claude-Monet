@@ -21,7 +21,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -46,6 +46,16 @@ def version() -> dict:
             # AGPL: whoever can reach an instance must be able to reach its source
             "source": os.environ.get("MONET_SOURCE_URL", "https://github.com/KKallas/Claude-Monet"),
             "license": "AGPL-3.0-or-later", "note": os.environ.get("MONET_NOTE", "")}
+
+
+class Fresh(StaticFiles):
+    """The canvas's own files. The browser asks every time whether its copy is still current (a 304 when it is), so
+    a deploy is never hidden behind an old script."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def base_url(headers, scheme: str = "http") -> str:
@@ -280,12 +290,18 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         return ws.project(request.path_params["project"]), request.path_params["note"]
 
     # ---- pages --------------------------------------------------------------------
+    def page(name: str) -> HTMLResponse:
+        """A page with its files named under this build's commit: after a deploy they are new addresses, which no
+        browser has an old copy of."""
+        html = (CANVAS / name).read_text(encoding="utf-8").replace('"/static/', f'"/static/{info["commit"]}/')
+        return HTMLResponse(html, headers=NO_STORE)
+
     async def home(request: Request):
         user = me(request)
         return RedirectResponse(f"/w/{user['username']}" if user else "/login", 302)
 
     async def login_page(_request: Request):
-        return FileResponse(CANVAS / "login.html", headers=NO_STORE)
+        return page("login.html")
 
     async def users_page(request: Request):
         user = me(request)
@@ -293,7 +309,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
             return RedirectResponse("/login?next=/users", 302)
         if user["role"] != "admin":
             return RedirectResponse(f"/w/{user['username']}", 302)
-        return FileResponse(CANVAS / "users.html", headers=NO_STORE)
+        return page("users.html")
 
     async def canvas(request: Request):
         user, wid = me(request), request.path_params["wid"]
@@ -302,7 +318,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         owner = auth.find_by_username(store, wid)
         if owner is None or (owner["id"] != user["id"] and user["role"] != "admin"):
             return RedirectResponse(f"/w/{user['username']}", 302)
-        return FileResponse(CANVAS / "index.html", headers=NO_STORE)
+        return page("index.html")
 
     async def get_version(_request: Request):
         return JSONResponse({**info, "templates": workspaces.template_names()}, headers=NO_STORE)
@@ -744,7 +760,8 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route(f + "/model.glb", door(model)),
         Route(f + "/fingerprint.json", door(fingerprint)),
         Route(f + "/export.{fmt}", door(export)),
-        Mount("/static", StaticFiles(directory=CANVAS)),
+        Mount("/static/{build}", Fresh(directory=CANVAS)),      # /static/<commit>/canvas.js: what the pages ask for
+        Mount("/static", Fresh(directory=CANVAS)),
     ]
 
     @contextlib.asynccontextmanager
