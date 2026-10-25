@@ -275,3 +275,66 @@ dialog.ask { width: min(420px, 92vw); }      /* the page's own alert and confirm
 .dial-presets { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; margin-top: 10px; }
 .dial-presets button { grid-column: span 2; padding: 4px 0; font-size: 12px; }
 .dial-presets [data-p="default"], .dial-presets [data-p="last"] { grid-column: span 5; }
+
+/* remote control (canvas/remote.js): the switch in Connect your agent, and the header's button while it is on */
+#connect.remote-on { border-color: var(--warn); color: var(--warn); font-variant-numeric: tabular-nums; }
+#connect.remote-on:hover { background: var(--warn); color: #1a1f2e; }
+.remote-main { display: flex; gap: 16px; align-items: flex-start; margin: 14px 0 6px; }
+.remote-switch { flex: none; display: flex; align-items: center; gap: 10px; width: 112px; height: 44px; padding: 0 12px 0 6px; border-radius: 22px; font-size: 14px; font-weight: 600; }
+.remote-switch .knob { width: 32px; height: 32px; border-radius: 50%; background: var(--text-muted); transition: transform .15s, background .15s; }
+.remote-switch.on { flex-direction: row-reverse; padding: 0 6px 0 12px; border-color: var(--warn); color: var(--warn); }
+.remote-switch.on .knob { background: var(--warn); }
+.remote-state { display: grid; gap: 4px; }
+.remote-state b { color: var(--text-bright); }
+.remote-warn { border-left: 2px solid var(--warn); padding-left: 10px; }
+.remote-facts { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; }
+.remote-facts span { color: var(--text-muted); }
+.remote-log { display: grid; gap: 2px; max-height: 180px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+.remote-log div { display: grid; grid-template-columns: 80px 1fr; gap: 10px; }
+.remote-log div span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Motion's timeline along the bottom of the view (timeline.js): the transport, a ruler, a line of all keys, and dragged
+   taller a line per joint, a string with its keys on it. The playhead runs down every line. */
+.view { --tl-h: 0px; }
+.view.timed .build, .view.timed .hint { bottom: calc(var(--tl-h) + 10px); }
+.timeline { --name: 150px; position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; display: flex; flex-direction: column; background: rgba(16, 19, 27, .94); border-top: 1px solid var(--border-strong); user-select: none; }
+.tl-grip { position: absolute; left: 0; right: 0; top: -4px; height: 8px; cursor: row-resize; touch-action: none; z-index: 2; }
+.tl-grip:hover, .tl-grip:active { background: linear-gradient(transparent 3px, var(--accent) 3px 5px, transparent 5px); }
+body.row-resizing, body.row-resizing * { cursor: row-resize !important; user-select: none; }
+.tl-bar { flex: none; display: flex; align-items: center; gap: 4px; height: 36px; padding: 0 8px; border-bottom: 1px solid var(--border); overflow: hidden; }
+.tl-bar button { flex: none; height: 24px; min-width: 28px; padding: 0 7px; font-size: 12px; }
+.tl-bar .num { flex: none; width: 54px; padding: 2px 5px; text-align: right; }
+.tl-bar [data-tlf="fps"] { width: 38px; }
+.tl-lbl { flex: none; color: var(--text-muted); font-size: 11px; }
+.tl-sec { flex: none; width: 60px; text-align: right; color: var(--text-muted); }
+.tl-sep { flex: none; width: 1px; align-self: stretch; margin: 7px 4px; background: var(--border); }
+.tl-sp { flex: 1; }
+.tl-tip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
+.tl-auto.on { color: var(--err); border-color: var(--err); }
+.tl-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.tl-row { display: flex; height: 22px; }
+.tl-name { flex: 0 0 var(--name); display: flex; align-items: center; gap: 5px; min-width: 0; padding: 0 4px 0 10px; overflow: hidden; white-space: nowrap; font-size: 12px; border-right: 1px solid var(--border); }
+.tl-name b { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.tl-name .tl-v { margin-left: auto; color: var(--text-muted); font-size: 11px; }
+.tl-k { flex: none; width: 12px; text-align: center; color: var(--accent); }
+.tl-one { flex: none; height: 18px; padding: 0 4px; border: 0; background: none; color: var(--text-muted); font-size: 10px; }
+.tl-one:hover { background: none; color: var(--accent); }
+.tl-lane { position: relative; flex: 1; min-width: 0; cursor: ew-resize; }
+.tl-lane:hover { background: rgba(255, 255, 255, .025); }
+.tl-track { position: absolute; top: 0; bottom: 0; left: 12px; right: 16px; }
+.tl-track::after { content: ''; position: absolute; top: 0; bottom: 0; left: calc(var(--f, 0) * 100%); width: 1px; background: var(--accent); pointer-events: none; }
+.tl-ruler { height: 22px; border-bottom: 1px solid var(--border); }
+.tl-tick { position: absolute; bottom: 0; height: 100%; padding-left: 3px; border-left: 1px solid var(--border-strong); font-size: 10px; line-height: 13px; color: var(--text-muted); pointer-events: none; }
+.tl-sub { position: absolute; bottom: 0; height: 4px; border-left: 1px solid var(--border); pointer-events: none; }
+.tl-flag { position: absolute; top: 1px; left: calc(var(--f, 0) * 100%); z-index: 1; transform: translateX(-50%); padding: 0 5px; font-size: 10px; line-height: 14px; background: var(--accent); color: #000; border-radius: 2px; pointer-events: none; }
+.tl-all { border-bottom: 1px solid var(--border); }
+.tl-string { position: absolute; left: -12px; right: -16px; top: 50%; height: var(--s, 1px); transform: translateY(-50%); background: var(--border-strong); pointer-events: none; }
+.tl-joint.locked { opacity: .5; }
+.tl-d { position: absolute; top: 50%; z-index: 1; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; transform: rotate(45deg); background: var(--text); border: 1px solid #000; cursor: grab; }
+.tl-all .tl-d { width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; }
+.tl-d.now { background: var(--warn); }
+.tl-d.sel { background: var(--accent); box-shadow: 0 0 0 2px rgba(255, 255, 255, .6); }
+.timeline.playing .tl-joint.on .tl-string { animation: tl-twang .08s linear infinite alternate; }
+@keyframes tl-twang { from { transform: translateY(calc(-50% - .6px)); } to { transform: translateY(calc(-50% + .6px)); } }
+@media (prefers-reduced-motion: reduce) { .timeline.playing .tl-joint.on .tl-string { animation: none; } }
+.tl-tick.end { transform: translateX(-100%); padding: 0 3px 0 0; border-left: 0; border-right: 1px solid var(--border-strong); }

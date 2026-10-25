@@ -244,3 +244,17 @@ def test_a_build_starts_warm_or_cold_and_is_the_same_build(project, monkeypatch)
     assert warm["ok"] and cold["ok"] and "wall" in warm and "wall" not in cold
     assert warm["fingerprint"] == cold["fingerprint"] and warm["tags"] == cold["tags"] and warm["libs"] == cold["libs"]
     assert (project.out / ".warm" / "model.glb").read_bytes() == (project.out / ".cold" / "model.glb").read_bytes()
+
+
+def test_an_animation_is_kept_in_the_project_and_checked(project):
+    """The timeline's keyframes: frames whole and in the length, the latest key at a frame wins, None takes it away."""
+    got = project.set_animation("rod_foot", {"fps": 24, "length": 48, "tracks": {"j1": [[24, 90], [0, 0.5], [24, 45.0]], "j2": []}})
+    assert got["rod_foot"] == {"fps": 24, "length": 48, "tracks": {"j1": [[0, 0.5], [24, 45.0]]}}
+    assert project.status()["animations"]["rod_foot"]["tracks"]["j1"][1] == [24, 45.0]
+    for bad in ({"length": 0}, {"fps": 1.5}, {"length": 48, "tracks": {"j1": [[49, 1]]}}, {"tracks": {"j1": [[1.5, 1]]}}, {"tracks": {"j 1": [[1, 1]]}},
+                {"tracks": {"j1": [[1, float("nan")]]}}, {"tracks": {"j1": [[1, True]]}}):
+        with pytest.raises(Problem):
+            project.set_animation("rod_foot", bad)
+    with pytest.raises(Problem):
+        project.set_animation("../x", None)
+    assert "rod_foot" not in project.set_animation("rod_foot", None)

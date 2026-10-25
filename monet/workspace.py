@@ -21,6 +21,7 @@ every successful save. A version here is what the viewer needs to compare and ex
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -412,6 +413,49 @@ class Project:
             (self.dir / "monet.json").write_text(json.dumps(settings, indent=1) + "\n")
             self.touch()
             return looks
+
+    def set_animation(self, note: str, animation: dict | None) -> dict:
+        """The keyframes of an assembly's joints, from the canvas's timeline: {fps, length, tracks: {joint: [[frame,
+        value], …]}}, frames whole and within 0…length. None takes it away. Kept in monet.json beside the looks:
+        nothing is built from it, and an archive carries it."""
+        if not re.match(rf"^{_NOTE}$", str(note)):
+            raise Problem(f"{note!r} is not the name of a Note")
+        clean = None
+        if animation is not None:
+            if not isinstance(animation, dict):
+                raise Problem("an animation is {fps, length, tracks}")
+            fps, length, tracks = animation.get("fps", 30), animation.get("length", 120), animation.get("tracks") or {}
+            if not (isinstance(fps, int) and 1 <= fps <= 120):
+                raise Problem("fps is a whole number from 1 to 120")
+            if not (isinstance(length, int) and 1 <= length <= 100_000):
+                raise Problem("length is a whole number of frames from 1 to 100000")
+            if not isinstance(tracks, dict) or len(tracks) > 200:
+                raise Problem("tracks are {joint: [[frame, value], …]}, at most 200 of them")
+            clean = {"fps": fps, "length": length, "tracks": {}}
+            for joint, keys in tracks.items():
+                if not re.match(r"^[A-Za-z0-9_.-]{1,80}$", str(joint)):
+                    raise Problem(f"{joint!r} is not the name of a joint")
+                if not isinstance(keys, list) or len(keys) > 5000:
+                    raise Problem(f"{joint}: the keys are a list of [frame, value], at most 5000")
+                kept = {}
+                for k in keys:
+                    ok = isinstance(k, list) and len(k) == 2 and isinstance(k[0], int) and not isinstance(k[0], bool) \
+                        and isinstance(k[1], (int, float)) and not isinstance(k[1], bool) and math.isfinite(k[1])
+                    if not ok or not 0 <= k[0] <= length:
+                        raise Problem(f"{joint}: a key is [frame, value], the frame whole and from 0 to {length}")
+                    kept[k[0]] = float(k[1])
+                if kept:
+                    clean["tracks"][str(joint)] = [[f, kept[f]] for f in sorted(kept)]
+        with self.lock:
+            settings = self.settings
+            animations = settings.setdefault("animations", {})
+            if clean is None:
+                animations.pop(note, None)
+            else:
+                animations[note] = clean
+            (self.dir / "monet.json").write_text(json.dumps(settings, indent=1) + "\n")
+            self.touch()
+            return animations
 
     @property
     def tolerance(self) -> float:
@@ -908,4 +952,5 @@ class Project:
             })
         return {"project": self.name, "rev": self.rev, "printer": self.settings.get("printer"), "material": self.settings.get("material"),
                 "looks": self.settings.get("looks", {}),
+                "animations": self.settings.get("animations", {}),
                 "version": head["n"] if head else None, "notes": rows, "building": self.building(), "workers": WORKERS}

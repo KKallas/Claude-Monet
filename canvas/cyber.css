@@ -214,6 +214,45 @@
 [data-skin="cyber"] .dial-presets :is([data-p="default"], [data-p="last"]):hover { color: #000; background: var(--red); }
 [data-skin="cyber"] .dial-presets button.on { background: var(--yellow); border-color: var(--yellow); color: #000; text-shadow: none; box-shadow: 0 0 12px rgba(252, 238, 10, .5); }
 
+/* the timeline: black glass, a red-to-cyan line along its top; the playhead a yellow wire with its frame on a tag; the
+   joints' lines guitar strings, plain steel and then wound bronze, lit cyan where a joint is keyed and trembling as
+   it plays; a key a diamond of light, yellow under the playhead; auto key a blinking red as a recording light */
+[data-skin="cyber"] .timeline { background: var(--lines), var(--glass), rgba(4, 6, 10, .93); border-top: 1px solid var(--border-strong);
+  box-shadow: 0 -10px 26px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(94, 246, 255, .12); backdrop-filter: blur(6px); }
+[data-skin="cyber"] .timeline::before { content: ''; position: absolute; left: 0; top: -1px; width: 45%; height: 1px; pointer-events: none;
+  background: linear-gradient(90deg, var(--red) 0 110px, var(--cyan) 110px, transparent); box-shadow: 0 0 8px rgba(94, 246, 255, .5); }
+[data-skin="cyber"] .tl-grip:is(:hover, :active) { background: linear-gradient(transparent 3px, var(--cyan) 3px 5px, transparent 5px); filter: drop-shadow(0 0 4px var(--cyan)); }
+[data-skin="cyber"] .tl-bar button { font-size: 12.5px; letter-spacing: .06em; clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 5px, 100% 100%, 5px 100%, 0 calc(100% - 5px)); }
+[data-skin="cyber"] .tl-play { min-width: 36px; color: var(--yellow); border-color: rgba(252, 238, 10, .6); }
+[data-skin="cyber"] .tl-play.on { background: var(--yellow); border-color: var(--yellow); color: #000; text-shadow: none; box-shadow: 0 0 12px rgba(252, 238, 10, .5); }
+[data-skin="cyber"] .tl-auto.on { background: var(--red); border-color: var(--red); color: #000; text-shadow: none; animation: cy-rec 1.2s steps(1) infinite; }
+@keyframes cy-rec { 50% { background: rgba(255, 70, 85, .18); color: var(--red); } }
+[data-skin="cyber"] :is(.tl-lbl, .tl-sec, .tl-tip) { font-family: 'Share Tech Mono', ui-monospace, monospace; text-transform: uppercase; letter-spacing: .08em; }
+[data-skin="cyber"] .tl-sec { color: var(--cyan); }
+[data-skin="cyber"] .tl-tip { color: rgba(94, 246, 255, .45); }
+[data-skin="cyber"] .tl-sep { background: rgba(94, 246, 255, .18); }
+[data-skin="cyber"] .tl-name { border-right-color: rgba(94, 246, 255, .14); }
+[data-skin="cyber"] .tl-name b { color: var(--text-bright); letter-spacing: .05em; }
+[data-skin="cyber"] .tl-all .tl-name b { color: var(--red); font-size: 11px; letter-spacing: .24em; text-transform: uppercase; text-shadow: 0 0 6px rgba(255, 70, 85, .6); }
+[data-skin="cyber"] .tl-name .tl-v { font-family: 'Share Tech Mono', ui-monospace, monospace; color: rgba(94, 246, 255, .7); }
+[data-skin="cyber"] .tl-one { clip-path: none; box-shadow: none; }
+[data-skin="cyber"] .tl-one:hover { color: var(--yellow); }
+[data-skin="cyber"] .tl-lane:hover { background: linear-gradient(90deg, rgba(94, 246, 255, .05), transparent 70%); }
+[data-skin="cyber"] .tl-tick { font-family: 'Share Tech Mono', ui-monospace, monospace; color: rgba(94, 246, 255, .55); border-left-color: rgba(94, 246, 255, .3); }
+[data-skin="cyber"] .tl-sub { border-left-color: rgba(94, 246, 255, .18); }
+[data-skin="cyber"] .tl-track::after { background: var(--yellow); box-shadow: 0 0 4px var(--yellow), 0 0 10px rgba(252, 238, 10, .5); }
+[data-skin="cyber"] .tl-flag { border-radius: 0; padding: 0 6px 3px; background: var(--yellow); font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 11px;
+  clip-path: polygon(0 0, 100% 0, 100% 78%, 50% 100%, 0 78%); filter: drop-shadow(0 0 6px rgba(252, 238, 10, .6)); }
+[data-skin="cyber"] .tl-string { background: linear-gradient(180deg, #c3ccd4, #59626b 55%, #2a3036); opacity: .5; }
+[data-skin="cyber"] .tl-joint.wound .tl-string { background: repeating-linear-gradient(90deg, #d6bd84 0 1px, #7a6438 1px 2px), #7a6438; }
+[data-skin="cyber"] .tl-joint.on .tl-string { opacity: 1; box-shadow: 0 0 6px rgba(94, 246, 255, .55), 0 0 1px #fff; }
+[data-skin="cyber"] .tl-all .tl-string { background: linear-gradient(90deg, var(--red), rgba(255, 70, 85, .2)); opacity: .7; height: 1px; }
+[data-skin="cyber"] .tl-d { background: #050709; border: 1.5px solid var(--cyan); box-shadow: 0 0 6px rgba(94, 246, 255, .7); }
+[data-skin="cyber"] .tl-all .tl-d { border-color: var(--red); box-shadow: 0 0 6px rgba(255, 70, 85, .7); }
+[data-skin="cyber"] .tl-d.now { background: var(--yellow); border-color: var(--yellow); box-shadow: 0 0 10px var(--yellow); }
+[data-skin="cyber"] .tl-d.sel { background: var(--cyan); border-color: #fff; box-shadow: 0 0 0 1px #000, 0 0 12px var(--cyan); }
+[data-skin="cyber"] .tl-all .tl-d.sel { background: var(--red); }
+
 /* dialogs and the note that a newer build is online */
 [data-skin="cyber"] dialog { border-radius: 0; background: var(--glass), var(--bg-elevated); border: 1px solid var(--border-strong); box-shadow: var(--inner), 0 0 40px rgba(94, 246, 255, .12);
   clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px)); }
@@ -268,5 +307,5 @@
 
 /* no flicker for those who asked for less motion: the look stays, the movement goes */
 @media (prefers-reduced-motion: reduce) {
-  [data-skin="cyber"] .dial-pop, [data-skin="cyber"] body::after, [data-skin="cyber"] header b, [data-skin="cyber"] header b span::before, [data-skin="cyber"] header b span::after, [data-skin="cyber"] .view canvas { animation: none; }
+  [data-skin="cyber"] .tl-auto.on, [data-skin="cyber"] .dial-pop, [data-skin="cyber"] body::after, [data-skin="cyber"] header b, [data-skin="cyber"] header b span::before, [data-skin="cyber"] header b span::after, [data-skin="cyber"] .view canvas { animation: none; }
 }

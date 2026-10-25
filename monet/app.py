@@ -698,6 +698,11 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         with p.lock:
             return p.write(name, notes.set_joints(source, current))
 
+    def put_animation(request, ws, body):
+        """The keyframes of the timeline in Motion: kept in the project, nothing built from them."""
+        p, name = note_of(request, ws)
+        return {"animations": p.set_animation(name, body.get("animation"))}
+
     def put_ground(request, ws, body):
         """What stays put: a part or a rigid group, or several."""
         p, name = note_of(request, ws)
@@ -844,6 +849,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route(n + "/planes/{plane}", api(move_plane), methods=["PUT"]),
         Route(n + "/joints/{joint}", api(put_joint), methods=["PUT", "DELETE"]),
         Route(n + "/ground", api(put_ground), methods=["PUT"]),
+        Route(n + "/animation", api(put_animation), methods=["PUT"]),
         Route(n + "/pose", api(pose), methods=["POST"]),
         Route(n + "/checks", api(add_check), methods=["POST"]),
         Route(n + "/checks/{check}", api(put_check), methods=["PUT", "DELETE"]),

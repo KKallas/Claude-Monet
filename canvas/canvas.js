@@ -15,6 +15,7 @@ import { createNavCube } from './navcube.js';
 import { dials } from './dial.js';
 import { railWidth } from './rails.js';
 import { sideEdge } from './side.js';
+import { createTimeline } from './timeline.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1182,13 +1183,14 @@ const clashWords = () => (S.clash.length ? S.clash.map(([a, b, v]) => `<div clas
   : `<p class="ok" style="margin:0">${atHome() ? 'As built.' : 'Nothing is hit here.'}</p>`);
 function showClashes() { const el = $('#poseClashes'); if (el) el.innerHTML = clashWords(); }
 
-/** A joint moved by hand to a value, kept within its range: the view and the panel follow. */
-function setJoint(name, value) {
+/** A joint moved to a value, kept within its range: the view and the panel follow. By hand, the timeline hears of it. */
+function setJoint(name, value, hand = true) {
   const row = model()?.joints[name];
   if (!row || !Number.isFinite(value)) return;
   const [lo, hi] = span(row);
   S.pose[name] = Math.min(hi, Math.max(lo, Math.round(value * 100) / 100));
   spread(); syncSliders(); checkPose();
+  if (hand) timeline.touched([name]);
 }
 function syncSliders() {
   const mo = model();
@@ -1197,8 +1199,9 @@ function syncSliders() {
   document.querySelectorAll('[data-pose]').forEach((el) => { if (document.activeElement !== el) el.value = S.pose[el.dataset.pose] ?? 0; });
   document.querySelectorAll('[data-posenum]').forEach((el) => { if (document.activeElement !== el) el.value = fmt(S.pose[el.dataset.posenum] ?? 0); });
   document.querySelectorAll('[data-follow]').forEach((el) => { el.textContent = `${fmt(Math.round((v[el.dataset.follow] ?? 0) * 100) / 100)}${mo.joints[el.dataset.follow]?.unit ?? ''}`; });
+  timeline.values();
 }
-function goHome() { stopPlaying(); Object.assign(S, { pose: {}, freePose: {}, clash: [] }); spread(); syncSliders(); paint(); showClashes(); }
+function goHome() { stopPlaying(); timeline.pause(); Object.assign(S, { pose: {}, freePose: {}, clash: [] }); spread(); syncSliders(); paint(); showClashes(); }
 
 // a joint driven back and forth through its range, the whole way in four seconds
 let playing = 0;
@@ -1208,7 +1211,7 @@ function stopPlaying() {
 }
 function play(name) {
   if (S.playing === name) { stopPlaying(); return; }
-  stopPlaying();
+  stopPlaying(); timeline.pause();
   const [lo, hi] = span(model().joints[name]), speed = (hi - lo) / 4;
   let dir = 1, last = performance.now();
   S.playing = name;
@@ -1218,10 +1221,41 @@ function play(name) {
     let v = (S.pose[name] ?? 0) + dir * speed * Math.min(0.1, (now - last) / 1000);
     last = now;
     if (v >= hi) { v = hi; dir = -1; } else if (v <= lo) { v = lo; dir = 1; }
-    setJoint(name, v);
+    setJoint(name, v, false);
     playing = requestAnimationFrame(step);
   };
   playing = requestAnimationFrame(step);
+}
+
+// the timeline along the bottom of the view in Motion (timeline.js): keys of the joints over frames, kept in the project
+const timeline = createTimeline($('#timeline'), {
+  pose: () => S.pose,
+  setPose(values) {
+    const mo = model();
+    if (!mo) return;
+    stopPlaying();
+    for (const [k, v] of Object.entries(values)) {
+      const row = mo.joints[k];
+      if (row && !row.locked && !row.follows && row.kind !== 'rigid') { const [lo, hi] = span(row); S.pose[k] = Math.min(hi, Math.max(lo, v)); }
+    }
+    spread(); syncSliders(); checkPose();
+  },
+  async save(animation, key) {
+    const [project, note] = key.split('/');
+    try {
+      const animations = (await api(`/p/${project}/n/${note}/animation`, 'PUT', { animation })).animations;
+      if (S.project !== project) return;
+      S.proj.animations = animations;
+      S.rev = (await api(`/p/${project}/rev`)).rev;      // our own change: nothing to load again
+    } catch (e) { notice(`the keyframes were not kept: ${e.message}`); }
+  },
+  height(px) { view.style.setProperty('--tl-h', `${px}px`); view.classList.toggle('timed', px > 0); },
+});
+function showTimeline() {
+  const mo = moving() ? model() : null;
+  if (!mo) { timeline.show(false); return; }
+  const joints = drivers(mo).map((n) => ({ name: n, ...mo.joints[n] }));
+  timeline.show(true, `${S.project}/${S.note}`, S.proj?.animations?.[S.note] ?? null, joints);
 }
 
 // the axis of the joint pointed at in the panel, being dragged or being made
@@ -1295,6 +1329,7 @@ function reach(name, target) {
   const mo = model(), r = reachFor(mo, name, target, S.pose);
   for (const [k, v] of Object.entries(r.values)) if (mo.joints[k] && !mo.joints[k].locked) S.pose[k] = Math.round(v * 1e4) / 1e4;      // to where the solver put it, not a slider's step
   spread(); syncSliders(); checkPose();
+  timeline.touched(Object.keys(r.values));
   const el = document.querySelector(`[data-tipstatus="${name}"]`);
   if (el) { el.className = `why ${r.reached ? 'ok' : 'warn'}`; el.textContent = r.reached ? 'there' : `out of reach: it comes within ${fmt(Math.round(r.off * 10) / 10)} mm`; }
   return r;
@@ -1774,6 +1809,7 @@ function sketchCards() {
 }
 
 function renderPanel(force) {
+  showTimeline();
   const panel = $('#panel');
   if (!force && panel.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) { S.stale = true; return; }
   S.stale = false;
@@ -2210,6 +2246,6 @@ versionNow().then((v) => {
 document.addEventListener('visibilitychange', lookForNewer);
 
 window.monet = { S, groups, cube, lookAlong, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom,
-  axes, setJoint, goHome, play, stopPlaying, partPose, reach, tipAt: (name) => tipAt(model(), name, S.pose) };   // for looking in from the console, and from scripts/shot.mjs
+  axes, setJoint, goHome, play, stopPlaying, timeline, partPose, reach, tipAt: (name) => tipAt(model(), name, S.pose) };   // for looking in from the console, and from scripts/shot.mjs
 resize();
 start().catch((e) => { $('#panel').innerHTML = `<div class="card"><p class="err">${esc(e.message)}</p></div>`; });
