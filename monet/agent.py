@@ -2,10 +2,13 @@
 
 One set of tools, two ways in: MCP (Claude Desktop, Claude Code and anything else that
 speaks it) at /w/<workspace>/mcp, and plain HTTP (POST /w/<workspace>/agent/<tool> with
-a JSON body) for a harness that only has a shell.
+a JSON body) for a harness that only has a shell. They open only while the person has
+remote control on (monet/remote.py).
 
 What is deliberately not here: changing or removing a check, acknowledging a load check,
-deleting a Note. Those are the user's, in the canvas.
+deleting a Note. Those are the user's, in the canvas. The canvas they have open the agent
+may look at and take somewhere (screen, view, goto), never run code in: a change is made
+here, through the server and its rules, not as the person in their page.
 """
 import base64
 import inspect
@@ -14,6 +17,7 @@ import time
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from . import joints, render, tags as tagging
 from .workspace import EXPORTS, Problem, Workspace
@@ -27,6 +31,9 @@ class Caller:
     ws: Workspace
     base: str       # https://host/w/<agent key>: the agent's own address; what it can fetch without a login
     page: str       # https://host/w/<username>: the person's canvas; they log in to see it
+    owner: dict | None = None       # whose agent this is, as the accounts keep them
+    remote: object | None = None    # their open canvases (monet.remote.Remote), while remote control is on
+    done: Callable[[str, dict, dict], None] | None = None      # (tool, args, result): what it changed, written down
 
     def canvas(self, project: str = "", note: str = "") -> str:
         return self.page + (f"#{project}" + (f"/{note}" if note else "") if project else "")
@@ -54,10 +61,20 @@ def status(c: Caller, project: str = "") -> dict:
     from, and the link of the canvas (give it to the user so they can watch and point). With a project: its Notes,
     whether each builds, is saved, or has changed since the last save."""
     if not project:
-        return {"projects": c.ws.projects(), "templates": c.ws.all.template_names(), "canvas": c.canvas(),
+        return {"projects": c.ws.projects(), "templates": c.ws.all.template_names(), "canvas": c.canvas(), **_remote(c),
                 "hint": "the canvas link is where the user watches and points (they log in there); call guide() if you have not read the rules"}
     p = c.ws.project(project)
-    return {**p.status(), "printer_profile": p.printer, "material_profile": p.material, "canvas": c.canvas(project)}
+    return {**p.status(), "printer_profile": p.printer, "material_profile": p.material, "canvas": c.canvas(project), **_remote(c)}
+
+
+def _remote(c: Caller) -> dict:
+    """How long the door stays open, and the canvases the user has open: what screen, goto and view reach."""
+    if c.remote is None or c.owner is None:
+        return {}
+    left = max(0.0, (c.owner.get("agent") or {}).get("until", 0) - time.time())
+    return {"remote": {"minutes_left": round(left / 60), "ends": "by itself after 15 minutes with nothing from you or the user, and "
+                       "at once when they switch it off or log out: then every call says so. Tell them; they switch it on again"},
+            "pages": c.remote.pages(c.owner["id"])}
 
 
 def new_project(c: Caller, name: str, template: str = "") -> dict:
@@ -252,6 +269,41 @@ def selection(c: Caller, project: str) -> dict:
     return out
 
 
+def _ask(c: Caller, what: str, args: dict | None = None, timeout: float = 30):
+    if c.remote is None or c.owner is None:
+        raise Problem("no canvas can be reached from here", 503)
+    return c.remote.ask(c.owner, what, args or {}, timeout)
+
+
+def screen(c: Caller) -> dict:
+    """What the user's canvas shows right now, in words: the project and Note open, the area (sketch, part, assembly,
+    motion), what is selected, and the text of the panel beside the view. Needs their canvas open in a browser
+    (status() lists the pages). Call it when they say "what I have open", "look at my screen", "this one"."""
+    return _ask(c, "screen")
+
+
+def goto(c: Caller, project: str = "", note: str = "", room: str = "") -> dict:
+    """Take the user's open canvas to a project, a Note in it, and/or an area: sketch, part, assembly or motion. They
+    see it happen. Use it to show them what you made or changed. Answers where the canvas is now."""
+    if room and room not in ("sketch", "part", "assembly", "motion"):
+        raise Problem("room is sketch, part, assembly or motion")
+    if project:
+        c.ws.project(project)
+    return _ask(c, "goto", {"project": project, "note": note, "room": room}, 60)
+
+
+def view(c: Caller):
+    """A picture of the user's canvas as it is on their screen: their camera, selection, pose, section and the parts
+    they hid. Look at it when they talk about what they see. (`look` draws a Note on the server from fixed views;
+    this is their view.) Over HTTP the answer has `image`, the address of the PNG: fetch it."""
+    got = _ask(c, "view")
+    png = base64.b64decode(str(got.pop("png", "") or "").split(",", 1)[-1] or b"") or None
+    if not png:
+        return {**got, "image": None, "hint": "no picture: use screen() for what the canvas shows"}
+    c.remote.pictures[c.owner["id"]] = png
+    return {**got, "image": f"{c.base}/file/view.png?n={int(time.time() * 1000):x}", "bytes": len(png)}, png
+
+
 def add_check(c: Caller, project: str, note: str, what: str, min: float | None = None, max: float | None = None,
               equals: float | bool | None = None, why: str = "", id: str = "") -> dict:
     """Add a check to a Note: a measurement and the range it must stay in. what: volume_cm3, area_cm2, size_x,
@@ -309,8 +361,10 @@ def export(c: Caller, project: str, note: str, format: str = "3mf", version: str
 
 
 TOOLS = {f.__name__: f for f in (guide, status, new_project, read_note, write_note, check, look, pose, reach, selection, add_check,
-                                 load_check, save, versions, diff, export)}
-READ_ONLY = {"guide", "status", "read_note", "check", "look", "pose", "reach", "selection", "load_check", "versions", "diff", "export"}
+                                 load_check, save, versions, diff, export, screen, goto, view)}
+READ_ONLY = {"guide", "status", "read_note", "check", "look", "pose", "reach", "selection", "load_check", "versions", "diff", "export",
+             "screen", "view"}
+TRIED = {"goto"}     # written down before it runs: the person saw the page move, whether or not it got there
 
 
 def call(name: str, caller: Caller, args: dict):
@@ -322,8 +376,13 @@ def call(name: str, caller: Caller, args: dict):
         inspect.signature(fn).bind(caller, **args)
     except TypeError as e:
         raise Problem(f"{name}: {e}")
+    if name in TRIED and caller.done:
+        caller.done(name, args, {})
     out = fn(caller, **args)
-    return out if isinstance(out, tuple) else (out, None)
+    result, png = out if isinstance(out, tuple) else (out, None)
+    if caller.done and name not in READ_ONLY | TRIED and result.get("written", True) and not result.get("already"):
+        caller.done(name, args, result)
+    return result, png
 
 
 def mcp_server(resolve_caller):

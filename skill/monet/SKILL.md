@@ -24,7 +24,7 @@ Your tools, in whichever form the harness gives them:
 
 - **MCP tools** from a connector usually called Monet: `guide`, `status`, `new_project`,
   `read_note`, `write_note`, `check`, `look`, `pose`, `reach`, `selection`, `add_check`, `load_check`, `save`,
-  `versions`, `diff`, `export`.
+  `versions`, `diff`, `export`, and for the canvas the user has open: `screen`, `goto`, `view`.
 - **A shell but no MCP tools**: `scripts/monet.py` in this skill does the same over HTTP. Set
   `MONET_URL` to the user's agent link (it looks like `https://host/w/AbC123…`; they find it in
   their canvas under "Connect your agent"), then `python scripts/monet.py status`.
@@ -36,6 +36,11 @@ Your tools, in whichever form the harness gives them:
 - **None of these**: ask the user to log in to their Monet site and use "Connect your agent"
   there. It shows the exact addresses for them to give you.
 
+**The link works only while the user has remote control on.** They switch it on in their canvas,
+under "Connect your agent". It ends by itself after 15 minutes in which neither they nor you did
+anything, and at once when they log out. Then every call answers that remote control is off:
+tell them, they switch it on again, and the same link works. Do not keep retrying.
+
 The agent link carries the user's agent key. It is a password: use it, do not repeat it in what
 you write to anyone else, and do not put it in files that get committed. The `canvas` links in
 tool answers are different: they are the user's own pages, behind their login, and safe to show.
@@ -43,6 +48,24 @@ tool answers are different: they are the user's own pages, behind their login, a
 Start every session with `status()`. It lists the projects and gives the canvas link: pass that
 link to the user so they can watch the part change and point at it. What only they can do there,
 logged in: change or remove a check, acknowledge a load check.
+
+## The canvas the user has open
+
+While remote control is on, the canvas they have open in their browser answers you too. `status()`
+lists their open pages (project, Note, area, on screen or not). These need a page open; if none
+is, the answer says so: ask them to open their canvas, or carry on with the other tools.
+
+- `screen()`: what the canvas shows, in words: the project, the Note, the area (sketch, part,
+  assembly, motion), how much is selected, the parts they hid, the pose in Motion, and the text of
+  the panel beside the view. Call it when they say "what I have open", "look at my screen".
+- `view()`: a picture of their view as it is: their camera, selection, pose, section. `look`
+  draws a Note on the server from fixed views; `view` is what they are looking at.
+- `goto(project, note, room)`: take their canvas somewhere, to show them what you made or
+  changed. They see it happen. Prefer this to describing where to click.
+
+These look and show; none of them changes the project. Every change goes through the other tools
+(`write_note`, `add_check`, `save` …), on the server and under its rules. Where you go and what
+you change is listed for the user under "Connect your agent" and kept in the server's log.
 
 ## The user's own folder, with git
 
@@ -300,3 +323,6 @@ A **check** is a measurement and the range it must stay in, for example
   were not looking at; run `check` on those.
 - **The tools answer "no such workspace"**: the workspace link is wrong or the workspace was
   removed. Ask the user for the link shown in their canvas.
+- **The tools answer that remote control is off**: it ended (15 minutes of nothing, or they logged
+  out or switched it off). Ask the user to switch it on again under "Connect your agent"; the link
+  is the same.

@@ -33,7 +33,16 @@ foot below) and `mg400_rakis` (the sample).
 gives your agent structure (the Note format, tags, checks), a preview, an interface for
 pointing, and export. An agent cannot log in as a person does, so it comes with an **agent
 link** that has the user's agent key in it (`/w/<agent key>`): treat it as a password. Press
-**Connect your agent** in the canvas for the exact lines, and for a new key when one got out:
+**Connect your agent** in the canvas for the exact lines, and for a new key when one got out.
+
+The link opens nothing until you switch **remote control** on, there (as in Adam Designer). It
+ends by itself after 15 minutes in which neither you nor your agent did anything, and when you
+log out; the header counts it down. The same link works again when you switch it on again, and an
+MCP connector stays connected while it is off. While it is on, your agent also reaches the canvas
+you have open: what it shows (`screen`), a picture of your view (`view`) and taking it to a part
+or an area (`goto`). It runs no code in your page: every change goes through its tools, on the
+server, under the same rules. What it changes is listed under Connect your agent and kept in the
+server's log.
 
 | your harness | how it connects |
 |---|---|

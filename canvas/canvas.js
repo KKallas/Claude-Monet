@@ -16,6 +16,7 @@ import { dials } from './dial.js';
 import { railWidth } from './rails.js';
 import { sideEdge } from './side.js';
 import { createTimeline } from './timeline.js';
+import { remote } from './remote.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1010,6 +1011,7 @@ function roomBar() {
     : S.room === 'motion' ? 'drag a part: it moves as its joint lets it · drag a tip (◎): the joints follow it · drag beside: orbit · right-drag: pan · wheel: zoom<br>click: select · Shift: add · Ctrl: take away'
     : 'drag: orbit · right-drag: pan · wheel: zoom<br>click: select · Shift: add · Ctrl: take away · Shift- or Ctrl-drag: box';
   canvas.style.cursor = S.room === 'sketch' ? 'crosshair' : S.boxTool ? 'crosshair' : '';
+  remote.say();
   showPlanes();
 }
 function startSketch(what) {
@@ -2135,13 +2137,41 @@ sheet.addEventListener('submit', async (e) => {
     if (made.left_out) notice(`${made.left_out} file${made.left_out === 1 ? '' : 's'} in the archive ${made.left_out === 1 ? 'is' : 'are'} not of a project and ${made.left_out === 1 ? 'was' : 'were'} left out`);
   } catch (err) { go.disabled = false; projectsFailed(err); }
 });
-$('#connect').onclick = () => {
-  const agentLink = S.state.agent, dlg = $('#connectDialog'), local = /\/\/(localhost|127\.0\.0\.1)/.test(agentLink);
-  dlg.onclose = null;
-  dlg.innerHTML = `<h2>Connect your agent</h2>
+// Connect your agent: the link, the ways in, and the switch of remote control (monet/remote.py). Off, the link opens
+// nothing; on, the agent works in this workspace and can see this page and take it somewhere, until 15 minutes pass
+// with nothing from either of you, or you log out.
+const clock = (ms) => { const t = Math.ceil(ms / 1000); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+const ago = (iso) => {
+  if (!iso) return 'never';
+  const t = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+  return t < 90 ? 'just now' : t < 5400 ? `${Math.round(t / 60)} min ago` : t < 129_600 ? `${Math.round(t / 3600)} h ago` : new Date(iso).toLocaleDateString();
+};
+const WENT = { idle: 'nothing happened for 15 minutes: neither you nor your agent did anything', logout: 'you logged out', login: 'your password was changed' };
+let connectSig = '';
+function connectBody() {
+  const agentLink = S.state.agent, local = /\/\/(localhost|127\.0\.0\.1)/.test(agentLink), v = remote.view(), on = !!v?.on;
+  connectSig = JSON.stringify([v && { ...v, left: 0 }, remote.connected()]);
+  const mine = S.state.me.username === S.state.workspace.username;
+  const head = `<h2>Connect your agent</h2>
     <p class="muted">The thinking happens on your computer, with your own model. This page builds, checks, shows and exports.
-    Your agent cannot log in as you do, so it comes with this link, which has your <b>agent key</b> in it. Treat it as a password:
-    whoever has it can work in your workspace as your agent.</p>
+    Your agent cannot log in as you do, so it comes with a link that has your <b>agent key</b> in it, and the link opens
+    nothing until you switch remote control on.</p>
+    <div class="remote-main"><button class="remote-switch ${on ? 'on' : ''}" id="remoteSwitch" role="switch" aria-checked="${on}" ${mine && v ? '' : 'disabled'}><span class="knob"></span><span class="word">${on ? 'On' : 'Off'}</span></button>
+      <div class="remote-state"><b>${!mine ? `Remote control is ${esc(S.state.workspace.name)}'s own` : on ? 'Remote control is on' : 'Remote control is off'}</b>
+        <span class="muted">${!mine ? 'Only they can switch it on, in their own canvas.' : on
+          ? 'Your agent can work in your workspace, and see this page and take it to a part or an area while it is open. What it changes is listed below.'
+          : 'Nothing can reach your workspace from outside. Switch it on to let your agent in, for as long as something is happening.'}</span>
+        ${on ? '<span>Switches itself off in <b class="remote-count"></b>: anything you do here, or your agent asks, starts the 15 minutes again. Logging out ends it at once.</span>' : ''}
+        ${!on && v?.off && WENT[v.off.why] ? `<span class="warn">It switched itself off ${ago(v.off.at)}: ${WENT[v.off.why]}.</span>` : ''}</div></div>`;
+  const close = '<form method="dialog"><div class="line"><span style="flex:1"></span><button>Close</button></div></form>';
+  if (!on) return `${head}
+    <h3>What switching it on gives your agent</h3>
+    <p>The link below works, as MCP for Claude and others, or as plain web addresses for any LLM that can open them. Your agent
+      writes Notes, builds, checks, saves and exports in your workspace; it sees what this page shows and takes it to a part or
+      an area. It runs no code in this page, and it cannot change or remove a check, acknowledge a load check, or delete. The link stays the same from one switching on to the next, so a connector
+      set up once keeps working.</p>${close}`;
+  return `${head}
+    <p class="remote-warn"><b>This link is a password.</b> Whoever has it can work in your workspace as your agent, and see this page while it is open.</p>
     <pre id="agentLink">${esc(agentLink)}</pre>
     <div class="line" style="margin-top:0"><span class="muted" style="flex:1">It got out, or an agent should stop?</span><button id="newKey">New key</button></div>
     <h3>1 · Claude Desktop</h3>
@@ -2161,18 +2191,87 @@ $('#connect').onclick = () => {
       It commits after every successful save, so the history is yours and survives this server.</p>
     <h3>3 · Say what you want</h3>
     <p>"Use Monet. Open the project mg400_rakis and show me the nest." Then point at faces here and describe the change.</p>
-    <form method="dialog"><div class="line"><span style="flex:1"></span><button>Close</button></div></form>`;
-  $('#newKey').onclick = async (e) => {
+    <h3>Now</h3>
+    <div class="remote-facts"><span>this page</span><b class="${remote.connected() ? 'ok' : 'warn'}">${remote.connected() ? 'can be seen by your agent' : 'not connected (trying again…)'}</b>
+      <span>pages open</span><b>${v.tabs}</b><span>your agent was last here</span><b>${ago(v.seen)}</b></div>
+    <h3>What it changed lately</h3>
+    ${v.recent.length ? `<div class="remote-log">${v.recent.map((r) => `<div><span class="muted">${ago(r.at)}</span><span title="${esc(r.what)}">${esc(r.what)}</span></div>`).join('')}</div>`
+      : '<p class="muted">Nothing yet. What your agent changes and where it takes this page are listed here, and kept in the server\'s log.</p>'}
+    ${close}`;
+}
+function drawConnect() {
+  const dlg = $('#connectDialog');
+  dlg.innerHTML = connectBody();
+  showRemote();
+  $('#remoteSwitch').onclick = async (e) => {
+    e.preventDefault();
+    e.currentTarget.disabled = true;
+    try { await remote.set(!remote.view()?.on); } catch (err) { tell(err.message); }
+    drawConnect();
+  };
+  if ($('#newKey')) $('#newKey').onclick = async (e) => {
     e.preventDefault();
     if (!(await ask('Make a new agent key? The link above stops working at once: every agent you connected needs the new one.', { yes: 'New key', danger: true }))) return;
-    try { S.state.agent = (await api('/key', 'POST', {})).agent; $('#connect').onclick(); } catch (err) { tell(err.message); }
+    try { S.state.agent = (await api('/key', 'POST', {})).agent; drawConnect(); } catch (err) { tell(err.message); }
   };
-  dlg.showModal();
+}
+$('#connect').onclick = () => {
+  drawConnect();
+  $('#connectDialog').showModal();
+  remote.refresh();
+};
+// while remote control is on, the header's button says so on every page, counting down to when it ends by itself
+function showRemote() {
+  const on = !!remote.view()?.on, left = clock(remote.left());
+  $('#connect').classList.toggle('remote-on', on);
+  $('#connect').textContent = on ? `Remote ${left}` : 'Connect your agent';
+  $('#connect').title = on ? 'Remote control is on: your agent can work in your workspace and in this page. Anything you or the agent do starts the 15 minutes again. Click to see what it did, or to switch it off.' : '';
+  for (const el of document.querySelectorAll('.remote-count')) el.textContent = left;
+}
+remote.onChange(() => {
+  showRemote();
+  const dlg = $('#connectDialog');      // drawn again only when something it shows is another: a line being selected to copy stays put
+  if (dlg.open && JSON.stringify([remote.view() && { ...remote.view(), left: 0 }, remote.connected()]) !== connectSig) drawConnect();
+});
+let ticks = 0;      // what the agent did lately, every five seconds while somebody is looking
+setInterval(() => { showRemote(); if (++ticks % 5 === 0 && $('#connectDialog').open && remote.view()?.on && !document.hidden) remote.refresh(); }, 1000);
+
+// what the page answers the agent with, through remote.js: where it is, its words, a picture, and going somewhere
+const hands = {
+  where: () => ({ project: S.project, note: S.note, room: S.room, kind: kindOf(S.note) ?? null }),
+  screen() {
+    const words = (el) => (el?.innerText ?? '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    const panel = words($('#panel'));
+    return { ...hands.where(), notes: S.proj?.notes.map((n) => ({ name: n.name, kind: n.kind, state: n.state })) ?? [],
+      selected: Object.fromEntries(Object.entries(S.sel).filter(([, set]) => set.size).map(([k, set]) => [NAMES[k][1], set.size])),
+      hidden: [...S.hidden], ...(S.room === 'motion' ? { pose: S.pose } : {}), busy: B.text || null, compare: S.compare ? true : undefined,
+      panel: panel.slice(0, 8000), ...(panel.length > 8000 ? { cut: true } : {}) };
+  },
+  async goto({ project = '', note = '', room = '' } = {}) {
+    const other = project && project !== S.project;
+    if (other || (note && note !== S.note)) await open(project || S.project, note || null);
+    if (note && S.note !== note) throw new Error(`there is no Note "${note}" in ${S.project}: the canvas shows ${S.note ?? 'nothing'}`);
+    if (room && room !== S.room) await goRoom(room);
+    return hands.where();
+  },
+  view() {
+    renderer.render(scene, camera);      // drawn now and read at once: the drawing buffer holds until the frame is shown
+    if (!(S.room === 'sketch' && sketch.state.active)) cube.draw(renderer, camera, controls.target, view.clientWidth, view.clientHeight);
+    const src = renderer.domElement, k = Math.min(1, 1280 / src.width);
+    const out = Object.assign(document.createElement('canvas'), { width: Math.round(src.width * k), height: Math.round(src.height * k) });
+    const g = out.getContext('2d'), bg = getComputedStyle(document.body).backgroundColor;
+    g.fillStyle = /rgba\(.*, 0\)$|transparent/.test(bg) ? '#121620' : bg;
+    g.fillRect(0, 0, out.width, out.height);
+    g.drawImage(src, 0, 0, out.width, out.height);
+    return { ...hands.where(), png: out.toDataURL('image/png') };
+  },
 };
 $('#logout').onclick = async (e) => { e.preventDefault(); await fetch('/api/logout', { method: 'POST' }); location.href = '/login'; };
 
+let dialled = false;
 async function start(project) {
   S.state = await api('/state');
+  if (!dialled) { dialled = true; remote.start(root, hands, S.state.remote); }
   const mine = S.state.me.username === S.state.workspace.username;
   $('#wsName').textContent = mine ? S.state.me.name : `${S.state.workspace.name} (you are looking in as ${S.state.me.username})`;
   $('#usersLink').hidden = S.state.me.role !== 'admin';

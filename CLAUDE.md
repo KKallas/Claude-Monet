@@ -65,7 +65,16 @@ wrong:
   No git on the server.
 - **The agent's door has no tool to change or remove a check, acknowledge a load check,
   delete a Note, or delete a project or bring one in from an archive** (an archive carries
-  checks). Those are routes of the canvas API only. Keep it that way.
+  checks). Those are routes of the canvas API only. Keep it that way. That is also why the agent
+  runs **no code in the person's canvas** (Adam Designer's `page` was left out on purpose, Kaspar
+  2026-10-25): code in a logged-in page is the person, and no route could tell it apart. The agent
+  edits at file level through its tools; the page answers only `screen`, `goto` and `view`.
+- **Remote control** (`monet/remote.py`, the page's side `canvas/remote.js`; from Adam Designer's
+  docs/15, without its `page`): the agent key opens nothing until the person switches it on under Connect your agent.
+  It ends after 15 idle minutes (the person's clicks and keys, told by the page as `alive`, and every
+  agent call start them again; a page's heartbeat does not), at logout and at a new password. MCP
+  answers `initialize` and `tools/list` while it is off, so a connector is not dropped. Only the
+  person's own pages dial `/w/<username>/api/remote/tab`, never an admin's looking in.
 - **An uploaded archive is not trusted**: `Workspace.import_project` takes files by name
   against `ARCHIVED` and writes each under that name; it never extracts a zip to a path the
   zip gives. Keep it that way.
