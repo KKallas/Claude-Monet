@@ -93,6 +93,31 @@ aside .fold { padding: 2px 14px 6px; }
 .bar.top { top: 10px; } .bar.bottom { bottom: 10px; }
 .bar input[type=range] { width: 110px; padding: 0; }
 .bar .sep { width: 1px; align-self: stretch; background: var(--border); }
+/* the rails, after Adam Designer: sections of buttons down each side of the view, each in a colour of its own */
+.view { --rail-w: 116px; }
+.rail { position: absolute; top: 10px; width: var(--rail-w); display: flex; flex-direction: column; gap: 6px; z-index: 3; }
+.rail.left { left: 10px; } .rail.right { right: 10px; }
+.rail-sec { --rail-accent: var(--text-muted); position: relative; display: flex; flex-direction: column; gap: 2px; padding: 4px; background: rgba(26, 31, 46, .92); border: 1px solid var(--border); border-radius: 6px; }
+.rail.left .rail-sec { border-left: 2px solid var(--rail-accent); }
+.rail.right .rail-sec { border-right: 2px solid var(--rail-accent); }
+.rail-sec:not(:has(> :not(.rail-title):not([hidden]):not(.away))) { display: none; }    /* nothing in it: no section */
+.rail-sec.draw { --rail-accent: #6fcf97; } .rail-sec.change { --rail-accent: #e6d34f; } .rail-sec.edit { --rail-accent: #e0b060; }
+.rail-sec.tools { --rail-accent: #4f8cff; } .rail-sec.look { --rail-accent: #b088ff; } .rail-sec.select { --rail-accent: #4fd1c5; }
+.rail-sec.assembly { --rail-accent: #ff7ab6; }
+.rail-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--rail-accent); padding: 1px 4px 2px; }
+.rail-label { font-size: 11px; color: var(--text-muted); padding: 2px 4px 0; }
+.rail button { display: flex; align-items: center; gap: 6px; width: 100%; height: 26px; padding: 0 6px; background: transparent; border-color: transparent; text-align: left; white-space: nowrap; }
+.rail button .ico { width: 16px; flex: none; text-align: center; font-size: 13px; line-height: 1; }
+.rail button:hover { background: var(--btn-hover); }
+.rail button.on { background: var(--rail-accent); border-color: transparent; color: #10131b; font-weight: 600; }
+.rail select, .rail input { width: 100%; }
+.rail input[type=range] { padding: 0; margin: 4px 0; }
+.rail-pop { position: absolute; left: calc(100% + 6px); bottom: 0; width: 150px; display: flex; flex-direction: column; gap: 6px; padding: 6px; background: rgba(26, 31, 46, .96); border: 1px solid var(--border); border-left: 2px solid var(--rail-accent); border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, .45); }
+/* under the navigation cube: the camera */
+.view-tools { position: absolute; top: 124px; width: 110px; display: flex; flex-direction: column; gap: 4px; z-index: 3; }
+.view-tools .row { display: flex; gap: 4px; }
+.view-tools .row button { flex: 1; padding: 3px 0; background: rgba(36, 42, 58, .92); }
+.view-tools select { padding: 4px 6px; font-size: 11px; background: rgba(18, 22, 32, .92); }
 .hint { position: absolute; right: 12px; bottom: 10px; color: var(--text-muted); font-size: 11px; text-align: right; pointer-events: none; }
 /* building: how far along (by how long it took last time), and under it how long the last build took */
 .build { position: absolute; left: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; font-size: 12px; pointer-events: none; }

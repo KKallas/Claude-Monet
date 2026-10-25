@@ -10,6 +10,7 @@ import { angle, closest } from './measure.js';
 import { MATERIALS, STYLES, createLook } from './look.js';
 import { EDITING, basis, createSketcher, describe as curveWords, frameOf, outline, strokes } from './sketch.js';
 import { lengthOf } from './sketch2d.js';
+import { createNavCube } from './navcube.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -319,7 +320,7 @@ function styleAll() {
   for (const [key, g] of Object.entries(groups)) {
     g.traverse((o) => {
       if (o.userData.cap) { o.visible = sectionOn && !xray; return; }
-      if (o.userData.dots) { o.visible = S.mode === 'vertex' || S.measuring; return; }
+      if (o.userData.dots) { o.visible = S.mode === 'vertex' || S.measuring; o.material.clippingPlanes = sectionOn && key === 'part' ? [cut] : []; return; }
       // lines are always drawn while lines are what is being picked
       if (o.userData.edges) { o.visible = edgesOn || (key === 'part' && (S.mode === 'edge' || S.measuring || look.style === 'hidden')); o.material.clippingPlanes = sectionOn && key === 'part' ? [cut] : []; return; }
       if (!o.isMesh) return;
@@ -697,6 +698,55 @@ function selectionChanged() {
     face, point: face ? S.point : null, tags, part: face ? partName(partOfFace(face.i)) : null } : {}).catch(() => {});
 }
 
+// the navigation cube, in the top right corner of the view: a click looks from that side, a drag turns the view like
+// a ball (half a turn across the cube), as in Adam Designer
+const cube = createNavCube();
+function placeCube() {
+  const rail = $('#railRight');
+  cube.rightInset = rail.offsetWidth ? rail.offsetWidth + 8 : 0;
+  $('#viewTools').style.right = `${cube.margin + cube.rightInset}px`;
+}
+function lookAlong(dir) {
+  const d = dir.clone(), far = camera.position.distanceTo(controls.target);
+  if (Math.abs(d.z) > 0.999) d.y -= 0.0001;      // straight down or up is the pole the orbit turns about
+  camera.position.copy(controls.target).addScaledVector(d.normalize(), far);
+  controls.update();
+}
+let spin = null, onCube = false;
+const inView = (e) => { const r = view.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+view.addEventListener('pointerdown', (e) => {
+  if (e.target !== canvas || e.button !== 0 || sketch.state.active || !cube.contains(view.clientWidth, ...inView(e))) return;
+  e.stopImmediatePropagation(); e.preventDefault();        // neither the orbit nor a selection: the cube's
+  spin = { x: e.clientX, y: e.clientY, last: [e.clientX, e.clientY], moved: false };
+}, true);
+window.addEventListener('pointermove', (e) => {
+  if (spin) {
+    const dx = e.clientX - spin.last[0], dy = e.clientY - spin.last[1];
+    spin.last = [e.clientX, e.clientY];
+    if (Math.hypot(e.clientX - spin.x, e.clientY - spin.y) > 4) spin.moved = true;
+    if (!spin.moved || (!dx && !dy)) return;
+    cube.hover(null);
+    // the camera's offset from the target, in the frame where its own up is +Y (as OrbitControls turns it)
+    const q = new THREE.Quaternion().setFromUnitVectors(camera.up.clone().normalize(), new THREE.Vector3(0, 1, 0));
+    const offset = camera.position.clone().sub(controls.target).applyQuaternion(q), sph = new THREE.Spherical().setFromVector3(offset);
+    sph.theta -= (dx / cube.size) * Math.PI;
+    sph.phi = Math.max(1e-4, Math.min(Math.PI - 1e-4, sph.phi - (dy / cube.size) * Math.PI));
+    camera.position.copy(controls.target).add(offset.setFromSpherical(sph).applyQuaternion(q.invert()));
+    controls.update();
+    return;
+  }
+  const zone = e.target === canvas && !sketch.state.active && !press ? cube.zoneAt(view.clientWidth, ...inView(e)) : null;
+  cube.hover(zone);
+  if (!!zone !== onCube) { onCube = !!zone; canvas.style.cursor = zone ? 'pointer' : S.boxTool ? 'crosshair' : ''; }
+});
+window.addEventListener('pointerup', (e) => {
+  if (!spin) return;
+  const s = spin;
+  spin = null;
+  const zone = !s.moved ? cube.zoneAt(view.clientWidth, ...inView(e)) : null;
+  if (zone) lookAlong(zone.dir);
+});
+
 let press = null;
 const marquee = $('#marquee');
 view.addEventListener('pointerdown', (e) => {   // before the orbit controls see it: a drag that draws a box must not turn the view
@@ -777,12 +827,12 @@ function roomBar() {
   $('#sketchValueLabel').textContent = sketch.state.tool === 'fillet' ? 'radius' : 'by';
   renderSketchSide();
   $('#sketchSnap').classList.toggle('on', sketch.state.snap);
+  placeCube();
   $('.hint').innerHTML = S.room === 'sketch' ? (sketch.state.active
     ? 'click: place a point · click the first point: close · Enter: end the line · Esc: drop it · Backspace: step back · Ctrl+Z: undo<br>lines up with corners (pink) and the 1 mm grid · Shift: free · right-drag: move the page · wheel: zoom'
     : 'click a plane, or a flat face of the part, to draw on it<br>drag: orbit · right-drag: pan · wheel: zoom')
     : 'drag: orbit · right-drag: pan · wheel: zoom<br>click: select · Shift: add · Ctrl: take away · Shift- or Ctrl-drag: box';
   canvas.style.cursor = S.room === 'sketch' ? 'crosshair' : S.boxTool ? 'crosshair' : '';
-  $('.bar.top').classList.toggle('away', S.room === 'sketch' && !sketch.state.active);      // nothing in it while a plane is chosen
   showPlanes();
 }
 function startSketch(what) {
@@ -837,6 +887,7 @@ $('#sketchUndo').onclick = () => sketch.undo();
   controls.update();
   if (sectionOn) capMaterial.color.setRGB(1, 0.13 + 0.07 * Math.sin(performance.now() / 400), 0.08, THREE.SRGBColorSpace);   // a slow glow
   renderer.render(scene, camera);
+  if (!(S.room === 'sketch' && sketch.state.active)) cube.draw(renderer, camera, controls.target, view.clientWidth, view.clientHeight);
   for (const el of $('#planeLabels').children) {      // the name of each plane, at a corner of its sheet
     spot.copy(shown[Number(el.dataset.i)].at).project(camera);
     el.style.transform = `translate(${(spot.x + 1) / 2 * view.clientWidth + 4}px, ${(1 - spot.y) / 2 * view.clientHeight + 2}px)`;
@@ -877,7 +928,7 @@ $('#lens').onchange = (e) => {
 $('#xray').onclick = (e) => { xray = !xray; e.target.classList.toggle('on', xray); styleAll(); };
 $('#section').onclick = (e) => {
   sectionOn = !sectionOn; e.target.classList.toggle('on', sectionOn);
-  $('#sectionAxis').hidden = $('#sectionAt').hidden = !sectionOn; setSection(); styleAll();
+  $('#sectionPop').hidden = !sectionOn; setSection(); styleAll();
 };
 $('#sectionAxis').onchange = $('#sectionAt').oninput = () => { setSection(); };
 $('#explode').oninput = (e) => {
@@ -889,7 +940,7 @@ $('#explode').oninput = (e) => {
 $('#partColours').onclick = (e) => { partColours = !partColours; e.target.classList.toggle('on', partColours); paint(); };
 function assemblyBar() {
   const on = S.parts.length > 1 && !S.compare;
-  for (const id of ['#asmSep', '#explodeLabel', '#explode']) $(id).hidden = !on;
+  for (const id of ['#explodeLabel', '#explode']) $(id).hidden = !on;
   $('#partColours').hidden = !(on && look.style === 'shaded');
   $('#explode').value = explode;
 }
@@ -1567,6 +1618,6 @@ versionNow().then((v) => {
 setInterval(lookForNewer, 60_000);
 document.addEventListener('visibilitychange', lookForNewer);
 
-window.monet = { S, groups, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom };   // for looking in from the console, and from scripts/shot.mjs
+window.monet = { S, groups, cube, lookAlong, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom };   // for looking in from the console, and from scripts/shot.mjs
 resize();
 start().catch((e) => { $('#panel').innerHTML = `<div class="card"><p class="err">${esc(e.message)}</p></div>`; });
