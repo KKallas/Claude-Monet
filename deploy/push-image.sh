@@ -21,5 +21,8 @@ for try in $(seq 1 15); do ssh "${SSH[@]}" "$HOST" true 2>/dev/null && break; [ 
 scp "${SSH[@]}" deploy/compose.yml "$HOST":/opt/monet/
 scp "${SSH[@]}" deploy/Caddyfile "$HOST":/opt/monet/Caddyfile.new
 ssh "${SSH[@]}" "$HOST" 'cd /opt/monet && docker run --rm -e DOMAIN=check.invalid -v /opt/monet/Caddyfile.new:/etc/caddy/Caddyfile:ro caddy:2 caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1 && cat Caddyfile.new > Caddyfile && rm Caddyfile.new'
+# Every deploy leaves its image there, tagged by its commit (rollback.sh puts one back), and each is near 3 GB: keep
+# the three newest and make the room before the new one comes in. (Left alone they filled the disk at seventeen.)
+ssh "${SSH[@]}" "$HOST" 'docker images monet --format "{{.Tag}}" | grep -vx latest | tail -n +4 | sed "s/^/monet:/" | xargs -r docker rmi >/dev/null || true'
 docker save monet:"$COMMIT" monet:latest | gzip | ssh "${SSH[@]}" "$HOST" 'gunzip | docker load'
 ssh "${SSH[@]}" "$HOST" 'cd /opt/monet && docker compose up -d --remove-orphans && docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 && docker image prune -f >/dev/null && sleep 6 && docker compose ps && docker compose logs --tail 12 app'
