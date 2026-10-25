@@ -76,6 +76,7 @@ def test_status_says_which_note_is_the_assembly(workspaces):
     fresh = workspaces.of(str(uuid.uuid4()), "unbuilt").project("mg400_rakis")          # nothing built yet: told from its imports
     kinds = {n["name"]: n["kind"] for n in fresh.status()["notes"]}
     assert kinds["rakis"] == "assembly" and kinds["nest_front"] == "note" and kinds["grid_neg_1"] == "note" and kinds["rakis_common"] == "module"
+    assert kinds["mg400"] == kinds["mg400_blocks"] == "assembly" and kinds["mg400_mesh"] == "module"     # by their JOINTS
     fresh.report("rakis")                                                # built: told from its parts
     assert {n["name"]: n["kind"] for n in fresh.status()["notes"]}["rakis"] == "assembly"
 

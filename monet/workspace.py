@@ -887,7 +887,8 @@ class Project:
         head = self.head()
         rows, times = [], self.took()
         sources = {name: self.read(name) for name in self.files()}
-        note_names = {name for name, src in sources.items() if notes.parse(src)["is_note"]}
+        parsed = {name: notes.parse(src) for name, src in sources.items()}
+        note_names = {name for name, d in parsed.items() if d["is_note"]}
         for name, src in sources.items():
             if name not in note_names:
                 rows.append({"name": name, "kind": "module"})
@@ -895,9 +896,9 @@ class Project:
             r = self.cached(name)
             fresh = self._fresh(r)
             saved_src = (self._vpath(head["n"]) / f"{name}.py") if head else None
-            # an assembly is a Note whose build has several parts; before it was ever built, one that imports
-            # two or more other Notes is taken for one
-            assembly = len(r.get("parts") or []) > 1 if fresh and r["ok"] else len(notes.imports(src) & (note_names - {name})) > 1
+            # an assembly is a Note whose build has several parts; before it was ever built, one that says how its
+            # parts move (JOINTS) or imports two or more other Notes is taken for one
+            assembly = len(r.get("parts") or []) > 1 if fresh and r["ok"] else bool(parsed[name]["joints"]) or len(notes.imports(src) & (note_names - {name})) > 1
             rows.append({
                 "name": name, "kind": "assembly" if assembly else "note",
                 "state": "unbuilt" if not fresh else "error" if not r["ok"] else "built",
