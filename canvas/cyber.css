@@ -8,6 +8,8 @@
   --btn-bg: rgba(94, 246, 255, .03); --btn-hover: rgba(94, 246, 255, .1); --ok: #3effa4; --err: #ff2e4c; --warn: #fcee0a;
   --red: #ff4655; --yellow: #fcee0a; --cyan: #5ef6ff;
   --cut: 10px;
+  --scan: .3;      /* how strong the interlace is: 1 is a hard old screen, 0 none */
+  --lines: repeating-linear-gradient(180deg, transparent 0 2px, rgba(0, 0, 0, calc(.32 * var(--scan))) 2px 3px);
   --glass: linear-gradient(180deg, rgba(94, 246, 255, .045), rgba(94, 246, 255, 0) 38%), linear-gradient(115deg, transparent 52%, rgba(255, 255, 255, .025) 56%, transparent 61%);
   --inner: inset 0 0 0 1px rgba(94, 246, 255, .05), inset 0 1px 0 rgba(255, 255, 255, .07), inset 0 22px 36px -28px rgba(94, 246, 255, .35);
 }
@@ -19,7 +21,7 @@
 
 /* the screen: interlaced lines over everything, and a faint band that rolls down it */
 [data-skin="cyber"] body::before, [data-skin="cyber"] body::after { content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 900; }
-[data-skin="cyber"] body::before { background: repeating-linear-gradient(180deg, transparent 0 2px, rgba(0, 0, 0, .32) 2px 3px); mix-blend-mode: multiply; }
+[data-skin="cyber"] body::before { background: var(--lines); mix-blend-mode: multiply; }
 [data-skin="cyber"] body::after { background: linear-gradient(180deg, transparent, rgba(94, 246, 255, .045) 48%, rgba(255, 255, 255, .06) 50%, rgba(94, 246, 255, .045) 52%, transparent);
   height: 140px; top: -140px; animation: cy-roll 9s linear infinite; }
 @keyframes cy-roll { to { transform: translateY(calc(100vh + 140px)); } }
@@ -45,7 +47,11 @@
 [data-skin="cyber"] header { position: relative; background: var(--glass), var(--bg-surface); border-bottom: 1px solid var(--border); box-shadow: var(--inner); }
 [data-skin="cyber"] header::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
   background: linear-gradient(90deg, var(--red) 0 120px, var(--cyan) 120px 40%, transparent); }
-[data-skin="cyber"] header b { position: relative; color: var(--yellow); font-weight: 700; font-size: 19px; letter-spacing: .32em; text-shadow: 0 0 10px rgba(252, 238, 10, .35); }
+[data-skin="cyber"] header b { position: relative; color: var(--yellow); font-weight: 700; font-size: 19px; letter-spacing: .32em; animation: cy-flicker 7s infinite; }
+@keyframes cy-flicker { 0%, 95.5%, 97%, 98.4%, 100% { opacity: 1; } 96% { opacity: .5; } 97.6% { opacity: .75; } }
+/* the line under the header glows: a blurred copy of it, under it */
+[data-skin="cyber"] header::before { content: ''; position: absolute; left: 0; right: 0; bottom: -2px; height: 3px; filter: blur(4px); pointer-events: none;
+  background: linear-gradient(90deg, var(--red) 0 120px, var(--cyan) 120px 40%, transparent); }
 [data-skin="cyber"] header b::before, [data-skin="cyber"] header b::after { content: 'MONET'; position: absolute; inset: 0; opacity: 0; }
 [data-skin="cyber"] header b::before { color: var(--red); animation: cy-slice 6s steps(1) infinite; }
 [data-skin="cyber"] header b::after { color: var(--cyan); animation: cy-slice 6s steps(1) infinite reverse; }
@@ -63,7 +69,8 @@
 [data-skin="cyber"] .rooms button { clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); box-shadow: none; padding: 5px 20px;
   background: rgba(94, 246, 255, .07); color: var(--text-muted); border: 0; }
 [data-skin="cyber"] .rooms button + button { border-left: 0; margin-left: -5px; }
-[data-skin="cyber"] .rooms button.on { background: var(--yellow); color: #000; }
+[data-skin="cyber"] .rooms button.on { background: var(--yellow); color: #000; text-shadow: none; }
+[data-skin="cyber"] .rooms { filter: drop-shadow(0 0 5px rgba(252, 238, 10, .55)); }      /* the lit one glows; its cut corners would clip a box-shadow */
 [data-skin="cyber"] .rooms button:not(.on):hover { color: var(--cyan); background: var(--btn-hover); }
 [data-skin="cyber"] #skin { padding: 4px 10px; color: var(--red); border-color: var(--red); }
 
@@ -76,7 +83,7 @@
 [data-skin="cyber"] .chev { color: var(--red); }
 [data-skin="cyber"] .fold:hover .head, [data-skin="cyber"] .fold:hover .chev { color: var(--cyan); }
 [data-skin="cyber"] .item:hover { background: linear-gradient(90deg, rgba(94, 246, 255, .09), transparent 80%); color: var(--text-bright); }
-[data-skin="cyber"] .item.sel { background: linear-gradient(90deg, rgba(94, 246, 255, .16), rgba(94, 246, 255, .02) 80%); box-shadow: inset 2px 0 var(--cyan); color: var(--cyan); }
+[data-skin="cyber"] .item.sel { background: linear-gradient(90deg, rgba(94, 246, 255, .16), rgba(94, 246, 255, .02) 80%); box-shadow: inset 2px 0 var(--cyan), inset 10px 0 12px -10px var(--cyan); color: var(--cyan); }
 [data-skin="cyber"] .dot { border-radius: 0; width: 7px; height: 7px; transform: rotate(45deg); }
 [data-skin="cyber"] .dot.green { box-shadow: 0 0 6px var(--ok); } [data-skin="cyber"] .dot.red { box-shadow: 0 0 6px var(--err); } [data-skin="cyber"] .dot.yellow { box-shadow: 0 0 6px var(--warn); }
 
@@ -84,13 +91,13 @@
 [data-skin="cyber"] .card { position: relative; border-radius: 0; background: var(--glass), var(--bg-elevated); border: 1px solid var(--border); box-shadow: var(--inner);
   clip-path: polygon(0 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% 100%, 0 100%); }
 [data-skin="cyber"] .card::before { content: ''; position: absolute; top: 0; left: calc(100% - var(--cut)); width: calc(var(--cut) * 1.415); height: 1.5px; background: var(--yellow);
-  transform-origin: left top; transform: rotate(45deg); pointer-events: none; }      /* along the cut, its width inside the card */
-[data-skin="cyber"] .card::after { content: ''; position: absolute; left: -1px; top: -1px; width: 22px; height: 1px; background: var(--red); pointer-events: none; }
+  transform-origin: left top; transform: rotate(45deg); pointer-events: none; box-shadow: 0 0 4px var(--yellow), 0 0 10px rgba(252, 238, 10, .6); }      /* along the cut, its width inside the card */
+[data-skin="cyber"] .card::after { content: ''; position: absolute; left: -1px; top: -1px; width: 22px; height: 1.5px; background: var(--red); pointer-events: none; box-shadow: 0 0 4px var(--red), 0 0 10px rgba(255, 70, 85, .6); }
 [data-skin="cyber"] .card h2 { color: var(--text-bright); font-weight: 700; font-size: 17px; letter-spacing: .06em; text-transform: uppercase; }
 [data-skin="cyber"] .row { border-bottom: 1px dashed rgba(94, 246, 255, .07); }
 [data-skin="cyber"] .row > .k { color: var(--text-muted); text-transform: uppercase; font-size: 12px; letter-spacing: .08em; }
 [data-skin="cyber"] .row > .v { color: var(--text-bright); }
-[data-skin="cyber"] .big { color: var(--yellow); font-size: 17px; text-shadow: 0 0 8px rgba(252, 238, 10, .3); }
+[data-skin="cyber"] .big { color: var(--yellow); font-size: 17px; }
 [data-skin="cyber"] .check { border-top-color: rgba(94, 246, 255, .1); }
 [data-skin="cyber"] .pill { border-radius: 0; text-transform: uppercase; letter-spacing: .1em; clip-path: polygon(5px 0, 100% 0, calc(100% - 5px) 100%, 0 100%); padding: 1px 11px; }
 [data-skin="cyber"] .part.sel, [data-skin="cyber"] .tag.sel { box-shadow: inset 2px 0 var(--cyan); }
@@ -119,7 +126,7 @@
     linear-gradient(var(--b), var(--b)) 0 100% / 18px 1px, linear-gradient(var(--b), var(--b)) 0 100% / 1px 18px,
     linear-gradient(var(--b), var(--b)) 100% 100% / 18px 1px, linear-gradient(var(--b), var(--b)) 100% 100% / 1px 18px;
   background-repeat: no-repeat; }
-[data-skin="cyber"] .view::after { background: repeating-linear-gradient(180deg, rgba(255, 255, 255, .018) 0 1px, transparent 1px 2px, rgba(0, 0, 0, .18) 2px 3px);
+[data-skin="cyber"] .view::after { background: repeating-linear-gradient(180deg, rgba(255, 255, 255, calc(.018 * var(--scan))) 0 1px, transparent 1px 2px, rgba(0, 0, 0, calc(.18 * var(--scan))) 2px 3px);
   box-shadow: inset 0 0 120px rgba(0, 0, 0, .75); }
 
 /* rails and bars over the view: glass with a coloured edge, buttons lit in that colour */
@@ -128,13 +135,16 @@
 [data-skin="cyber"] .rail-sec.assembly { --rail-accent: #ff2e88; }
 [data-skin="cyber"] .rail-sec, [data-skin="cyber"] .bar, [data-skin="cyber"] .rail-pop, [data-skin="cyber"] .busy, [data-skin="cyber"] .last {
   border-radius: 0; background: var(--glass), rgba(5, 7, 12, .86); border: 1px solid var(--border); box-shadow: var(--inner), 0 8px 24px rgba(0, 0, 0, .5); backdrop-filter: blur(6px); }
-[data-skin="cyber"] .rail.left .rail-sec { border-left: 2px solid var(--rail-accent); }
-[data-skin="cyber"] .rail.right .rail-sec { border-right: 2px solid var(--rail-accent); }
+[data-skin="cyber"] .rail.left .rail-sec { border-left: 2px solid var(--rail-accent);
+  box-shadow: var(--inner), 0 8px 24px rgba(0, 0, 0, .5), -3px 0 10px -4px var(--rail-accent), inset 8px 0 12px -10px var(--rail-accent); }
+[data-skin="cyber"] .rail.right .rail-sec { border-right: 2px solid var(--rail-accent);
+  box-shadow: var(--inner), 0 8px 24px rgba(0, 0, 0, .5), 3px 0 10px -4px var(--rail-accent), inset -8px 0 12px -10px var(--rail-accent); }
 [data-skin="cyber"] .rail-pop { border-left: 2px solid var(--rail-accent); }
 [data-skin="cyber"] .rail-title { font-size: 11px; font-weight: 700; letter-spacing: .24em; text-shadow: 0 0 8px var(--rail-accent); }
 [data-skin="cyber"] .rail button { clip-path: none; box-shadow: none; border: 0; text-transform: none; letter-spacing: .04em; font-size: 13.5px; height: 25px; }
 [data-skin="cyber"] .rail button:hover { background: linear-gradient(90deg, color-mix(in srgb, var(--rail-accent) 18%, transparent), transparent); color: var(--rail-accent); }
-[data-skin="cyber"] .rail button.on { background: var(--rail-accent); color: #000; box-shadow: 0 0 12px color-mix(in srgb, var(--rail-accent) 55%, transparent); }
+[data-skin="cyber"] .rail button.on { background: var(--rail-accent); color: #000; text-shadow: none;
+  box-shadow: 0 0 4px var(--rail-accent), 0 0 16px color-mix(in srgb, var(--rail-accent) 60%, transparent), inset 0 0 6px rgba(255, 255, 255, .45); }
 [data-skin="cyber"] .view-tools .row button { background: rgba(5, 7, 12, .86); }
 [data-skin="cyber"] .view-tools select { background: rgba(0, 0, 0, .7); }
 [data-skin="cyber"] .hint { color: rgba(94, 246, 255, .4); font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 11px; text-transform: uppercase; }
@@ -149,7 +159,13 @@
 /* dialogs and the note that a newer build is online */
 [data-skin="cyber"] dialog { border-radius: 0; background: var(--glass), var(--bg-elevated); border: 1px solid var(--border-strong); box-shadow: var(--inner), 0 0 40px rgba(94, 246, 255, .12);
   clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px)); }
-[data-skin="cyber"] dialog::backdrop { background: repeating-linear-gradient(180deg, rgba(0, 0, 0, .6) 0 2px, rgba(0, 0, 0, .75) 2px 3px); }
+[data-skin="cyber"] dialog::backdrop { background: rgba(0, 0, 0, .62); }
+/* a dialog lies above the page, out of reach of the page's interlace: it carries its own, fixed so it stays put as
+   the dialog scrolls (the dialog's cut corners clip it to the dialog) */
+[data-skin="cyber"] dialog::after { content: ''; position: fixed; inset: 0; pointer-events: none; background: var(--lines); }
+[data-skin="cyber"] dialog::before { content: ''; position: absolute; left: 0; top: 0; width: 45%; height: 2px; pointer-events: none;
+  background: linear-gradient(90deg, var(--red) 0 60px, var(--cyan) 60px, transparent); box-shadow: 0 0 10px rgba(94, 246, 255, .5); }
+[data-skin="cyber"] dialog.ask .doc { font: 500 15px/1.45 Rajdhani, system-ui, sans-serif; color: var(--text-bright); margin: 4px 0 6px; }
 [data-skin="cyber"] dialog h2 { text-transform: uppercase; letter-spacing: .1em; font-size: 18px; }
 [data-skin="cyber"] dialog h3 { color: var(--red); letter-spacing: .2em; }
 [data-skin="cyber"] .projects .item:hover, [data-skin="cyber"] .projects .item.asking { background: linear-gradient(90deg, rgba(94, 246, 255, .09), transparent 80%); }
@@ -160,7 +176,28 @@
 [data-skin="cyber"] .start h1 { color: var(--yellow); letter-spacing: .34em; text-shadow: 1.5px 0 var(--red), -1.5px 0 var(--cyan); }
 [data-skin="cyber"] .start .tag { color: var(--red); text-transform: uppercase; letter-spacing: .16em; }
 
+/* neon: what is lit in a strong colour glows like a tube, a hot core and a halo in its own colour */
+[data-skin="cyber"] :is(header b, .head, .rail-title, .big, .item.sel, button.primary, button.on, .pill, dialog h3, .start h1, .start .tag) {
+  text-shadow: 0 0 1px currentColor, 0 0 6px currentColor, 0 0 18px color-mix(in srgb, currentColor 55%, transparent); }
+[data-skin="cyber"] button.primary { box-shadow: var(--inner), inset 0 0 12px rgba(252, 238, 10, .22); }
+[data-skin="cyber"] :is(button.primary:hover, button.danger:hover) { text-shadow: none; }
+
+/* the dropdowns: drawn by the page, not the system, where the browser allows it (Chrome 135 on); elsewhere the
+   system's own list stays */
+@supports (appearance: base-select) {
+  [data-skin="cyber"] select, [data-skin="cyber"] select::picker(select) { appearance: base-select; }
+  [data-skin="cyber"] select { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  [data-skin="cyber"] select::picker-icon { color: var(--cyan); font-size: 10px; transition: rotate .15s; }
+  [data-skin="cyber"] select:open::picker-icon { rotate: 180deg; }
+  [data-skin="cyber"] select::picker(select) { margin-top: 3px; padding: 3px; border: 1px solid var(--border-strong); border-top: 2px solid var(--cyan); border-radius: 0;
+    background: var(--lines), var(--glass), rgba(5, 7, 12, .97); color: var(--text); box-shadow: 0 0 0 1px rgba(0, 0, 0, .6), 0 12px 30px rgba(0, 0, 0, .65), 0 -2px 12px -4px var(--cyan); }
+  [data-skin="cyber"] select option { padding: 5px 10px 5px 8px; font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 12.5px; color: var(--text); }
+  [data-skin="cyber"] select option:is(:hover, :focus-visible) { outline: none; background: linear-gradient(90deg, rgba(94, 246, 255, .18), transparent); color: var(--cyan); box-shadow: inset 2px 0 var(--cyan); }
+  [data-skin="cyber"] select option:checked { color: var(--yellow); text-shadow: 0 0 6px rgba(252, 238, 10, .6); }
+  [data-skin="cyber"] select option::checkmark { content: '▸'; color: var(--yellow); }
+}
+
 /* no flicker for those who asked for less motion: the look stays, the movement goes */
 @media (prefers-reduced-motion: reduce) {
-  [data-skin="cyber"] body::after, [data-skin="cyber"] header b::before, [data-skin="cyber"] header b::after, [data-skin="cyber"] .view canvas { animation: none; }
+  [data-skin="cyber"] body::after, [data-skin="cyber"] header b, [data-skin="cyber"] header b::before, [data-skin="cyber"] header b::after, [data-skin="cyber"] .view canvas { animation: none; }
 }

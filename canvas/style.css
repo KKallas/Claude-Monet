@@ -166,6 +166,7 @@ dialog h3 { margin: 16px 0 4px; font-size: 12px; color: var(--accent); text-tran
 dialog code, dialog pre { background: var(--bg-body); border: 1px solid var(--border); border-radius: 4px; }
 dialog code { padding: 1px 5px; }
 dialog pre { padding: 8px; overflow-x: auto; user-select: all; margin: 6px 0; }
+dialog.ask { width: min(420px, 92vw); }      /* the page's own alert and confirm */
 
 /* the projects, in a sheet of their own: a row each, and at its end what can be done with it */
 #project { display: inline-flex; align-items: center; gap: 8px; max-width: 260px; color: var(--text-bright); font-weight: 500; }

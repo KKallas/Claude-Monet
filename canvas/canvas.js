@@ -14,6 +14,16 @@ import { createNavCube } from './navcube.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// in place of the browser's alert and confirm: a sheet of the page's own, so it wears the page's skin.
+// ask(text, {yes, danger}) resolves true when yes was pressed; Esc or Cancel is false. tell(text) only says it.
+function ask(text, { yes = 'OK', no = 'Cancel', danger = false } = {}) {
+  const sheet = document.body.appendChild(Object.assign(document.createElement('dialog'), { className: 'ask' }));      // one each: two at once stack
+  sheet.innerHTML = `<p class="doc">${esc(text)}</p><form method="dialog"><div class="line"><span style="flex:1"></span>
+    ${no ? `<button value="no">${esc(no)}</button>` : ''}<button value="yes" class="${danger ? 'danger' : 'primary'}" autofocus>${esc(yes)}</button></div></form>`;
+  sheet.showModal();
+  return new Promise((done) => { sheet.onclose = () => { done(sheet.returnValue === 'yes'); sheet.remove(); }; });
+}
+const tell = (text) => ask(text, { no: null });
 const wid = location.pathname.split('/')[2];
 const root = `/w/${wid}/api`;
 const PALETTE = ['#e26f28', '#2896c8', '#3caa5a', '#be46aa', '#d2aa1e', '#5a64dc', '#dc4650', '#14a096'];
@@ -962,7 +972,7 @@ async function compare(a, b = 'draft') {
     $('#compareLabel').textContent = `v${a} → ${b === 'draft' ? 'draft' : 'v' + b}`;
     frame(groups.b, true);
     compareMode('added');
-  } catch (e) { alert(e.message); }
+  } catch (e) { tell(e.message); }
   busy();
   renderPanel(true);
 }
@@ -1086,11 +1096,11 @@ function renderSide() {
 }
 $('#notes').onclick = (e) => { const el = e.target.closest('[data-note]'); if (el) open(S.project, el.dataset.note); };
 const tagsUrl = () => `/p/${S.project}/n/${S.note}`;
-async function redo(fn) { try { building([S.note]); await fn(); await open(S.project, S.note); } catch (e) { alert(e.message); busy(); } }
+async function redo(fn) { try { building([S.note]); await fn(); await open(S.project, S.note); } catch (e) { tell(e.message); busy(); } }
 $('aside').addEventListener('click', (e) => {
   if (e.target.closest('input')) return;
   const b = e.target.closest('[data-act]');
-  if (b?.dataset.act === 'untag') { if (confirm(`Remove "${b.dataset.name}" from the Note?`)) redo(() => api(`${tagsUrl()}/tags/${b.dataset.name}`, 'DELETE')); return; }
+  if (b?.dataset.act === 'untag') { ask(`Remove "${b.dataset.name}" from the Note?`, { yes: 'Remove', danger: true }).then((yes) => yes && redo(() => api(`${tagsUrl()}/tags/${b.dataset.name}`, 'DELETE'))); return; }
   if (b?.dataset.act === 'planecopy') {      // a plane like Front, Top or Left, off it: 10 mm to begin with, the number is there to change
     const base = planes().find((q) => q.name === b.dataset.name), n = base.plane.normal;
     let k = 1; while (S.data.tags[`${base.name}_${k}`]) k++;
@@ -1108,7 +1118,7 @@ $('aside').addEventListener('change', (e) => {      // a plane's distance off it
   const name = e.target.dataset.offset;
   if (!name) return;
   const offset = Number(e.target.value.replace(',', '.'));
-  if (!Number.isFinite(offset)) { alert('the offset is a number of millimetres'); return; }
+  if (!Number.isFinite(offset)) { tell('the offset is a number of millimetres'); return; }
   redo(() => api(`${tagsUrl()}/planes/${name}`, 'PUT', { offset }));
 });
 $('aside').addEventListener('mouseover', (e) => { const pl = e.target.closest('[data-plane]')?.dataset.plane ?? null; if (pl !== S.hotPlane) { S.hotPlane = pl; showPlanes(pl); } });
@@ -1350,7 +1360,7 @@ function renderPanel(force) {
   panel.innerHTML = cards.join('');
 }
 
-const act = async (fn) => { try { await fn(); await open(S.project, S.note); } catch (e) { alert(e.message); busy(); } };
+const act = async (fn) => { try { await fn(); await open(S.project, S.note); } catch (e) { tell(e.message); busy(); } };
 $('#panel').addEventListener('focusout', () => { if (S.stale) setTimeout(() => renderPanel(), 50); });
 $('#panel').addEventListener('input', (e) => {
   if (e.target.id === 'saveMsg') S.message = e.target.value;
@@ -1364,7 +1374,7 @@ async function setLook(change) {
     S.proj.looks = (await api(`/p/${S.project}/looks`, 'PUT', { names, ...change })).looks;
     S.rev = (await api(`/p/${S.project}/rev`)).rev;      // our own change: nothing to load again
     dress(); renderPanel(true);
-  } catch (e) { alert(e.message); }
+  } catch (e) { tell(e.message); }
 }
 $('#panel').addEventListener('change', (e) => {
   if (e.target.id === 'lookMaterial') setLook({ material: e.target.value, color: null });
@@ -1393,7 +1403,7 @@ $('#panel').addEventListener('click', (e) => {
   if (a === 'sketchhere') { startSketch({ face: theFace() }); return; }
   if (a === 'planehere') {      // a plane on the selected face (or off it), kept with the part as a tag; then draw on it
     const face = theFace(), off = Number(($('#planeOffset').value || '0').replace(',', '.'));
-    if (!Number.isFinite(off)) { alert('the offset is a number of millimetres'); return; }
+    if (!Number.isFinite(off)) { tell('the offset is a number of millimetres'); return; }
     const plane = frameOf(face.normal, face.center.map((v, k) => v + face.normal[k] * off));
     let name = $('#tagName').value.trim();
     if (!name) { let k = 1; while (S.data.tags[`plane_${k}`]) k++; name = `plane_${k}`; }
@@ -1405,7 +1415,7 @@ $('#panel').addEventListener('click', (e) => {
         await open(S.project, S.note);
         const made = S.data.tags[name];
         startSketch({ plane: made.plane, planeName: name, on: made.on });
-      } catch (err) { alert(err.message); busy(); }
+      } catch (err) { tell(err.message); busy(); }
     })();
     return;
   }
@@ -1439,8 +1449,8 @@ $('#panel').addEventListener('click', (e) => {
     await api(`${n}/tags`, 'POST', { name, role: $('#tagRole').value, items: selectedItems() });
     S.tagSel = name;      // show what was just named
   });
-  if (a === 'untag' && confirm(`Remove the tag "${b.dataset.name}" from the Note? Checks about it will fail.`)) act(() => api(`${n}/tags/${b.dataset.name}`, 'DELETE'));
-  if (a === 'uncheck' && confirm(`Remove the check "${b.dataset.id}"?`)) act(() => api(`${n}/checks/${b.dataset.id}`, 'DELETE'));
+  if (a === 'untag') ask(`Remove the tag "${b.dataset.name}" from the Note? Checks about it will fail.`, { yes: 'Remove', danger: true }).then((yes) => yes && act(() => api(`${n}/tags/${b.dataset.name}`, 'DELETE')));
+  if (a === 'uncheck') ask(`Remove the check "${b.dataset.id}"?`, { yes: 'Remove', danger: true }).then((yes) => yes && act(() => api(`${n}/checks/${b.dataset.id}`, 'DELETE')));
   if (a === 'check') act(() => {
     const eq = $('#ckEq').value.trim().toLowerCase();
     return api(`${n}/checks`, 'POST', { what: $('#ckWhat').value.trim(), min: num('#ckMin'), max: num('#ckMax'), why: $('#ckWhy').value,
@@ -1484,7 +1494,7 @@ async function showProjects() {
   renderProjects();
   if (!sheet.open) sheet.showModal();
 }
-$('#project').onclick = () => showProjects().catch((e) => alert(e.message));
+$('#project').onclick = () => showProjects().catch((e) => tell(e.message));
 const projectsFailed = (e) => { $('#projectsError').textContent = e.message; };
 sheet.addEventListener('click', async (e) => {
   const r = sheet.getBoundingClientRect();
@@ -1559,8 +1569,8 @@ $('#connect').onclick = () => {
     <form method="dialog"><div class="line"><span style="flex:1"></span><button>Close</button></div></form>`;
   $('#newKey').onclick = async (e) => {
     e.preventDefault();
-    if (!confirm('Make a new agent key? The link above stops working at once: every agent you connected needs the new one.')) return;
-    try { S.state.agent = (await api('/key', 'POST', {})).agent; $('#connect').onclick(); } catch (err) { alert(err.message); }
+    if (!(await ask('Make a new agent key? The link above stops working at once: every agent you connected needs the new one.', { yes: 'New key', danger: true }))) return;
+    try { S.state.agent = (await api('/key', 'POST', {})).agent; $('#connect').onclick(); } catch (err) { tell(err.message); }
   };
   dlg.showModal();
 };
