@@ -25,6 +25,12 @@ together, no solver. A part that no joint names is free; GROUND is what never mo
 
 The joints form a tree from the ground: each body is moved by at most one joint. Everything here
 is plain data and numpy; the clash sweeps need manifold3d (meshes in, volumes out).
+
+    TIPS = {"nose": {"on": "tool", "at": [278.42, 0, 352.25]}}
+
+A tip is a point on a part (`at`: where it is as built) that can be led somewhere: solve() finds the
+values of the joints moved by hand that put it there, within their ranges (inverse kinematics). The
+canvas does the same, live, when the tip is dragged (canvas/motion.js).
 """
 import math
 
@@ -120,7 +126,8 @@ def _range(joint):
     return [lo, hi]
 
 
-def resolve(joints: dict, ground, part_names: list, tags: dict | None = None, found: dict | None = None, faces: list | None = None) -> dict:
+def resolve(joints: dict, ground, part_names: list, tags: dict | None = None, found: dict | None = None, faces: list | None = None,
+            tips: dict | None = None) -> dict:
     """The motion of an assembly as plain data: bodies, joints with their axes in the assembly's frame, the order
     to place them in, and every problem found. Never raises: a broken joint is told, not thrown."""
     joints, problems = dict(joints or {}), []
@@ -229,8 +236,22 @@ def resolve(joints: dict, ground, part_names: list, tags: dict | None = None, fo
         depth[b] = len(seen)
     tree = sorted(parent, key=lambda b: depth.get(b, 0))
     free = [b for b in bodies if b not in ground and b not in parent]
-    return {"ok": not problems and all(r["resolved"] for r in out.values()), "problems": problems,
-            "ground": ground, "bodies": bodies, "free": free, "joints": out,
+    body_of = {p: b for b, ps in bodies.items() for p in ps}
+    found_tips = {}
+    for name, t in (tips or {}).items():
+        on, at = (t or {}).get("on"), (t or {}).get("at")
+        row = {"on": on, "body": body_of.get(on, on if on in bodies else None), "resolved": True}
+        if row["body"] is None:
+            row.update(resolved=False, why=f"there is no part or body {on!r}")
+        try:
+            row["at"] = [float(x) for x in at]
+            if len(row["at"]) != 3 or not all(math.isfinite(x) for x in row["at"]):
+                raise ValueError
+        except (TypeError, ValueError):
+            row.update(resolved=False, at=None, why="at is [x, y, z]: where the tip is as built")
+        found_tips[name] = row
+    return {"ok": not problems and all(r["resolved"] for r in out.values()) and all(t["resolved"] for t in found_tips.values()),
+            "problems": problems, "ground": ground, "bodies": bodies, "free": free, "joints": out, "tips": found_tips,
             "tree": [parent[b] for b in tree], "follow_order": [n for n in order_f if out[n]["resolved"]]}
 
 
@@ -289,6 +310,50 @@ def part_frames(model: dict, given: dict | None = None, free: dict | None = None
 def drivers(model: dict) -> list:
     """The joints that are moved by hand: they move, they are found, they follow nothing."""
     return [n for n, r in model["joints"].items() if r["kind"] != "rigid" and r["resolved"] and not r["follows"]]
+
+
+def tip_at(model: dict, tip: str, given: dict | None = None) -> list:
+    """Where a tip is with the joints at these values."""
+    t = model["tips"][tip]
+    return (frames(model, given)[t["body"]] @ [*t["at"], 1.0])[:3].tolist()
+
+
+def solve(model: dict, tip: str, target, start: dict | None = None, iterations: int = 200) -> dict:
+    """Inverse kinematics: the values of the joints moved by hand (and not locked) that put the tip at target,
+    starting from `start` (the pose it is in) and never leaving a joint's range. Damped least squares on the
+    joints' own frames, so whatever the joints are (and whatever follows them) it is the same motion as posing.
+    Out of reach, it stops where the tip comes nearest: `off` says how far that is. Same as solve() in
+    canvas/motion.js, step for step."""
+    t = model["tips"].get(tip)
+    if not t or not t["resolved"]:
+        raise ValueError(f"no tip {tip!r}" + (f": {t['why']}" if t else f"; there are: {', '.join(model['tips']) or 'none'}"))
+    names = [n for n in drivers(model) if not model["joints"][n]["locked"]]
+    start = dict(start or {})
+    q = np.array([float(start.get(n, 0.0)) for n in names])
+    spans = [model["joints"][n]["range"] or ((-180.0, 180.0) if model["joints"][n]["kind"] == "revolute" else (-1e6, 1e6)) for n in names]
+    lo, hi = np.array([a for a, _ in spans]), np.array([b for _, b in spans])
+    q = np.clip(q, lo, hi)
+    goal = np.asarray(target, dtype=float)
+
+    def at(x):
+        return np.asarray(tip_at(model, tip, {**start, **dict(zip(names, x))}))
+    best, damping = None, 1.0
+    for k in range(iterations):
+        here = at(q)
+        e = goal - here
+        if best is None or np.linalg.norm(e) < best[1]:
+            best = (q.copy(), float(np.linalg.norm(e)))
+        if np.linalg.norm(e) < 1e-4:
+            break
+        J = np.column_stack([(at(q + np.eye(len(q))[i] * 1e-3) - here) / 1e-3 for i in range(len(q))])
+        step = J.T @ np.linalg.solve(J @ J.T + damping ** 2 * np.eye(3), e)
+        big = np.abs(step).max()
+        if big > 10:          # at most 10 degrees (or mm) a step: far targets are walked to, not jumped at
+            step *= 10 / big
+        q = np.clip(q + step, lo, hi)
+    q, off = best
+    return {"values": {**{n: round(float(start.get(n, 0.0)), 4) for n in drivers(model)}, **{n: round(float(v), 4) for n, v in zip(names, q)}},
+            "tip": [round(x, 4) for x in at(q).tolist()], "off": round(off, 4), "reached": off <= 0.05}
 
 
 # ---- clashes: meshes in, volumes out --------------------------------------------------------------------------

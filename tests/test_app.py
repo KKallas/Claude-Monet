@@ -494,3 +494,15 @@ def test_a_joint_made_in_the_canvas_and_a_pose_for_the_agent(client, reg):
     # and the person takes it away again
     assert "hinge" not in client.delete(f"{n}/joints/hinge").json()["motion"]["joints"]
     assert client.put(f"{n}/joints/bad name", json={"kind": "rigid", "moves": "lid", "on": "base"}).status_code == 400
+
+
+def test_the_agent_leads_the_nose_and_sees_the_arm_there(client, reg):
+    w = f"/w/{reg['id']}"
+    r = client.get(f"{w}/agent/reach", params={"project": "mg400_rakis", "note": "mg400_blocks", "x": 250, "y": 120, "z": 200}).json()
+    assert r["reached"] and r["off"] < 0.05 and r["tip"] == pytest.approx([250, 120, 200], abs=0.05), r
+    assert r["clashes"] == [] and set(r["values"]) == {"j1", "j2", "j3", "j4"}
+    png = client.get(r["image"].split("testserver", 1)[1])
+    assert png.status_code == 200 and png.content[:4] == b"\x89PNG"
+    far = client.get(f"{w}/agent/reach", params={"project": "mg400_rakis", "note": "mg400_blocks", "x": 900, "y": 0, "z": 0}).json()
+    assert not far["reached"] and far["off"] > 100
+    assert "no tips" in client.get(f"{w}/agent/reach", params={"project": "mg400_rakis", "note": "rakis", "x": 0, "y": 0, "z": 0}).json()["error"]

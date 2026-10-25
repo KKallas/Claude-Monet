@@ -222,15 +222,53 @@ def test_the_canvas_poses_the_mg400_as_the_server_does(mg400, tmp_path):
     done = subprocess.run([node, "--test", str(ROOT / "tests/motion.test.mjs")], capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stdout[-2000:]
     poses = [dict(zip(("j1", "j2", "j3", "j4"), q)) for q in POSES]
-    (tmp_path / "in.json").write_text(json.dumps({"model": mg400["motion"], "poses": poses}))
-    script = (f"import {{ frames, bodyOf }} from {json.dumps((ROOT / 'canvas/motion.js').as_uri())};\n"
+    targets = [[200.0, 150.0, 250.0], [-100.0, -300.0, 150.0], [700.0, 0.0, 300.0]]
+    (tmp_path / "in.json").write_text(json.dumps({"model": mg400["motion"], "poses": poses, "targets": targets}))
+    script = (f"import {{ frames, bodyOf, solve }} from {json.dumps((ROOT / 'canvas/motion.js').as_uri())};\n"
               f"const d = JSON.parse(require('fs').readFileSync({json.dumps(str(tmp_path / 'in.json'))}, 'utf8'));\n"
               "const of = bodyOf(d.model);\n"
-              "console.log(JSON.stringify(d.poses.map((q) => { const f = frames(d.model, q); return Object.fromEntries(Object.entries(of).map(([p, b]) => [p, f[b]])); })));")
+              "console.log(JSON.stringify({ poses: d.poses.map((q) => { const f = frames(d.model, q); return Object.fromEntries(Object.entries(of).map(([p, b]) => [p, f[b]])); }),\n"
+              "  solved: d.targets.map((t) => solve(d.model, 'nose', t, { j1: 10 })) }));")
     (tmp_path / "pose.mjs").write_text(script.replace("require('fs')", "(await import('node:fs'))"))
     out = subprocess.run([node, str(tmp_path / "pose.mjs")], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
-    for q, theirs in zip(poses, json.loads(out.stdout)):
+    got = json.loads(out.stdout)
+    for q, theirs in zip(poses, got["poses"]):
         mine = joints.part_frames(mg400["motion"], q)
         for part, m in theirs.items():
             assert np.allclose(np.array(m).reshape(4, 4), mine[part], atol=1e-9), (part, q)
+    # and the nose is led as the server leads it: the same steps, the same answer
+    for t, theirs in zip(targets, got["solved"]):
+        mine = joints.solve(mg400["motion"], "nose", t, {"j1": 10})
+        assert theirs["off"] == pytest.approx(mine["off"], abs=1e-3) and theirs["reached"] == mine["reached"]
+        for j, v in mine["values"].items():
+            assert theirs["values"][j] == pytest.approx(v, abs=1e-3), (t, j)
+
+
+# ---- the nose led somewhere: inverse kinematics ---------------------------------------------------------------
+
+NOSE = (0.0, 0.0, -85.0)        # the middle of the flange's underside, in the URDF's link5 frame
+
+
+@pytest.mark.parametrize("q", POSES[1:] + [(100, -20, -20, 0), (-150, 75, 30, 0)], ids=lambda q: ",".join(map(str, q)))
+def test_the_nose_is_led_where_the_urdf_says_the_pose_puts_it(arm, q):
+    """Pose the URDF, see where its nose is, ask the Note's solver for that point from as built: it finds the
+    same J1, J2 and J3 (J4 only turns the nose about itself, so it stays where it was)."""
+    target = (urdf_frames(q)["link5"] @ [*NOSE, 1.0])[:3]
+    r = joints.solve(arm["motion"], "nose", target)
+    assert r["reached"] and r["off"] < 0.01, r
+    for j, want in zip(("j1", "j2", "j3"), q):
+        assert r["values"][j] == pytest.approx(want, abs=0.01), (j, r)
+    assert r["values"]["j4"] == 0.0
+
+
+def test_out_of_reach_the_nose_comes_as_near_as_it_can(mg400):
+    r = joints.solve(mg400["motion"], "nose", [700.0, 0.0, 300.0])
+    assert not r["reached"] and 200 < r["off"] < 300            # the arm reaches about 440 mm
+    m = mg400["motion"]
+    for j, v in r["values"].items():                            # and never out of a joint's range
+        lo, hi = m["joints"][j]["range"]
+        assert lo - 1e-9 <= v <= hi + 1e-9
+    locked = {**m, "joints": {**m["joints"], "j1": {**m["joints"]["j1"], "locked": True}}}
+    side = joints.solve(locked, "nose", joints.tip_at(m, "nose", {"j1": 40, "j2": 20, "j3": 30}))
+    assert side["values"]["j1"] == 0.0 and not side["reached"]  # a locked joint is not moved to get there

@@ -23,7 +23,7 @@ patching the previous shape.
 Your tools, in whichever form the harness gives them:
 
 - **MCP tools** from a connector usually called Monet: `guide`, `status`, `new_project`,
-  `read_note`, `write_note`, `check`, `look`, `pose`, `selection`, `add_check`, `load_check`, `save`,
+  `read_note`, `write_note`, `check`, `look`, `pose`, `reach`, `selection`, `add_check`, `load_check`, `save`,
   `versions`, `diff`, `export`.
 - **A shell but no MCP tools**: `scripts/monet.py` in this skill does the same over HTTP. Set
   `MONET_URL` to the user's agent link (it looks like `https://host/w/AbC123…`; they find it in
@@ -235,6 +235,11 @@ JOINTS = {
   simple links) in the `mg400_rakis` template are the worked examples.
 - `pose(project, note, values="j1=30, j2=-10")` shows the assembly moved and lists what it hits
   there. Look at it moved before you say it works.
+- **Tips**: `TIPS = {"nose": {"on": "tool", "at": [x, y, z]}}`, a point on a part (where it is as
+  built). `reach(project, note, x, y, z)` solves the joints moved by hand to put it there (inverse
+  kinematics, within their ranges) and returns the values, `off` (more than 0.05 mm: out of reach,
+  and that is as near as it gets), what the pose hits and its picture. Use it to answer "can the
+  robot get there", and say how far off when it cannot.
 - In the canvas's **Motion** area the user drags parts (each moves only as its joint lets it),
   plays a joint through its range, sees clashes in red, and makes, changes, locks and removes
   joints. What they make is written into `JOINTS` (an axis they pick is tagged as `<joint>_axis`):

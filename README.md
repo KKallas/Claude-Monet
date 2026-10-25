@@ -137,6 +137,13 @@ hundredth of a millimetre as Dobot's own robot description says (`reference/mg40
 poses). Twice: `mg400.py` is its nine links as Dobot drew them, `mg400_blocks.py` the same arm
 drawn as plates, pins and boxes (light, and every face a true plane or cylinder to tag).
 
+A **tip** is a point on a part that can be led somewhere, as a robot's nose: `TIPS = {"nose": {"on":
+"tool", "at": [x, y, z]}}` (where it is as built). Put the tip at a point and the joints moved by hand
+are solved for it, within their ranges (inverse kinematics: damped least squares on the joints' own
+frames, the same in the server and the canvas, a few milliseconds). Out of reach, the tip comes as near
+as it can and says how far that is. Both MG400s have a nose; led to where Dobot's URDF puts it at a
+pose, the solver finds that pose's J1…J3 to a hundredth of a degree.
+
 A part can come **from a mesh**: `mg400_mesh.py` holds Dobot's link meshes (simplified to 0.4 mm
 with manifold3d, which keeps them closed), and the kernel makes a solid of each, a flat face per
 triangle (`BRepBuilderAPI_MakeShapeOnMesh`). The runner leaves the seams between such triangles out
@@ -215,7 +222,8 @@ Assembly, opening one of its parts goes to Part, starting a drawing goes to Sket
   says which parts and by how much; what overlaps as built is listed apart, with each joint's
   stops. Make a joint by selecting the moving part and the hole, boss or face to turn about or
   slide along (it is tagged for the joint), group parts that move as one, lock a joint, choose
-  the ground: all of it written into the Note's `JOINTS`.
+  the ground: all of it written into the Note's `JOINTS`. A tip (a robot's nose) is a pink ring: drag it and the
+  joints follow it, or type where it should go.
 
 Candidate starting point: [yet-another-cad-viewer](https://github.com/yeicor-3d/yet-another-cad-viewer),
 which already shows build123d models in the browser with face, edge and vertex

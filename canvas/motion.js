@@ -81,3 +81,54 @@ export function span(row) {
   if (row.range) return row.range;
   return row.kind === 'revolute' ? [-180, 180] : [-100, 100];
 }
+
+/** Where a tip is with the joints at these values. */
+export function tipAt(model, tip, given = {}) {
+  const t = model.tips[tip];
+  return apply(frames(model, given)[t.body], t.at);
+}
+
+// x for A x = b, A 3 x 3
+function solve3(A, b) {
+  const m = A.map((row, i) => [...row, b[i]]);
+  for (let c = 0; c < 3; c++) {
+    let p = c;
+    for (let r = c + 1; r < 3; r++) if (Math.abs(m[r][c]) > Math.abs(m[p][c])) p = r;
+    [m[c], m[p]] = [m[p], m[c]];
+    for (let r = 0; r < 3; r++) {
+      if (r === c) continue;
+      const f = m[r][c] / m[c][c];
+      for (let k = c; k < 4; k++) m[r][k] -= f * m[c][k];
+    }
+  }
+  return [0, 1, 2].map((i) => m[i][3] / m[i][i]);
+}
+
+/** Inverse kinematics, as solve() in monet/joints.py: the values of the joints moved by hand (and not locked)
+ *  that put the tip at target, from the pose it is in, never leaving a joint's range. Out of reach, it stops
+ *  where the tip comes nearest; `off` says how far that is. {values, tip, off, reached} */
+export function solve(model, tip, target, start = {}, iterations = 200) {
+  const names = drivers(model).filter((n) => !model.joints[n].locked);
+  const spans = names.map((n) => model.joints[n].range ?? (model.joints[n].kind === 'revolute' ? [-180, 180] : [-1e6, 1e6]));
+  const clamp = (x) => x.map((v, i) => Math.min(spans[i][1], Math.max(spans[i][0], v)));
+  let q = clamp(names.map((n) => Number(start[n] ?? 0)));
+  const at = (x) => tipAt(model, tip, { ...start, ...Object.fromEntries(names.map((n, i) => [n, x[i]])) });
+  const norm = (v) => Math.hypot(...v);
+  let best = null;
+  for (let k = 0; k < iterations; k++) {
+    const here = at(q), e = target.map((v, i) => v - here[i]);
+    if (!best || norm(e) < best[1]) best = [[...q], norm(e)];
+    if (norm(e) < 1e-4) break;
+    const J = q.map((_, i) => { const d = [...q]; d[i] += 1e-3; const p = at(d); return p.map((v, r) => (v - here[r]) / 1e-3); });     // columns
+    const JJt = [0, 1, 2].map((r) => [0, 1, 2].map((c) => J.reduce((s, col) => s + col[r] * col[c], 0) + (r === c ? 1 : 0)));
+    const y = solve3(JJt, e);
+    let step = J.map((col) => col[0] * y[0] + col[1] * y[1] + col[2] * y[2]);
+    const big = Math.max(...step.map(Math.abs));
+    if (big > 10) step = step.map((v) => v * 10 / big);      // at most 10 degrees (or mm) a step
+    q = clamp(q.map((v, i) => v + step[i]));
+  }
+  const [qb, off] = best;
+  const values = Object.fromEntries(drivers(model).map((n) => [n, Number(start[n] ?? 0)]));
+  names.forEach((n, i) => { values[n] = qb[i]; });
+  return { values, tip: at(qb), off, reached: off <= 0.05 };
+}

@@ -198,6 +198,30 @@ def pose(c: Caller, project: str, note: str, values: str = "", views: str = "iso
     return {"note": note, **out, "image": f"{c.base}/file/p/{project}/n/{note}/render.png?{query}"}, png
 
 
+def reach(c: Caller, project: str, note: str, x: float, y: float, z: float, tip: str = "", start: str = "", views: str = "iso,front"):
+    """Lead a tip of an assembly (its TIPS: a robot's nose, say) to the point x, y, z (mm, the assembly's frame) and
+    find the joint values that put it there: inverse kinematics, within every joint's range, from `start` (joint
+    values as in pose(); as built when empty). Returns the values, where the tip ends up, `off` (how far from the
+    point: more than 0.05 mm means out of reach, and it is the nearest it gets), what that pose hits, and the
+    picture. tip: which one, when there are several."""
+    p = c.ws.project(project)
+    r = p.result(note)
+    tips = ((r.get("motion") or {}).get("tips") or {}) if r["ok"] else {}
+    if not tips:
+        raise Problem(f"{note} has no tips: give the Note TIPS = {{'nose': {{'on': '<part>', 'at': [x, y, z]}}}}" if r["ok"] else f"{note} does not build")
+    tip = tip or next(iter(tips))
+    try:
+        solved = joints.solve(r["motion"], tip, [float(x), float(y), float(z)], pose_values(start) if start else {})
+    except ValueError as e:
+        raise Problem(str(e)) from None
+    given = {k: v for k, v in solved["values"].items()}
+    out = p.pose(note, given)
+    png = picture(p, note, views, "draft", False, given)
+    query = urllib.parse.urlencode({"views": views, "pose": ",".join(f"{k}={v:g}" for k, v in given.items()), "r": p.rev[-8:]})
+    return {"note": note, "tip": tip, "target": [x, y, z], **solved, "clashes": out["clashes"],
+            "image": f"{c.base}/file/p/{project}/n/{note}/render.png?{query}"}, png
+
+
 def selection(c: Caller, project: str) -> dict:
     """What the user has selected in the canvas right now. They pick points, lines (edges), faces or objects (the
     parts of an assembly) and the lines of their sketches, one or many. `items` lists them: a face with its kind,
@@ -284,9 +308,9 @@ def export(c: Caller, project: str, note: str, format: str = "3mf", version: str
             "bytes": path.stat().st_size, "format": format, "mime": EXPORTS[format]}
 
 
-TOOLS = {f.__name__: f for f in (guide, status, new_project, read_note, write_note, check, look, pose, selection, add_check,
+TOOLS = {f.__name__: f for f in (guide, status, new_project, read_note, write_note, check, look, pose, reach, selection, add_check,
                                  load_check, save, versions, diff, export)}
-READ_ONLY = {"guide", "status", "read_note", "check", "look", "pose", "selection", "load_check", "versions", "diff", "export"}
+READ_ONLY = {"guide", "status", "read_note", "check", "look", "pose", "reach", "selection", "load_check", "versions", "diff", "export"}
 
 
 def call(name: str, caller: Caller, args: dict):

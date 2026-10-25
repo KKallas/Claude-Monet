@@ -10,7 +10,7 @@ import { angle, closest } from './measure.js';
 import { MATERIALS, STYLES, createLook } from './look.js';
 import { EDITING, basis, createSketcher, describe as curveWords, frameOf, outline, strokes } from './sketch.js';
 import { lengthOf } from './sketch2d.js';
-import { IDENTITY, apply, bodyOf, drivers, frames as poseFrames, handle, span, values as jointValues } from './motion.js';
+import { IDENTITY, apply, bodyOf, drivers, frames as poseFrames, handle, solve as reachFor, span, tipAt, values as jointValues } from './motion.js';
 import { createNavCube } from './navcube.js';
 
 const $ = (s) => document.querySelector(s);
@@ -123,9 +123,12 @@ scene.add(holo);
 // the sketches of the part: what the user drew on its faces, always in sight
 const drawn = new THREE.Group();
 scene.add(drawn);
-// in Motion, the axis of the joint pointed at: a line through the part, the dot at its end the positive way
+// in Motion, the axis of the joint pointed at: a line through the part, the dot at its end the positive way; and the
+// tips (a robot's nose): a ring to drag, the joints following
 const axes = new THREE.Group();
 scene.add(axes);
+const tipDots = new THREE.Group();
+scene.add(tipDots);
 // the planes of the part, shown where one is chosen to draw on: Front, Top and Left through its origin are always
 // there; the others are planes the user put on faces (tags of kind "plane")
 const sheets = new THREE.Group();
@@ -364,7 +367,7 @@ function spread() {
   }
   groups.part.updateMatrixWorld(true);
   neonDirty = true;
-  showSelection(); showAxes();
+  showSelection(); showAxes(); showTips();
 }
 
 // the outline of the cut, part by part: where each triangle crosses the plane, a segment
@@ -842,7 +845,15 @@ let drag = null;
 view.addEventListener('pointerdown', (e) => {
   if (!moving() || e.target !== canvas || e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey || S.boxTool) return;
   if (cube.contains(view.clientWidth, ...inView(e))) return;
-  const r = canvas.getBoundingClientRect(), one = pick(e.clientX - r.left, e.clientY - r.top, 'part');
+  const r = canvas.getBoundingClientRect(), tip = tipUnder(e.clientX - r.left, e.clientY - r.top);
+  if (tip) {      // the nose: led through the plane facing us, the joints solved to follow it
+    e.stopImmediatePropagation(); e.preventDefault();
+    stopPlaying();
+    const at = new THREE.Vector3(...tipAt(model(), tip, S.pose));
+    drag = { tip, x: e.clientX, y: e.clientY, moved: false, plane: new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), at) };
+    return;
+  }
+  const one = pick(e.clientX - r.left, e.clientY - r.top, 'part');
   if (!one) return;
   const mo = model(), h = handle(mo, bodyOf(mo)[S.parts[one.i]?.name]);
   if (!h) return;          // held by the ground: a click selects it, a drag turns the view
@@ -859,6 +870,13 @@ window.addEventListener('pointermove', (e) => {
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   if (!drag.moved && Math.hypot(dx, dy) <= 3) return;
   drag.moved = true;
+  if (drag.tip) {
+    const r = canvas.getBoundingClientRect(), ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+    const to = ray.ray.intersectPlane(drag.plane, new THREE.Vector3());
+    if (to) reach(drag.tip, to.toArray());
+    return;
+  }
   const mm = seenHalf() * 2 / view.clientHeight;      // millimetres to a pixel, about where the part is
   if (drag.joint && drag.kind === 'revolute') {
     if (Math.abs(drag.facing) > 0.25) {      // the axis looks at us: the turn of the pointer about it
@@ -885,7 +903,7 @@ window.addEventListener('pointerup', () => {
   const d = drag;
   drag = null;
   S.hotJoint = null; showAxes();
-  if (!d.moved) select([{ kind: 'part', i: d.part }], {});
+  if (!d.moved && !d.tip) select([{ kind: 'part', i: d.part }], {});
 });
 // a joint's axis where it is now, on the screen: its middle, which way 10 mm along it goes, and whether it looks at us
 function screenAxis(name) {
@@ -980,7 +998,7 @@ function roomBar() {
   $('.hint').innerHTML = S.room === 'sketch' ? (sketch.state.active
     ? 'click: place a point · click the first point: close · Enter: end the line · Esc: drop it · Backspace: step back · Ctrl+Z: undo<br>lines up with corners (pink) and the 1 mm grid · Shift: free · right-drag: move the page · wheel: zoom'
     : 'click a plane, or a flat face of the part, to draw on it<br>drag: orbit · right-drag: pan · wheel: zoom')
-    : S.room === 'motion' ? 'drag a part: it moves as its joint lets it · drag beside it: orbit · right-drag: pan · wheel: zoom<br>click: select · Shift: add · Ctrl: take away'
+    : S.room === 'motion' ? 'drag a part: it moves as its joint lets it · drag a tip (◎): the joints follow it · drag beside: orbit · right-drag: pan · wheel: zoom<br>click: select · Shift: add · Ctrl: take away'
     : 'drag: orbit · right-drag: pan · wheel: zoom<br>click: select · Shift: add · Ctrl: take away · Shift- or Ctrl-drag: box';
   canvas.style.cursor = S.room === 'sketch' ? 'crosshair' : S.boxTool ? 'crosshair' : '';
   showPlanes();
@@ -1232,6 +1250,48 @@ function showAxes() {
   for (const o of [line, tip]) { o.renderOrder = 9; o.frustumCulled = false; o.material.toneMapped = false; axes.add(o); }
 }
 
+// the tips: where each is now, on the screen and in the panel
+function showTips() {
+  for (const o of tipDots.children) { o.geometry.dispose(); o.material.dispose(); }
+  tipDots.clear();
+  const mo = model();
+  if (!moving() || !mo?.tips) return;
+  for (const [name, t] of Object.entries(mo.tips)) {
+    if (!t.resolved) continue;
+    const at = tipAt(mo, name, S.pose), g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(at, 3));
+    for (const [size, colour] of [[22, 0x10131b], [16, 0xff2fb9], [7, 0xffffff]]) {      // a ring that shows on any part, any skin
+      const dot = new THREE.Points(g.clone(), new THREE.PointsMaterial({ color: colour, size, sizeAttenuation: false, depthTest: false, transparent: true, toneMapped: false }));
+      dot.renderOrder = 11; dot.frustumCulled = false;
+      tipDots.add(dot);
+    }
+    g.dispose();
+    const el = document.querySelector(`[data-tippos="${name}"]`);
+    if (el) el.textContent = at.map((v) => fmt(Math.round(v * 100) / 100)).join(', ');
+  }
+}
+function tipUnder(x, y) {
+  const mo = model();
+  if (!mo?.tips) return null;
+  const to = projector();
+  let best = null;
+  for (const [name, t] of Object.entries(mo.tips)) {
+    if (!t.resolved) continue;
+    const [px, py] = to(...tipAt(mo, name, S.pose)), d = Math.hypot(px - x, py - y);
+    if (d < 14 && (!best || d < best.d)) best = { name, d };
+  }
+  return best?.name ?? null;
+}
+/** Lead a tip to a point: the joints moved by hand are solved for it, from the pose they are in. */
+function reach(name, target) {
+  const mo = model(), r = reachFor(mo, name, target, S.pose);
+  for (const [k, v] of Object.entries(r.values)) if (mo.joints[k] && !mo.joints[k].locked) S.pose[k] = Math.round(v * 1e4) / 1e4;      // to where the solver put it, not a slider's step
+  spread(); syncSliders(); checkPose();
+  const el = document.querySelector(`[data-tipstatus="${name}"]`);
+  if (el) { el.className = `why ${r.reached ? 'ok' : 'warn'}`; el.textContent = r.reached ? 'there' : `out of reach: it comes within ${fmt(Math.round(r.off * 10) / 10)} mm`; }
+  return r;
+}
+
 const KIND = { revolute: '⟳', slider: '⇄', rigid: '⛓' };
 const UNITS = { revolute: '°', slider: 'mm' };
 function sweepWords(s, unit) {
@@ -1275,6 +1335,12 @@ function motionCards() {
       ${(mo.ground.length ? [] : ['']).concat(bodies).map((b) => `<option value="${esc(b)}" ${mo.ground[0] === b ? 'selected' : ''}>${b ? esc(b) : '(nothing yet)'}</option>`).join('')}</select></span></div>
     ${groupRows.join('')}${rows.join('') || (groupRows.length ? '' : '<p class="muted">No joints yet: every part is free. Make one with New joint, or ask your agent.</p>')}
     ${mo.free.length ? `<p class="muted">Free, no joint holds them: ${mo.free.map(esc).join(', ')}. Drag them anywhere.</p>` : ''}
+    ${Object.entries(mo.tips ?? {}).map(([name, t]) => `<div class="check joint tip" data-tip="${esc(name)}">
+      <div class="row"><span><span class="kind">◎</span><b>${esc(name)}</b> <span class="muted">a point on ${esc(t.on)}: drag it in the view</span></span></div>
+      ${t.resolved ? `<div class="row"><span class="k">now at</span><span class="v mono" data-tippos="${esc(name)}">${tipAt(mo, name, S.pose).map((v) => fmt(Math.round(v * 100) / 100)).join(', ')}</span></div>
+      <div class="line"><input class="num" data-tipto="${esc(name)}" data-k="0" placeholder="x"><input class="num" data-tipto="${esc(name)}" data-k="1" placeholder="y">
+        <input class="num" data-tipto="${esc(name)}" data-k="2" placeholder="z"><button data-act="tipgo" data-name="${esc(name)}" title="solve the joints to put it there">Go</button></div>
+      <div class="why" data-tipstatus="${esc(name)}">mm, in the assembly's frame</div>` : `<div class="why err">${esc(t.why)}</div>`}</div>`).join('')}
     <div class="line"><button data-act="posehome" title="every joint back to 0">As built</button><span style="flex:1"></span>
       <button data-act="groupmake" ${picked.length > 1 ? '' : 'disabled'} title="select two or more objects first: they move as one">Group${picked.length > 1 ? ` ${picked.length}` : ''}</button>
       <button class="primary" data-act="jointnew">New joint</button></div>
@@ -1856,6 +1922,13 @@ $('#panel').addEventListener('click', (e) => {
   const a = b.dataset.act;
   if (a === 'clear') { select([], {}); return; }
   if (a === 'posehome') { goHome(); return; }
+  if (a === 'tipgo') {
+    const now = tipAt(model(), b.dataset.name, S.pose);
+    const to = [...document.querySelectorAll(`[data-tipto="${b.dataset.name}"]`)].map((el) => { const v = el.value.trim().replace(',', '.'); return v === '' ? now[Number(el.dataset.k)] : Number(v); });
+    if (to.some((v) => !Number.isFinite(v))) { tell('x, y and z are numbers of millimetres (an empty one stays where it is)'); return; }
+    stopPlaying(); reach(b.dataset.name, to);
+    return;
+  }
   if (a === 'play') { play(b.dataset.name); return; }
   if (a === 'jointnew') { newJoint(); return; }
   if (a === 'groupmake') { newJoint('group'); return; }
@@ -2103,6 +2176,6 @@ setInterval(lookForNewer, 60_000);
 document.addEventListener('visibilitychange', lookForNewer);
 
 window.monet = { S, groups, cube, lookAlong, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom,
-  axes, setJoint, goHome, play, stopPlaying, partPose };   // for looking in from the console, and from scripts/shot.mjs
+  axes, setJoint, goHome, play, stopPlaying, partPose, reach, tipAt: (name) => tipAt(model(), name, S.pose) };   // for looking in from the console, and from scripts/shot.mjs
 resize();
 start().catch((e) => { $('#panel').innerHTML = `<div class="card"><p class="err">${esc(e.message)}</p></div>`; });

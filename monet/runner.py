@@ -301,7 +301,8 @@ def motion(mod, parts, faces, verts, tris, found):
         return None
     from . import joints
     t0 = time.time()
-    model = joints.resolve(joint_spec, ground, [p["name"] for p in parts], getattr(mod, "TAGS", {}) or {}, found, faces)
+    model = joints.resolve(joint_spec, ground, [p["name"] for p in parts], getattr(mod, "TAGS", {}) or {}, found, faces,
+                           getattr(mod, "TIPS", None) or {})
     model.update(joints.analyse(model, joints.solids(verts, tris, parts)))
     model["seconds"] = round(time.time() - t0, 2)
     return model

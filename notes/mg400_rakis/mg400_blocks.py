@@ -15,6 +15,7 @@ Rules
   two parallelograms keep it so, and keep the tool pointing straight down
 - the links that close the parallelograms follow J2 and J3 (follows), so no loop has to be solved
 - J4 turns the tool about its own axis
+- the nose (TIPS) is the middle of the flange's underside: put it somewhere and J1…J3 are solved for it
 - ranges from Dobot's datasheet: J1 ±160°, J2 -25…85°, J3 -25…105°, J4 ±180°
 - links sit side by side across the arm (y), so nothing overlaps as built
 """
@@ -27,6 +28,11 @@ TAGS = {
 }
 
 GROUND = "base"
+
+# the nose: the middle of the flange's underside, where a tool is held; led anywhere, the joints follow (inverse kinematics)
+TIPS = {
+    "nose": {"on": "tool", "at": [278.4189, 0.0, 352.2496]},
+}
 
 JOINTS = {
     "j1": {"kind": "revolute", "moves": "turret", "on": "base", "axis": {"origin": [-5.0, 0.0, 109.0], "dir": "Z"}, "range": [-160.0, 160.0]},
