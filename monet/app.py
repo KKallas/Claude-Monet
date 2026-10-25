@@ -395,13 +395,21 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
     async def get_version(_request: Request):
         return JSONResponse({**info, "templates": workspaces.template_names(), "coming": coming(store.dir, info["commit"])}, headers=NO_STORE)
 
-    async def skill_zip(_request: Request):
+    def skill_archive(link: str = "") -> Response:
+        """The skill (skill/monet/), and with a link: link.txt beside SKILL.md, so that it is the one download an agent
+        needs. That one holds the agent key: it is given only to the person, behind their login."""
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             for f in sorted((ROOT / "skill" / "monet").rglob("*")):
                 if f.is_file() and "__pycache__" not in f.parts:
                     z.write(f, Path("monet") / f.relative_to(ROOT / "skill" / "monet"))
-        return Response(buf.getvalue(), media_type="application/zip", headers={"Content-Disposition": 'attachment; filename="monet-skill.zip"'})
+            if link:
+                z.writestr("monet/link.txt", link + "\n")
+        return Response(buf.getvalue(), media_type="application/zip",
+                        headers={**NO_STORE, "Content-Disposition": 'attachment; filename="monet-skill.zip"'})
+
+    async def skill_zip(_request: Request):
+        return skill_archive()
 
     # ---- logging in (from Adam Designer) ------------------------------------------
     def fail(e: auth.HttpError):
@@ -573,6 +581,13 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
             await websocket.close(code=4003)      # before it is accepted: refused
             return
         await remote.serve(websocket, user)
+
+    def own_skill(request, _ws, _body):
+        """The skill with the person's agent link in it: one download, and their agent knows how and where."""
+        owner = request.state.owner
+        if owner["id"] != request.state.me["id"]:
+            raise Problem("the skill with the link in it is the person's own: it holds their agent key", 403)
+        return skill_archive(f"{base_url(request.headers, request.url.scheme)}/w/{owner['key']}")
 
     def view_png(request, _ws, _body):
         png = remote.pictures.get(request.state.owner["id"])
@@ -887,6 +902,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route("/w/{wid}/api/state", api(state)),
         Route("/w/{wid}/api/key", api(new_key), methods=["POST"]),
         Route("/w/{wid}/api/remote", api(remote_switch), methods=["GET", "PUT"]),
+        Route("/w/{wid}/api/skill.zip", api(own_skill)),
         WebSocketRoute("/w/{wid}/api/remote/tab", remote_tab),
         Route("/w/{wid}/api/projects", api(list_projects)),
         Route("/w/{wid}/api/projects", api(new_project), methods=["POST"]),

@@ -2174,14 +2174,19 @@ function connectBody() {
     <p class="remote-warn"><b>This link is a password.</b> Whoever has it can work in your workspace as your agent, and see this page while it is open.</p>
     <pre id="agentLink">${esc(agentLink)}</pre>
     <div class="line" style="margin-top:0"><span class="muted" style="flex:1">It got out, or an agent should stop?</span><button id="newKey">New key</button></div>
-    <h3>1 · Claude Desktop</h3>
+    <h3>1 · Your skill, with your link in it</h3>
+    <p>One download: how to work in Monet, and the address to work at. <a href="${root}/skill.zip" download="monet-skill.zip">Download monet-skill.zip</a></p>
+    <p><b>Claude Code</b>: unzip it into <code>~/.claude/skills/</code>. Nothing else to set up: it works through its own script.<br>
+      <b>Claude Desktop</b>: Settings → Capabilities → Skills, upload it. Claude reaches Monet from its code sandbox only where
+      its network access lets it reach <code>${esc(new URL(S.state.origin).host)}</code>; if it cannot, add the connector below as well.</p>
+    <p class="muted">The file holds your agent key, as the link does: keep it to yourself. After <i>New key</i>, download it again.</p>
+    <h3>Or as a connector, Claude Desktop</h3>
     ${local ? `<p>This server runs on your own computer, which Claude's connectors cannot reach. Add it to
       <code>claude_desktop_config.json</code> (Settings → Developer → Edit Config) instead, then restart Claude:</p>
       <pre>{ "mcpServers": { "monet": { "command": "npx", "args": ["-y", "mcp-remote", "${esc(agentLink)}/mcp"] } } }</pre>`
     : `<p>Settings → Connectors → Add custom connector. Name <code>Monet</code>, URL:</p><pre>${esc(agentLink)}/mcp</pre>`}
-    <p>Then the skill, so Claude knows how to work here: <a href="/skill.zip">download monet-skill.zip</a> and add it in
-      Settings → Capabilities → Skills.</p>
-    <h3>Or Claude Code</h3>
+    <p>And the skill above, so Claude knows how to work here.</p>
+    <h3>Or as a connector, Claude Code</h3>
     <pre>claude mcp add --transport http monet ${esc(agentLink)}/mcp</pre>
     <h3>Or any LLM that can open web addresses</h3>
     <p>Everything is also plain HTTPS, by GET or POST. Paste this to it:</p>

@@ -46,7 +46,8 @@ server's log.
 
 | your harness | how it connects |
 |---|---|
-| Claude Desktop | Settings → Connectors → Add custom connector → `https://<host>/w/<agent key>/mcp`, then add the skill (`/skill.zip`) under Settings → Capabilities → Skills. For a server on your own machine use `npx mcp-remote http://localhost:8000/w/<agent key>/mcp` in `claude_desktop_config.json`. |
+| one download | **your skill**, from Connect your agent: the skill with your agent link in it (`link.txt`, which its script reads). Claude Code: unzip it into `~/.claude/skills/` and that is all. Claude Desktop: upload it under Settings → Capabilities → Skills; it reaches Monet where Claude's code sandbox may reach your host, else add the connector too. It holds your key: after a new key, download it again. |
+| Claude Desktop | Settings → Connectors → Add custom connector → `https://<host>/w/<agent key>/mcp`, then add the skill under Settings → Capabilities → Skills. For a server on your own machine use `npx mcp-remote http://localhost:8000/w/<agent key>/mcp` in `claude_desktop_config.json`. |
 | Claude Code | `claude mcp add --transport http monet http://localhost:8000/w/<agent key>/mcp` |
 | any LLM that can open web addresses | tell it: "Read `https://<host>/api` and work in my Monet workspace; my agent link is `https://<host>/w/<agent key>`". Every tool is a plain GET or POST. |
 | a shell | `skill/monet/scripts/monet.py` (standard library only) |

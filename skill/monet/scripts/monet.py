@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """monet.py: the Monet tools from a shell, for a harness without MCP. Standard library only.
 
-    export MONET_URL=https://host/w/<agent key>      (the agent link from the canvas: Connect your agent)
+    The agent link: link.txt beside SKILL.md, when the skill was downloaded from the canvas (Connect your agent),
+    or else  export MONET_URL=https://host/w/<agent key>
 
     monet.py status [project]
     monet.py pull <project> [dir]            every Note, with the saved .glb and .fingerprint.json, into dir (default .)
@@ -20,7 +21,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-URL = os.environ.get("MONET_URL", "").rstrip("/")
+# the link holds the agent key: MONET_URL if it is set, else the one the skill came with from the canvas
+LINK = Path(__file__).resolve().parent.parent / "link.txt"
+URL = (os.environ.get("MONET_URL") or (LINK.read_text().strip() if LINK.exists() else "")).rstrip("/")
 
 
 def call(tool: str, **args):
@@ -52,7 +55,7 @@ def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         sys.exit(__doc__)
     if not URL:
-        sys.exit("monet: set MONET_URL to the agent link from your canvas (https://host/w/<agent key>)")
+        sys.exit("monet: no agent link: download the skill again from your canvas (Connect your agent), or set MONET_URL to the link (https://host/w/<agent key>)")
     cmd, a = argv[0], argv[1:]
     if cmd == "status":
         show(call("status", project=a[0] if a else ""))

@@ -469,6 +469,26 @@ def test_skill_zip(client):
     import io, zipfile
     names = zipfile.ZipFile(io.BytesIO(client.get("/skill.zip").content)).namelist()
     assert "monet/SKILL.md" in names and "monet/scripts/monet.py" in names and "monet/references/tags-and-checks.md" in names
+    assert "monet/link.txt" not in names       # the public one carries nobody's key
+
+
+def test_the_persons_skill_carries_their_link(admin, client, reg, tmp_path, monkeypatch):
+    import importlib.util, io, zipfile
+    got = client.get("/w/mari/api/skill.zip")
+    assert got.headers["content-type"] == "application/zip" and got.headers["cache-control"] == "no-store"
+    zipfile.ZipFile(io.BytesIO(got.content)).extractall(tmp_path)
+    link = client.get("/w/mari/api/state").json()["agent"]
+    assert (tmp_path / "monet" / "link.txt").read_text().strip() == link and (tmp_path / "monet" / "SKILL.md").exists()
+    # its script finds the link by itself; MONET_URL, when set, goes first
+    monkeypatch.delenv("MONET_URL", raising=False)
+    spec = importlib.util.spec_from_file_location("monet_skill_script", tmp_path / "monet" / "scripts" / "monet.py")
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    assert script.URL == link
+    # it holds the key: only for the person, never for an admin looking in, nor through the agent's door
+    assert admin.get("/w/mari/api/skill.zip").status_code == 403
+    assert TestClient(client.app).get("/w/mari/api/skill.zip").status_code == 401
+    assert client.get(f"/w/{reg['id']}/api/skill.zip").status_code == 404
 
 
 LIDBOX = '''"""A box with a lid on a hinge pin, behind the box's back wall."""

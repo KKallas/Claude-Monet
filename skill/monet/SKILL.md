@@ -22,6 +22,9 @@ patching the previous shape.
 
 Your tools, in whichever form the harness gives them:
 
+- **A `link.txt` beside this file**: the skill was downloaded from the user's canvas and carries
+  their agent link. `scripts/monet.py` reads it by itself (`python scripts/monet.py status`), and
+  with a way to fetch web addresses you can call `<the link>/agent/<tool>` directly.
 - **MCP tools** from a connector usually called Monet: `guide`, `status`, `new_project`,
   `read_note`, `write_note`, `check`, `look`, `pose`, `reach`, `selection`, `add_check`, `load_check`, `save`,
   `versions`, `diff`, `export`, and for the canvas the user has open: `screen`, `goto`, `view`.
@@ -42,7 +45,8 @@ anything, and at once when they log out. Then every call answers that remote con
 tell them, they switch it on again, and the same link works. Do not keep retrying.
 
 The agent link carries the user's agent key. It is a password: use it, do not repeat it in what
-you write to anyone else, and do not put it in files that get committed. The `canvas` links in
+you write to anyone else, and do not put it (or `link.txt`) in files that get committed. If the
+link answers that it is not valid any more, the user made a new key: they download the skill again. The `canvas` links in
 tool answers are different: they are the user's own pages, behind their login, and safe to show.
 
 Start every session with `status()`. It lists the projects and gives the canvas link: pass that
