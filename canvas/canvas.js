@@ -1487,6 +1487,25 @@ setInterval(async () => {
 }, 500);
 window.addEventListener('hashchange', () => { const [p, n] = decodeURIComponent(location.hash.slice(1)).split('/'); if (p && (p !== S.project || (n && n !== S.note))) open(p, n); });
 
+// a page left open over a deploy runs the build it was loaded with: say so, and offer the new one (as Adam Designer does)
+let loadedCommit = null;
+const commitNow = async () => { try { return (await (await fetch('/api/version', { cache: 'no-store' })).json()).commit; } catch { return null; } };
+async function lookForNewer() {
+  if (document.hidden || !loadedCommit || document.querySelector('.newer')) return;
+  const commit = await commitNow();
+  if (!commit || commit === loadedCommit || document.querySelector('.newer')) return;
+  const bar = document.createElement('div');
+  bar.className = 'newer';
+  bar.innerHTML = `<span>A newer version of Monet is online (${esc(commit)}): this page is still ${esc(loadedCommit)}.</span>`;
+  const go = document.createElement('button');
+  go.textContent = 'Reload'; go.onclick = () => location.reload();
+  bar.append(go);
+  document.body.append(bar);
+}
+commitNow().then((c) => { loadedCommit = c; });
+setInterval(lookForNewer, 60_000);
+document.addEventListener('visibilitychange', lookForNewer);
+
 window.monet = { S, groups, camera, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom };   // for looking in from the console, and from scripts/shot.mjs
 resize();
 start().catch((e) => { $('#panel').innerHTML = `<div class="card"><p class="err">${esc(e.message)}</p></div>`; });

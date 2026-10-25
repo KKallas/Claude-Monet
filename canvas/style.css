@@ -160,3 +160,7 @@ dialog pre { padding: 8px; overflow-x: auto; user-select: all; margin: 6px 0; }
 .start footer { margin-top: 26px; text-align: center; font-size: 11.5px; color: var(--text-muted); }
 
 @media (max-width: 1000px) { .app { grid-template: 44px 55vh auto / 1fr; height: auto; } aside { display: none; } .panel { border-left: 0; } }
+
+/* a newer build is online than the one this page runs */
+.newer { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 950; display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 16px; background: var(--bg-elevated); border: 1px solid var(--accent); border-radius: 6px; box-shadow: 0 8px 28px rgba(0, 0, 0, .5); font-size: 12px; font-weight: 500; color: var(--text-bright); }
+.newer button { background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: 6px 12px; }
