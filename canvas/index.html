@@ -1,13 +1,13 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-skin="cyber">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Monet</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
 <link rel="stylesheet" href="/static/cyber.css">
-<script src="/static/skin.js"></script>
+<script src="/static/hole.js" defer></script>
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/" } }
@@ -16,7 +16,7 @@
 <body>
 <div class="app">
   <header>
-    <b>MONET</b>
+    <canvas class="hole" aria-hidden="true"></canvas><b>MONET</b>
     <span class="chip" id="chip"></span>
     <button id="project" title="the projects of this workspace: open one, start one, download, upload or delete"><span id="projectName">no project</span><span class="chev"></span></button>
     <span class="rooms" title="four places to work: a drawing on a face, one part, the parts put together, and how they move">
@@ -26,7 +26,6 @@
     <span class="muted" id="wsName"></span>
     <a class="quiet" id="usersLink" href="/users" hidden>Users</a>
     <a class="quiet" id="logout" href="#">Log out</a>
-    <button id="skin" title="the look of the page: plain, or after Cyberpunk 2077">2077</button>
     <button class="primary" id="connect">Connect your agent</button>
   </header>
 

@@ -1,14 +1,16 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-skin="cyber">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Users · Monet</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/cyber.css">
+<script src="/static/hole.js" defer></script>
 <style>
 body { overflow: auto; }
-.bar-top { display: flex; align-items: center; gap: 14px; padding: 0 14px; height: 44px; background: var(--bg-surface); border-bottom: 1px solid var(--border); }
+.bar-top { display: flex; align-items: center; gap: 14px; padding: 0 14px; height: 64px; background: var(--bg-surface); border-bottom: 1px solid var(--border); }
 .bar-top b { color: var(--text-bright); font-weight: 600; letter-spacing: .16em; }
 .bar-top .sp { flex: 1; }
 .bar-top a { color: var(--text-muted); text-decoration: none; font-size: 12px; }
@@ -31,7 +33,7 @@ td { padding: 3px 8px 3px 0; border-top: 1px solid var(--border); vertical-align
 </style>
 </head>
 <body>
-<div class="bar-top"><b>MONET</b><span class="muted">Users</span><span class="sp"></span><a href="/">← back to my workspace</a><a href="#" id="logout">log out</a></div>
+<header class="bar-top"><canvas class="hole" aria-hidden="true"></canvas><b>MONET</b><span class="muted">Users</span><span class="sp"></span><a class="quiet" href="/">← back to my workspace</a><a class="quiet" href="#" id="logout">log out</a></header>
 <main>
   <div class="card">
     <p class="head">Add a user · <span id="count"></span></p>

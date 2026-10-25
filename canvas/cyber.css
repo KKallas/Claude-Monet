@@ -1,7 +1,7 @@
 /* The 2077 skin: the same sheet, after Cyberpunk 2077's interface. Black glass, thin lines, red for what names a thing,
    cyan for what can be used, yellow for what matters most. Interlaced like an old screen, the part fringed red and
    cyan at its edges, a glitch now and then. Everything here is under html[data-skin="cyber"]: without it, nothing
-   changes. skin.js switches it. */
+   changes; every page sets it on its <html>, so it is the only look there is. */
 :root[data-skin="cyber"] {
   --bg-body: #040509; --bg-surface: #07090f; --bg-elevated: #0b0e16; --border: rgba(94, 246, 255, .16); --border-strong: rgba(94, 246, 255, .34);
   --text: #c8d3d8; --text-bright: #f4fbff; --text-muted: #63727b; --accent: #5ef6ff;
@@ -47,7 +47,7 @@
 [data-skin="cyber"] header { position: relative; background: var(--glass), var(--bg-surface); border-bottom: 1px solid var(--border); box-shadow: var(--inner); }
 [data-skin="cyber"] header::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
   background: linear-gradient(90deg, var(--red) 0 120px, var(--cyan) 120px 40%, transparent); }
-[data-skin="cyber"] header b { position: relative; color: var(--yellow); font-weight: 700; font-size: 19px; letter-spacing: .32em; animation: cy-flicker 7s infinite; }
+[data-skin="cyber"] header b { position: relative; color: var(--yellow); font-weight: 700; font-size: 38px; line-height: 1; letter-spacing: .32em; animation: cy-flicker 7s infinite; }
 @keyframes cy-flicker { 0%, 95.5%, 97%, 98.4%, 100% { opacity: 1; } 96% { opacity: .5; } 97.6% { opacity: .75; } }
 /* the line under the header glows: a blurred copy of it, under it */
 [data-skin="cyber"] header::before { content: ''; position: absolute; left: 0; right: 0; bottom: -2px; height: 3px; filter: blur(4px); pointer-events: none;
@@ -72,7 +72,6 @@
 [data-skin="cyber"] .rooms button.on { background: var(--yellow); color: #000; text-shadow: none; }
 [data-skin="cyber"] .rooms { filter: drop-shadow(0 0 5px rgba(252, 238, 10, .55)); }      /* the lit one glows; its cut corners would clip a box-shadow */
 [data-skin="cyber"] .rooms button:not(.on):hover { color: var(--cyan); background: var(--btn-hover); }
-[data-skin="cyber"] #skin { padding: 4px 10px; color: var(--red); border-color: var(--red); }
 
 /* the side and the panel: black glass with a fine grid in it */
 [data-skin="cyber"] aside, [data-skin="cyber"] .panel { background: var(--glass), linear-gradient(rgba(94, 246, 255, .025) 1px, transparent 1px) 0 0 / 100% 24px, var(--bg-surface); }
@@ -172,7 +171,12 @@
 [data-skin="cyber"] .newer { border-radius: 0; background: var(--glass), #07090f; border-color: var(--yellow); color: var(--yellow); text-transform: uppercase; letter-spacing: .1em; }
 [data-skin="cyber"] .newer button { background: var(--yellow); color: #000; }
 
+/* the mark: a black hole turning (hole.js), in front of the name */
+.hole { display: block; flex: none; width: 110px; height: 60px; margin: 0 -12px 0 -12px; }
+.start h1 .hole { width: 180px; height: 98px; margin: 0 -10px 0 -24px; }
+
 /* the start page */
+[data-skin="cyber"] .start h1 { display: flex; align-items: center; font-size: 60px; line-height: 1; }
 [data-skin="cyber"] .start h1 { color: var(--yellow); letter-spacing: .34em; text-shadow: 1.5px 0 var(--red), -1.5px 0 var(--cyan); }
 [data-skin="cyber"] .start .tag { color: var(--red); text-transform: uppercase; letter-spacing: .16em; }
 

@@ -1,11 +1,13 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-skin="cyber">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Log in · Monet</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/cyber.css">
+<script src="/static/hole.js" defer></script>
 <style>
 .start form button { width: 100%; margin-top: 16px; padding: 10px; font-size: 13px; }
 .start label { display: block; font-size: 12px; color: var(--text-muted); margin: 12px 0 4px; }
@@ -15,7 +17,7 @@
 </head>
 <body>
 <main class="start">
-  <h1>MONET</h1>
+  <h1><canvas class="hole" aria-hidden="true"></canvas>MONET</h1>
   <p class="tag">Impressionist on the surface, exact underneath.</p>
   <form class="card" id="form" autocomplete="on">
     <h2 id="title">Log in</h2>

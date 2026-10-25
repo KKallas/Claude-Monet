@@ -12,7 +12,7 @@ function labelTexture(text) {
   ctx.lineWidth = 3;
   ctx.strokeRect(1.5, 1.5, 125, 125);
   ctx.fillStyle = '#d4d4d4';
-  ctx.font = '600 21px Montserrat, system-ui, sans-serif';
+  ctx.font = '700 22px Rajdhani, system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(text, 64, 66);
