@@ -1,4 +1,4 @@
-// The look: how the part is drawn. Three styles (rendered, shaded, hidden line) and three materials.
+// The look: how the part is drawn. Three styles (rendered, shaded, hidden line) and four materials.
 //
 // The rendered style is Adam Designer's world brought over: its room environment (RoomEnvironment through PMREM,
 // sigma 0.04), AgX tone mapping at exposure 1, one white sun of strength 2 at azimuth 55 / elevation 47, and its
@@ -12,6 +12,7 @@ export const MATERIALS = {
   pla: { name: 'PLA, printed', color: '#c9ced8' },
   pom: { name: 'POM (acetal)', color: '#f2f2f0' },
   aluminium: { name: 'Aluminium', color: '#c0c3c8' },
+  pc: { name: 'Polycarbonate, clear', color: '#dceaf7', opacity: 0.35 },
 };
 export const STYLES = { rendered: 'Rendered', shaded: 'Shaded', hidden: 'Hidden line' };
 const PAPER = '#161b27';          // hidden line: the faces take the colour of the page, only lines remain
@@ -79,10 +80,16 @@ export function createLook(renderer, scene, lights) {
     /** The material of a part's faces. Vertex colours stay on in every style: they carry what is selected. */
     material(spec = {}) {
       const common = { vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 };
-      if (style === 'hidden') return new THREE.MeshBasicMaterial({ ...common, toneMapped: false });
-      if (style === 'shaded') return new THREE.MeshStandardMaterial({ ...common, metalness: 0, roughness: 0.8 });
       const kind = MATERIALS[spec.material] ? spec.material : 'pla';
+      if (style === 'hidden') return new THREE.MeshBasicMaterial({ ...common, toneMapped: false });
+      // clear: seen through in every style but hidden line; its opacity is its own (styleAll keeps it, x-ray or not)
+      const clear = (m) => Object.assign(m, { transparent: true, opacity: MATERIALS.pc.opacity, depthWrite: false, userData: { opacity: MATERIALS.pc.opacity } });
+      if (style === 'shaded') {
+        const m = new THREE.MeshStandardMaterial({ ...common, metalness: 0, roughness: 0.8 });
+        return kind === 'pc' ? clear(m) : m;
+      }
       const color = new THREE.Color(spec.color || MATERIALS[kind].color);
+      if (kind === 'pc') return clear(new THREE.MeshPhysicalMaterial({ ...common, color, metalness: 0, roughness: 0.05, clearcoat: 1, clearcoatRoughness: 0.05 }));
       if (kind === 'aluminium') return new THREE.MeshPhysicalMaterial({ ...common, color, metalness: 1, roughness: 0.35 });
       if (kind === 'pom') return new THREE.MeshPhysicalMaterial({ ...common, color, metalness: 0, roughness: 0.42, clearcoat: 0.2, clearcoatRoughness: 0.35 });
       return printed(new THREE.MeshPhysicalMaterial({ ...common, color, metalness: 0, roughness: 0.5 }));

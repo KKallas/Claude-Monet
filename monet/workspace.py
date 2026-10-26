@@ -41,7 +41,7 @@ from . import derive, feynman, joints, note as notes, runner, semmelweis
 ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 EXPORTS = {"stl": "model/stl", "3mf": "model/3mf", "step": "model/step", "glb": "model/gltf-binary"}
-MATERIALS = ("pla", "pom", "aluminium")      # what the canvas can render a part as (canvas/look.js)
+MATERIALS = ("pla", "pom", "aluminium", "pc")      # what the canvas can render a part as (canvas/look.js); pc: clear polycarbonate
 MAX_SOURCE = 200_000
 MAX_ARCHIVE = 100_000_000      # bytes of a project as an archive: of the zip, and of what it unpacks to
 MAX_ARCHIVE_FILES = 5000
@@ -138,6 +138,10 @@ def _build_problem(name: str, files: dict) -> dict:
             raise Problem("that build is missing what a build has: fingerprint, tags, parts, literals, faces.json")
         if glb[:4] != b"glTF":
             raise Problem("model.glb of that build is not a GLB")
+        try:
+            r["snaps"] = derive.clean_snaps(r.get("snaps"))
+        except ValueError as e:
+            raise Problem(f"the snap points of that build: {e}")
     return r
 
 
@@ -496,8 +500,8 @@ class Project:
         verts, tris, _ = render.load(out / "model.glb")
         geo = json.loads((out / "faces.json").read_text())
         r = dict(r)
-        r["tags"], r["motion"] = derive.found({k: parsed[k] for k in ("tags", "joints", "ground", "tips")},
-                                              r["fingerprint"]["bbox"], geo, verts, tris)
+        r["tags"], r["motion"] = derive.found({k: parsed[k] for k in ("tags", "joints", "ground", "tips", "placed")},
+                                              r["fingerprint"]["bbox"], geo, verts, tris, r.get("snaps") or {})
         r["literals"] = notes.literals_key(source)
         tmp = out / "result.json.new"
         tmp.write_text(json.dumps(r, default=str))
@@ -594,6 +598,8 @@ class Project:
                  "why": t.get("why") or "every tag must still find its feature", "by": "monet"} for k, t in r["tags"].items()]
         if not r.get("valid", True):
             rows.append({"id": "valid", "what": "valid", "ok": False, "value": False, "expect": "= True", "why": "the solid is not valid geometry", "by": "monet"})
+        if r.get("snaps"):
+            out["snaps"] = r["snaps"]      # where other Notes may be put (SNAPS)
         mo = r.get("motion")
         if mo:
             out["motion"] = mo      # how the parts may move, and what moving them hits: the canvas poses them by it

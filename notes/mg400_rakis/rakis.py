@@ -5,6 +5,8 @@ Rules
 - printed parts: nest_back, nest_front, four grid tiles, four L brackets
 - bought parts: two 16 mm long pipes (670 mm), two 16 mm dowels (70 mm), drawn as plain cylinders
 - the long pipes tie each nest half to the grid; the dowels join the grid halves across y = 0
+- every grid cell has a snap point at its centre on the grid top (A1 … J7, as RAKIS_SYSTEM.md names them):
+  a Gridfinity block put there sits in that cell's pocket
 - the table is 700 mm deep along the pipes: back edge at x = 163.5, front edge at x = -536.5
 - children carry the body names of the Fusion model (label)
 
@@ -15,7 +17,7 @@ Motion
   grid meets the front L brackets (the table is 700 mm deep, the top 621 mm)
 """
 from build123d import *
-from rakis_common import P, levels
+from rakis_common import P, cell_snaps, levels
 import nest_back, nest_front, grid_pos_0, grid_pos_1, grid_neg_0, grid_neg_1, l_bracket
 
 PARAMS = dict(P)
@@ -25,6 +27,9 @@ TAGS = {
 }
 
 GROUND = "rails"
+
+# where a Gridfinity block may be put: the centre of every cell, on the grid top (A1 … J7)
+SNAPS = cell_snaps(P)
 
 JOINTS = {
     "rails": {"kind": "rigid", "parts": ["L_back_pos", "L_back_neg", "L_front_pos", "L_front_neg", "pipe_long_pos", "pipe_long_neg"]},

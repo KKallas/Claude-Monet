@@ -165,11 +165,13 @@ def main(argv):
                         got.append(f"{name}.{ext}")
             print("  ".join(got))
     elif cmd == "push":
-        sent = [Path(f).stem for f in a[1:]]
+        sent = []
         for f in a[1:]:
             r = call("write_note", project=a[0], note=Path(f).stem, source=Path(f).read_text())
             if r.get("module"):
                 print(f"  {Path(f).stem}: a helper module", file=sys.stderr)
+            else:
+                sent.append(Path(f).stem)
         built = build_all(a[0])      # what was sent, and what imports it
         red = False
         for name in sent:

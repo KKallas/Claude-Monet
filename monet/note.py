@@ -22,7 +22,7 @@ def _literal(node):
 
 def parse(source: str) -> dict:
     """What a Note says about itself, without running it."""
-    out = {"doc": "", "params": {}, "tags": {}, "joints": {}, "ground": None, "tips": {}, "is_note": False, "error": None}
+    out = {"doc": "", "params": {}, "tags": {}, "joints": {}, "ground": None, "tips": {}, "placed": {}, "is_note": False, "error": None}
     try:
         tree = ast.parse(source)
     except SyntaxError as e:
@@ -42,7 +42,7 @@ def parse(source: str) -> dict:
                     # user tags a face in the canvas, so they have to be readable without running anything
                     if name == "TAGS":
                         out["error"] = "TAGS must be a plain literal (no expressions): it is read and rewritten without running the Note"
-            elif name in ("JOINTS", "GROUND", "TIPS"):
+            elif name in ("JOINTS", "GROUND", "TIPS", "PLACED"):
                 try:
                     out[name.lower()] = _literal(node.value)
                 except (ValueError, TypeError, SyntaxError):
@@ -132,6 +132,37 @@ def literals_key(source: str) -> str:
     """The Note's TAGS, JOINTS, GROUND and TIPS as they are: what a build's tags and joints were found for."""
     p = parse(source)
     return hashlib.sha256(json.dumps([p["tags"], p["joints"], p["ground"], p["tips"]], sort_keys=True).encode()).hexdigest()
+
+
+def format_placed(placed: dict) -> str:
+    if not placed:
+        return "PLACED = {}"
+    rows = "".join(f"    {json.dumps(k)}: {_lit(v)},\n" for k, v in placed.items())
+    return "PLACED = {\n" + rows + "}"
+
+
+def set_placed(source: str, placed: dict) -> str:
+    """The Note with its PLACED (the instances of other Notes put at its snap points) replaced. build() reads it,
+    so the shape changes: the agent builds the Note again."""
+    return _replace(source, "PLACED", format_placed(placed).splitlines())
+
+
+TURNS = (0, 90, 180, 270)
+PLACE_NAME = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+
+
+def clean_placed(spec) -> dict:
+    """One entry of PLACED as the canvas may write it: {"note", "at", "turn"}."""
+    if not isinstance(spec, dict):
+        raise ValueError("an instance is {note, at, turn}")
+    note, at, turn = spec.get("note"), spec.get("at"), spec.get("turn", 0)
+    if not isinstance(note, str) or not NAME_RE.match(note):
+        raise ValueError("note: the name of the Note to put there")
+    if not isinstance(at, str) or not re.match(r"^[A-Za-z0-9_.-]{1,64}$", at):
+        raise ValueError("at: the name of a snap point")
+    if isinstance(turn, bool) or not isinstance(turn, (int, float)) or int(turn) not in TURNS or turn != int(turn):
+        raise ValueError(f"turn is one of {', '.join(map(str, TURNS))} degrees about Z")
+    return {"note": note, "at": at, "turn": int(turn)}
 
 
 def imports(source: str) -> set:

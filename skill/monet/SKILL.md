@@ -298,6 +298,35 @@ JOINTS = {
   joints. What they make is written into `JOINTS` (an axis they pick is tagged as `<joint>_axis`):
   keep it, as you keep their tags.
 
+### Snap points and placed instances
+
+An assembly can say where other Notes may be put (**`SNAPS`**), and which are put there (**`PLACED`**). The
+rakis table's grid has a snap point at the centre of every Gridfinity cell, on the grid top, named as the
+cell table names them (A1 … J7): `SNAPS = cell_snaps(P)` in `rakis.py`, `SNAPS = rakis.SNAPS` in an assembly
+built on it.
+
+```python
+SNAPS = {"E3": {"at": [-223.5, -21.0, 7.2794], "turn": 0, "on": "grid_neg_0"}, ...}   # may be computed
+PLACED = {"glass_stack_1": {"note": "glass_stack", "at": "D4", "turn": 0}}         # a plain literal
+
+def build(p=PARAMS):
+    ...
+    return Compound(children=parts + placing.placed(PLACED, SNAPS), label="cell")
+```
+
+- **A Gridfinity block's 0 is the snap point**: the centre of the cell on the grid top. Its foot reaches 4.65 mm
+  down into the pocket (the 0.8 / 1.8 / 2.15 foot, 35.6 at the bottom, in the grid's 0.7 / 1.8 / 2.15 pocket),
+  its top 0.1 above the grid top. Model every block in that frame and it fits any cell.
+- `placing.py` (a helper module in the project) puts each instance: the Note's own `build()`, turned about Z by
+  `turn` (0, 90, 180, 270) and moved to its snap point, labelled with the instance's name; the parts of an
+  instance that is itself an assembly are named `<instance>/<part>`.
+- **The person places in the canvas** (Assembly: Place, then a snap point and a Note): that is written into
+  PLACED, which `build()` reads, so the assembly is stale until you build it (`monet.py build`). Keep what they
+  placed, as you keep their tags and joints.
+- An instance rides the part its snap point is `on` (the server adds a rigid joint: a block on the grid slides
+  with the table top). Check an assembly with instances as any other: `solids`, `interference_mm3` (a foot in its
+  pocket adds nothing), the joints still free.
+
 ## Tags and checks
 
 A **tag** says which feature is which: "the square tunnel along X at this place", "the flat face

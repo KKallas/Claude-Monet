@@ -134,6 +134,10 @@ const axes = new THREE.Group();
 scene.add(axes);
 const tipDots = new THREE.Group();
 scene.add(tipDots);
+// in Assembly with Place on: the assembly's snap points (SNAPS), where another Note may be put; and the instances put
+// there (PLACED) that the agent has not built yet, drawn see-through from their own Notes until it has
+const snapDots = new THREE.Group(), ghosts = new THREE.Group();
+scene.add(snapDots, ghosts);
 // the planes of the part, shown where one is chosen to draw on: Front, Top and Left through its origin are always
 // there; the others are planes the user put on faces (tags of kind "plane")
 const sheets = new THREE.Group();
@@ -198,7 +202,8 @@ const material = () => new THREE.MeshStandardMaterial({ vertexColors: true, meta
 // what a part is made of and its colour: set per Note (and per part of an assembly, by its name) in the project
 function lookOf(part) {
   const looks = S.proj?.looks ?? {}, name = S.parts.length > 1 ? S.parts[part]?.name : S.note;
-  const spec = looks[name] ?? {};
+  // a part of an instance put at a snap point (glass_stack_1/glass_3) looks as its Note does (glass)
+  const spec = looks[name] ?? looks[String(name ?? '').split('/').pop().replace(/_\d+$/, '')] ?? {};
   const kind = MATERIALS[spec.material] ? spec.material : 'pla';
   return { material: kind, color: spec.color || MATERIALS[kind].color, name };
 }
@@ -375,7 +380,7 @@ function spread() {
   }
   groups.part.updateMatrixWorld(true);
   neonDirty = true;
-  showSelection(); showAxes(); showTips();
+  showSelection(); showAxes(); showTips(); showSnaps();
 }
 
 // the outline of the cut, part by part: where each triangle crosses the plane, a segment
@@ -423,7 +428,7 @@ function styleAll() {
       const m = o.material;
       m.clippingPlanes = key === 'part' ? (sectionOn ? [cut] : []) : (S.compare?.mode === 'wipe' ? [key === 'a' ? wipeA : wipeB] : []);
       const fade = S.compare?.mode === 'fade' ? (key === 'a' ? 1 - S.compare.mix : S.compare.mix) : 1;
-      const opacity = key === 'part' ? (xray ? 0.25 : 1) : fade;
+      const opacity = key === 'part' ? (xray ? 0.25 : 1) * (m.userData.opacity ?? 1) : fade;      // a clear material keeps its own
       m.transparent = opacity < 1; m.opacity = opacity; m.depthWrite = opacity >= 1;
       m.side = key === 'part' && sectionOn && !xray ? THREE.FrontSide : THREE.DoubleSide;   // the inside is the cap's to draw
       m.needsUpdate = true;
@@ -852,6 +857,14 @@ window.addEventListener('pointerup', (e) => {
 // In Motion a part dragged in the view moves as its joint lets it: round its axis, along it, or (a free part)
 // anywhere in the plane of the view. A drag that starts beside the parts turns the view as ever.
 let drag = null;
+// Place: a click on a snap point chooses where; anywhere else the view turns and selects as ever
+view.addEventListener('pointerdown', (e) => {
+  if (!S.placing || S.room !== 'assembly' || e.target !== canvas || e.button !== 0) return;
+  const r = canvas.getBoundingClientRect(), name = snapUnder(e.clientX - r.left, e.clientY - r.top);
+  if (!name) return;
+  e.stopImmediatePropagation(); e.preventDefault();
+  S.placeAt = name; showSnaps(); renderPanel(true);
+}, true);
 view.addEventListener('pointerdown', (e) => {
   if (!moving() || e.target !== canvas || e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey || S.boxTool) return;
   if (cube.contains(view.clientWidth, ...inView(e))) return;
@@ -1044,7 +1057,7 @@ async function goRoom(room) {
   if (S.room === 'sketch') sketch.end();
   if (room === 'assembly' || room === 'motion') {
     if (kindOf(S.note) === 'assembly' && S.data?.report?.built) {      // the same assembly, in the other room: nothing to load
-      stopPlaying(); S.room = room; setMode('part'); roomBar(); renderSide(); spread(); paint(); renderPanel(true);
+      stopPlaying(); S.room = room; setMode('part'); roomBar(); renderSide(); assemblyBar(); spread(); paint(); renderPanel(true); showGhosts();
       if (room === 'motion') checkPose();
       return;
     }
@@ -1137,7 +1150,12 @@ function assemblyBar() {
   for (const id of ['#explodeLabel', '#explode']) $(id).hidden = !on;
   $('#partColours').hidden = !(on && look.style === 'shaded');
   $('#explode').value = explode;
+  const snaps = S.room === 'assembly' && !S.compare && Object.keys(S.data?.snaps ?? {}).length > 0;
+  $('#placeMode').hidden = !snaps;
+  if (!snaps && S.placing) { S.placing = false; S.placeAt = null; }
+  $('#placeMode').classList.toggle('on', !!S.placing);
 }
+$('#placeMode').onclick = () => { S.placing = !S.placing; S.placeAt = null; assemblyBar(); showSnaps(); renderPanel(true); };
 
 // ---- Motion: how the parts of an assembly move, and what moving them hits --------------------------------------
 // The build carries the model (report.motion: bodies, joints and their axes as built, sweeps, what overlaps). The
@@ -1326,6 +1344,86 @@ function tipUnder(x, y) {
   }
   return best?.name ?? null;
 }
+// ---- snap points and what is put at them (SNAPS, PLACED) ------------------------------------------------------------
+/** Where a snap point is in the view: on its part, so it goes with it when the assembly is pulled apart. */
+function snapAt(name) {
+  const s = S.data?.snaps?.[name], i = S.parts.findIndex((q) => q.name === s?.on);
+  return !s ? null : i >= 0 && groups.part.children[i] ? placed(i, ...s.at) : [...s.at];
+}
+function showSnaps() {
+  for (const o of snapDots.children) { o.geometry.dispose(); o.material.dispose(); }
+  snapDots.clear();
+  if (!S.placing || S.room !== 'assembly' || !S.data?.snaps) return;
+  const all = [], chosen = [];
+  for (const name of Object.keys(S.data.snaps)) (name === S.placeAt ? chosen : all).push(...snapAt(name));
+  for (const [pts, size, colour] of [[all, 11, 0x10131b], [all, 7, 0x5ef6ff], [chosen, 18, 0x10131b], [chosen, 13, 0xfcee0a]]) {
+    if (!pts.length) continue;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    const dot = new THREE.Points(g, new THREE.PointsMaterial({ color: colour, size, sizeAttenuation: false, depthTest: false, transparent: true, toneMapped: false }));
+    dot.renderOrder = 11; dot.frustumCulled = false;
+    snapDots.add(dot);
+  }
+}
+function snapUnder(x, y) {
+  if (!S.data?.snaps) return null;
+  const to = projector();
+  let best = null;
+  for (const name of Object.keys(S.data.snaps)) {
+    const [px, py] = to(...snapAt(name)), d = Math.hypot(px - x, py - y);
+    if (d < 12 && (!best || d < best.d)) best = { name, d };
+  }
+  return best?.name ?? null;
+}
+const builtAs = (name) => S.parts.some((q) => q.name === name || q.name.startsWith(name + '/'));
+function placeName(note) {
+  let k = 1;
+  while (S.data?.placed?.[`${note}_${k}`] || builtAs(`${note}_${k}`)) k++;
+  return `${note}_${k}`;
+}
+function placeCard() {
+  const snaps = S.data.snaps ?? {}, placedNow = S.data.placed ?? {}, s = S.placeAt && snaps[S.placeAt];
+  const notes = (S.proj?.notes ?? []).filter((n) => n.kind !== 'module' && n.name !== S.note).map((n) => n.name);
+  const which = notes.includes(S.placeNote) ? S.placeNote : notes[0];
+  const here = !s ? `<p class="muted">Click a point in the view: one of the ${Object.keys(snaps).length} places ${esc(S.note)} has for other Notes.</p>`
+    : `<p>At <b>${esc(S.placeAt)}</b>${s.on ? ` on ${esc(s.on)}` : ''}: ${fmt(s.at)} mm</p>
+      <div class="line"><select id="placeNote" title="the Note to put there">${notes.map((n) => `<option ${n === which ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>
+        <select id="placeTurn" title="turned about Z">${[0, 90, 180, 270].map((t) => `<option value="${t}">${t}°</option>`).join('')}</select></div>
+      <div class="line"><input id="placeName" value="${esc(which ? placeName(which) : '')}" spellcheck="false" title="the name of this instance">
+        <button class="primary" data-act="place" ${which ? '' : 'disabled'}>Place</button></div>`;
+  const rows = Object.entries(placedNow).map(([k, v]) => `<div class="check"><div class="row"><span><b>${esc(k)}</b> ${esc(v.note)} at ${esc(v.at)}${v.turn ? `, ${v.turn}°` : ''}</span>
+      <button class="x" data-act="unplace" data-name="${esc(k)}" title="take it away">×</button></div>
+      ${builtAs(k) ? '' : '<div class="why warn">waiting for your agent to build it: shown see-through</div>'}</div>`).join('');
+  return card('place', 'Place', `${here}${rows ? `<h3>Placed</h3>${rows}` : ''}
+    <p class="muted">Placing writes it into ${esc(S.note)}'s PLACED; your agent builds the assembly again with it.</p>`);
+}
+/** The instances not built yet, from their own Notes' last builds, see-through at their snap points. */
+const ghostModels = new Map();
+async function showGhosts() {
+  ghosts.clear();
+  const placedNow = S.data?.placed ?? {}, snaps = S.data?.snaps ?? {};
+  if (!['assembly', 'motion'].includes(S.room) || S.compare) return;
+  for (const [name, p] of Object.entries(placedNow)) {
+    const s = snaps[p.at];
+    if (!s || builtAs(name)) continue;      // in the build on show (the last one, while it waits): there already
+    const url = `${root}/p/${S.project}/n/${p.note}/model.glb?last=1&r=${S.rev}`;
+    let model = ghostModels.get(url);
+    if (!model) {
+      model = new THREE.Group();
+      try { await loadInto(model, url, true); } catch { continue; }
+      model.traverse((o) => {
+        if (o.isMesh) o.material = new THREE.MeshBasicMaterial({ color: 0x5ef6ff, transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide });
+        else if (o.userData.edges) o.material = new THREE.LineBasicMaterial({ color: 0x5ef6ff, transparent: true, opacity: 0.7 });
+      });
+      ghostModels.set(url, model);
+    }
+    const one = model.clone();
+    one.position.set(...s.at);
+    one.rotation.set(0, 0, THREE.MathUtils.degToRad((s.turn ?? 0) + (p.turn ?? 0)));
+    ghosts.add(one);
+  }
+}
+
 /** Lead a tip to a point: the joints moved by hand are solved for it, from the pose they are in. */
 function reach(name, target) {
   const mo = model(), r = reachFor(mo, name, target, S.pose);
@@ -1720,7 +1818,7 @@ async function open(project, note) {
     roomBar(); renderSide();
   } catch (e) { S.data = { error: e.message }; }
   busy();
-  styleAll(); paint(); showTag(); renderPanel(true); showLast();
+  styleAll(); paint(); showTag(); renderPanel(true); showLast(); assemblyBar(); showSnaps(); showGhosts();
 }
 
 /** No project is open: the one that was is gone, or there is none yet. */
@@ -1836,6 +1934,7 @@ function renderPanel(force) {
   }
 
   if (moving()) cards.push(...motionCards());
+  if (d.is_note && S.placing && S.room === 'assembly') cards.push(placeCard());      // above the parts: it is what is being done
   if (d.is_note && r.built && S.parts.length > 1 && !S.compare && S.room !== 'motion') {
     const known = new Set(S.proj.notes.filter((n) => n.kind !== 'module').map((n) => n.name));
     cards.push(card('assembly', `Assembly · ${S.parts.length} parts`, `
@@ -1935,6 +2034,7 @@ async function setLook(change) {
 $('#panel').addEventListener('change', (e) => {
   if (e.target.id === 'lookMaterial') setLook({ material: e.target.value, color: null });
   if (e.target.id === 'lookColor') setLook({ color: e.target.value });
+  if (e.target.id === 'placeNote') { S.placeNote = e.target.value; $('#placeName').value = placeName(e.target.value); }
   if (e.target.id === 'groundSel' && e.target.value) act(async () => { building([S.note]); await api(`/p/${S.project}/n/${S.note}/ground`, 'PUT', { ground: e.target.value }); });
   if (e.target.dataset.posenum) setJoint(e.target.dataset.posenum, Number(e.target.value.replace(',', '.')));
   if (e.target.dataset.edit && S.edit && e.target.tagName === 'SELECT') { renderPanel(true); showAxes(); }
@@ -1970,6 +2070,12 @@ $('#panel').addEventListener('click', (e) => {
     return;
   }
   const a = b.dataset.act;
+  if (a === 'place') {
+    const note = $('#placeNote').value, turn = Number($('#placeTurn').value), name = $('#placeName').value.trim(), at = S.placeAt;
+    act(async () => { busy('placing…'); await api(`/p/${S.project}/n/${S.note}/placed/${encodeURIComponent(name)}`, 'PUT', { note, at, turn }); S.placeAt = null; });
+    return;
+  }
+  if (a === 'unplace') { act(async () => { await api(`/p/${S.project}/n/${S.note}/placed/${encodeURIComponent(b.dataset.name)}`, 'DELETE'); }); return; }
   if (a === 'clear') { select([], {}); return; }
   if (a === 'posehome') { goHome(); return; }
   if (a === 'tipgo') {
@@ -2359,6 +2465,7 @@ versionNow().then((v) => {
 document.addEventListener('visibilitychange', lookForNewer);
 
 window.monet = { S, groups, cube, lookAlong, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom,
-  axes, setJoint, goHome, play, stopPlaying, timeline, partPose, reach, tipAt: (name) => tipAt(model(), name, S.pose) };   // for looking in from the console, and from scripts/shot.mjs
+  axes, setJoint, goHome, play, stopPlaying, timeline, partPose, reach, tipAt: (name) => tipAt(model(), name, S.pose),
+  ghosts, snapAt, placeAt: (name) => { S.placeAt = name; showSnaps(); renderPanel(true); } };   // for looking in from the console, and from scripts/shot.mjs
 resize();
 start().catch((e) => { $('#panel').innerHTML = `<div class="card"><p class="err">${esc(e.message)}</p></div>`; });

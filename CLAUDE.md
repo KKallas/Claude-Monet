@@ -70,6 +70,11 @@ wrong:
   runner uses too). Never add a path that builds on the server; templates are prebuilt into the image
   (`monet/prebuild.py`). The load check compares an uploaded build of the saved version (`waiting`
   until there is one). Keep accounts and secrets out of `storage/`.
+- **Snap points and instances** (Kaspar, 2026-10-27): a Note's `SNAPS` (computed; the runner records them in
+  `result["snaps"]`, `derive.clean_snaps`) say where other Notes may go; `PLACED` (a plain literal the person
+  rewrites through `PUT …/placed/<name>`) puts them there, and build() reads it, so placing makes the assembly stale
+  until the agent builds (decided: not composed on the server). `derive.attached` holds each instance on the body
+  its snap is `on`. The canvas draws the snaps in Assembly → Place and ghosts what is not built yet.
 - **Git is the user's**, in a folder on their computer; the server keeps numbered versions.
   No git on the server.
 - **The agent's door has no tool to change or remove a check, acknowledge a load check,

@@ -106,3 +106,11 @@ def test_edges_and_points_can_be_pointed_at(ws):
     assert all(e["p"] == len(a["parts"]) - 1 for e in a["edges"] if e["segs"][0] >= last["edges"][0])
     circle = next(e for e in a["edges"] if e["type"] == "circle")
     assert circle["r"] > 0 and len(circle["c"]) == 3
+
+
+def test_the_rakis_grid_has_a_snap_point_in_every_cell(ws):
+    """A1 … J7 as RAKIS_SYSTEM.md names them: the centre of each cell on the grid top, on the tile that has it."""
+    snaps = ws.project("mg400_rakis").report("rakis")["snaps"]
+    assert len(snaps) == 70
+    assert snaps["E3"] == {"at": [-223.5, -21.0, 7.2794], "turn": 0.0, "on": "grid_neg_0"}
+    assert snaps["J7"]["at"][:2] == [-391.5, 189.0] and snaps["J7"]["on"] == "grid_pos_1" and snaps["F5"]["on"] == "grid_pos_1"

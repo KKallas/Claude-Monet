@@ -333,3 +333,32 @@ def test_load_check_green_yellow_red():
     assert r["status"] == "red" and r["changes"][0]["what"] == "tag bore"
     blind = {"fingerprint": RESULT["fingerprint"], "tags": {"bore": {"resolved": True, "measure": {"width": 16.4, "through": False, "at": [0.0, 11.2]}}}}
     assert semmelweis.compare(saved, blind, 0.1)["status"] == "red"
+
+
+def test_placed_is_read_and_written_and_is_part_of_the_shape():
+    """PLACED (instances of other Notes at snap points) is a plain literal the canvas rewrites; build() reads it, so
+    a change of it changes the shape and the build is not current any more."""
+    from monet import note as notes
+    src = "from build123d import *\nimport placing\nSNAPS = {}\nPLACED = {}\n\ndef build():\n    return placing.placed(PLACED, SNAPS)\n"
+    one = notes.set_placed(src, {"bin_1": {"note": "bin", "at": "A1", "turn": 90}})
+    assert notes.parse(one)["placed"] == {"bin_1": {"note": "bin", "at": "A1", "turn": 90}}
+    assert notes.geometry_key(one) != notes.geometry_key(src)
+    assert notes.clean_placed({"note": "bin", "at": "E3", "turn": 180.0}) == {"note": "bin", "at": "E3", "turn": 180}
+    for bad in ({"note": "Bin", "at": "A1"}, {"note": "bin", "at": "../x"}, {"note": "bin", "at": "A1", "turn": 45}, {"note": "bin", "at": "A1", "turn": True}, []):
+        with pytest.raises(ValueError):
+            notes.clean_placed(bad)
+
+
+def test_an_instance_rides_the_body_its_snap_point_is_on():
+    from monet import derive
+    snaps = derive.clean_snaps({"A1": {"at": [1, 2, 3], "on": "tile"}, "B1": {"at": (4, 5, 6), "turn": 90}})
+    assert snaps["B1"] == {"at": [4.0, 5.0, 6.0], "turn": 90.0, "on": None}
+    for bad in ([], {"A1": {"at": [1, 2]}}, {"../x": {"at": [1, 2, 3]}}, {"A1": {"at": [1, 2, float("nan")]}}, {"A1": {"at": [1, 2, 3], "on": 5}}):
+        with pytest.raises(ValueError):
+            derive.clean_snaps(bad)
+    spec = {"top": {"kind": "rigid", "parts": ["tile", "frame"]}}
+    got = derive.attached(spec, {"bin_1": {"note": "bin", "at": "A1"}, "lost": {"note": "bin", "at": "Z9"}}, snaps,
+                          ["tile", "frame", "bin_1/mount", "bin_1/lid"])
+    assert got["bin_1_placed"] == {"kind": "rigid", "parts": ["bin_1/mount", "bin_1/lid"]}
+    assert got["bin_1_on"] == {"kind": "rigid", "moves": "bin_1_placed", "on": "top"}       # the group the tile is in
+    assert "lost_on" not in got and spec == {"top": {"kind": "rigid", "parts": ["tile", "frame"]}}      # not changed in place

@@ -539,3 +539,55 @@ def test_the_agent_leads_the_nose_and_sees_the_arm_there(client, reg):
     far = client.post(f"{w}/agent/reach", json={"project": "mg400_rakis", "note": "mg400_blocks", "x": 900, "y": 0, "z": 0}).json()
     assert not far["reached"] and far["off"] > 100
     assert "no tips" in client.post(f"{w}/agent/reach", json={"project": "mg400_rakis", "note": "rakis", "x": 0, "y": 0, "z": 0}).json()["error"]
+
+
+TRAY = '''"""A tray with two places for a peg: snap points, and the pegs put there (PLACED)."""
+from build123d import *
+import importlib
+
+TAGS = {}
+
+GROUND = "tray"
+
+SNAPS = {"left": {"at": [-20, 0, 5], "on": "tray"}, "right": {"at": [20, 0, 5], "turn": 0, "on": "tray"}}
+
+PLACED = {}
+
+
+def build():
+    tray = Box(60, 20, 5, align=(Align.CENTER, Align.CENTER, Align.MIN))
+    tray.label = "tray"
+    out = [tray]
+    for name, spec in PLACED.items():
+        part = Pos(*SNAPS[spec["at"]]["at"]) * Rot(0, 0, spec["turn"]) * importlib.import_module(spec["note"]).build()
+        part.label = name
+        out.append(part)
+    return Compound(children=out)
+'''
+
+
+def test_a_note_is_put_at_a_snap_point_from_the_canvas(client, reg):
+    """The person picks a snap point and a Note: it is written into PLACED and the agent builds it; until then the
+    assembly waits, and the canvas has the snap points of its last build to show."""
+    w, h = f"/w/{reg['id']}", f"/w/{reg['name']}"
+    client.post(f"{w}/agent/write_note", json={"project": "starter", "note": "tray", "source": TRAY})
+    assert agent_builds(client, reg, "starter", "tray")["green"]
+    n = f"{h}/api/p/starter/n/tray"
+    assert set(client.get(n).json()["snaps"]) == {"left", "right"}
+    put = client.put(f"{n}/placed/peg_1", json={"note": "rod_foot", "at": "right", "turn": 90}).json()
+    assert put["state"] == "stale" and "monet.py build starter tray" in put["waiting"]
+    note = client.get(n).json()
+    assert note["placed"] == {"peg_1": {"note": "rod_foot", "at": "right", "turn": 90}} and set(note["snaps"]) == {"left", "right"}
+    r = agent_builds(client, reg, "starter", "tray")
+    assert r["green"] and "peg_1" in [q["name"] for q in r["parts"]]
+    assert r["motion"]["joints"]["peg_1_on"]["resolved"]          # it rides the tray it was put on
+    # what cannot be put
+    for body, why in (({"note": "nope", "at": "left"}, "not another Note"), ({"note": "tray", "at": "left"}, "not another Note"),
+                      ({"note": "rod_foot", "at": "middle"}, "no snap point"), ({"note": "rod_foot", "at": "left", "turn": 45}, "turn is one of")):
+        assert why in client.put(f"{n}/placed/peg_2", json=body).json()["error"]
+    assert client.put(f"{n}/placed/Bad", json={"note": "rod_foot", "at": "left"}).status_code == 400
+    assert client.delete(f"{n}/placed/peg_1").json()["state"] == "stale" and client.get(n).json()["placed"] == {}
+    assert client.delete(f"{n}/placed/peg_1").status_code == 404
+    # the agent's door has no such route: the person places, the agent builds
+    assert client.put(f"{w}/api/p/starter/n/tray/placed/peg_1", json={"note": "rod_foot", "at": "left"}).status_code == 404
+    client.post(f"{w}/agent/write_note", json={"project": "starter", "note": "tray", "source": TRAY})

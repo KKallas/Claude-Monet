@@ -328,9 +328,10 @@ def run(project_dir: Path, note: str, out_dir: Path, exports=()) -> dict:
         result["doc"] = (mod.__doc__ or "").strip()
         result["triangles"] = len(tris)
         segs, edges, points = edges_and_points(groups, parts)
-        literals = {k.lower(): getattr(mod, k, None) for k in ("TAGS", "JOINTS", "GROUND", "TIPS")}
+        literals = {k.lower(): getattr(mod, k, None) for k in ("TAGS", "JOINTS", "GROUND", "TIPS", "PLACED")}
+        result["snaps"] = derive.clean_snaps(getattr(mod, "SNAPS", None))      # where other Notes may be put
         geo = {"faces": faces, "parts": parts, "edges": edges, "points": points}
-        result["tags"], result["motion"] = derive.found(literals, result["fingerprint"]["bbox"], geo, verts, tris)
+        result["tags"], result["motion"] = derive.found(literals, result["fingerprint"]["bbox"], geo, verts, tris, result["snaps"])
         write_glb(out_dir / "model.glb", verts, tris, segs)
         (out_dir / "faces.json").write_text(json.dumps({"faces": faces, "parts": parts, "edges": edges, "points": points}, separators=(",", ":")))
         result["parts"] = [{k: part[k] for k in ("name", "volume", "bbox", "faces")} for part in parts]

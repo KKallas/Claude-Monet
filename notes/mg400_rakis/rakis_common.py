@@ -85,3 +85,21 @@ def box(x0, x1, y0, y1, z0, z1):
 def rrect(x0, y0, x1, y1, r, z=0.0):
     """Rounded rectangle face in the XY plane at height z (normal +Z)."""
     return Plane.XY.offset(z) * Pos((x0 + x1) / 2, (y0 + y1) / 2) * RectangleRounded(x1 - x0, y1 - y0, r)
+
+
+ROWS = "ABCDEFGHIJ"       # A at -Y (the operator's right) … J at +Y
+
+
+def cell_snaps(p=P):
+    """The snap point of every Gridfinity cell: its centre on the grid top, named as RAKIS_SYSTEM.md names the
+    cells (A1 … J7: row A at -Y, column 1 nearest the robot), on the grid tile that has the cell. A Gridfinity
+    block has its 0 at that point (its foot reaches 4.65 below), so put at a cell it sits in its pocket."""
+    L = levels(p)
+    pt, out = p["pitch"], {}
+    rows = round(2 * p["half_w"] / pt)
+    for col in range(1, p["cols"] + 1):
+        for k in range(rows):
+            tile = f"grid_{'neg' if k < rows // 2 else 'pos'}_{0 if col <= p['chunks'][0] else 1}"
+            out[f"{ROWS[k]}{col}"] = {"at": [L.x_seam - pt / 2 - pt * (col - 1), -p["half_w"] + pt / 2 + pt * k, L.z_top],
+                                       "turn": 0, "on": tile}
+    return out

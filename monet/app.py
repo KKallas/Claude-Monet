@@ -670,12 +670,13 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         source = p.read(name)
         parsed = notes.parse(source)
         out = {"note": name, "source": source, "doc": parsed["doc"], "params": parsed["params"], "tags": parsed["tags"],
-               "joints": parsed["joints"], "ground": parsed["ground"],
+               "joints": parsed["joints"], "ground": parsed["ground"], "placed": parsed["placed"],
                "is_note": parsed["is_note"]}
         if parsed["is_note"]:
             out["report"] = p.report(name)
             r = p.cached(name) or {}
             out["params"] = r.get("params") or parsed["params"]     # as the build saw them: a Note may share a module's
+            out["snaps"] = r.get("snaps") or {}      # of its last build, also while it waits for the agent
             out["tag_faces"] = {k: t.get("faces", []) for k, t in (r.get("tags") or {}).items()}
             out["tag_hits"] = {k: {kind: t.get(kind, []) for kind in ("faces", "edges", "points", "parts", "curves")} for k, t in (r.get("tags") or {}).items()}
             out["checks"] = p.checks(name)
@@ -805,6 +806,33 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         """The keyframes of the timeline in Motion: kept in the project, nothing built from them."""
         p, name = note_of(request, ws)
         return {"animations": p.set_animation(name, body.get("animation"))}
+
+    def put_placed(request, ws, body):
+        """An instance of another Note put at one of this Note's snap points (PUT {note, at, turn}), or taken away
+        (DELETE): written into its PLACED, which build() reads, so the agent builds it again."""
+        p, name = note_of(request, ws)
+        which = request.path_params["instance"]
+        if not notes.PLACE_NAME.match(which):
+            raise Problem("an instance's name is lowercase letters, digits and _, starting with a letter")
+        source = p.read(name)
+        current = dict(notes.parse(source)["placed"] or {})
+        if request.method == "DELETE":
+            if which not in current:
+                raise Problem(f"nothing is placed as {which!r} in {name}", 404)
+            current.pop(which)
+        else:
+            try:
+                spec = notes.clean_placed(body)
+            except ValueError as e:
+                raise Problem(str(e))
+            if spec["note"] == name or spec["note"] not in p.note_names():
+                raise Problem(f"{spec['note']!r} is not another Note of {p.name}: there are {', '.join(n for n in p.note_names() if n != name)}")
+            snaps = (p.cached(name) or {}).get("snaps") or {}
+            if spec["at"] not in snaps:
+                raise Problem(f"{name} has no snap point {spec['at']!r}" + ("" if snaps else ": it has none (SNAPS) in its last build"))
+            current[which] = spec
+        with p.lock:
+            return p.write(name, notes.set_placed(source, current))
 
     def put_ground(request, ws, body):
         """What stays put: a part or a rigid group, or several."""
@@ -952,6 +980,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route(n + "/planes/{plane}", api(move_plane), methods=["PUT"]),
         Route(n + "/joints/{joint}", api(put_joint), methods=["PUT", "DELETE"]),
         Route(n + "/ground", api(put_ground), methods=["PUT"]),
+        Route(n + "/placed/{instance}", api(put_placed), methods=["PUT", "DELETE"]),
         Route(n + "/animation", api(put_animation), methods=["PUT"]),
         Route(n + "/pose", api(pose), methods=["POST"]),
         Route(n + "/checks", api(add_check), methods=["POST"]),
