@@ -6,6 +6,7 @@ say how its parts may still move (monet/joints.py). A Note is only ever *run* in
 the runner subprocess, never imported into the server.
 """
 import ast
+import hashlib
 import json
 import re
 
@@ -21,7 +22,7 @@ def _literal(node):
 
 def parse(source: str) -> dict:
     """What a Note says about itself, without running it."""
-    out = {"doc": "", "params": {}, "tags": {}, "joints": {}, "ground": None, "is_note": False, "error": None}
+    out = {"doc": "", "params": {}, "tags": {}, "joints": {}, "ground": None, "tips": {}, "is_note": False, "error": None}
     try:
         tree = ast.parse(source)
     except SyntaxError as e:
@@ -41,7 +42,7 @@ def parse(source: str) -> dict:
                     # user tags a face in the canvas, so they have to be readable without running anything
                     if name == "TAGS":
                         out["error"] = "TAGS must be a plain literal (no expressions): it is read and rewritten without running the Note"
-            elif name in ("JOINTS", "GROUND"):
+            elif name in ("JOINTS", "GROUND", "TIPS"):
                 try:
                     out[name.lower()] = _literal(node.value)
                 except (ValueError, TypeError, SyntaxError):
@@ -97,6 +98,40 @@ def set_joints(source: str, joints: dict, ground=None) -> str:
     if ground is not None:
         source = _replace(source, "GROUND", [f"GROUND = {_lit(ground)}"])
     return _replace(source, "JOINTS", format_joints(joints).splitlines())
+
+
+# what the canvas rewrites (and the server works out again from a build without running it)
+LITERALS = ("TAGS", "JOINTS", "GROUND", "TIPS")
+
+
+def geometry_key(source: str) -> str:
+    """The Note's source as far as its shape is concerned: its code as Python reads it (not its layout or comments),
+    with its TAGS, JOINTS, GROUND and TIPS left out, so tagging a face or making a joint keeps the build current. One
+    that anything in the Note reads (a sketch tag that build() cuts, say) is kept in: then changing it changes the
+    shape, and the agent has to build again."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return hashlib.sha256(source.encode()).hexdigest()
+    read = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    tree.body = [node for node in tree.body
+                 if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                         and node.targets[0].id in LITERALS and node.targets[0].id not in read)]
+    return hashlib.sha256(ast.dump(tree).encode()).hexdigest()
+
+
+def dep_key(name: str, data: bytes, note: str) -> str:
+    """What a build records of one project file it read: the Note's own file by its geometry_key, every other one
+    (a module, or a Note an assembly imports) whole."""
+    if name == f"{note}.py":
+        return geometry_key(data.decode("utf-8", "replace"))
+    return hashlib.sha256(data).hexdigest()
+
+
+def literals_key(source: str) -> str:
+    """The Note's TAGS, JOINTS, GROUND and TIPS as they are: what a build's tags and joints were found for."""
+    p = parse(source)
+    return hashlib.sha256(json.dumps([p["tags"], p["joints"], p["ground"], p["tips"]], sort_keys=True).encode()).hexdigest()
 
 
 def imports(source: str) -> set:

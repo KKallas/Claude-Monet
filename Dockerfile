@@ -1,4 +1,5 @@
-# Monet: one image, one process. Built on a laptop or in CI, never on the droplet.
+# Monet: one image, one process. Built on a laptop or in CI, never on the droplet. It never runs a workspace's Note:
+# people's agents build on their own computers. Monet's own templates it builds here, once, so they open built.
 FROM python:3.12-slim AS build
 COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /usr/local/bin/uv
 WORKDIR /app
@@ -23,6 +24,7 @@ COPY skill ./skill
 ARG COMMIT=unknown
 ENV COMMIT=$COMMIT PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
     MONET_HOST=0.0.0.0 PORT=8080 MONET_STORAGE=/storage MONET_DATA=/data FORWARDED_ALLOW_IPS=* HOME=/tmp
+RUN python -m monet.prebuild /app/notes
 USER monet
 VOLUME /storage /data
 EXPOSE 8080

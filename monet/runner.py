@@ -1,15 +1,14 @@
-"""The runner: the one place a Note is executed.
+"""The runner: the one place a Note is executed, on the agent's computer (monet/build.py), never on the server.
 
     python -m monet.runner <project_dir> <note> <out_dir> [stl,3mf,step]
 
 Runs in its own process (a Note is code: it can loop forever, eat memory or crash the
-CAD kernel) and leaves in out_dir:
+CAD kernel) and leaves in out_dir, as the server takes it (Project.accept_build):
 
     result.json   fingerprint, faces, tags found, parameters, what was imported, or the error
     model.glb     preview: one mesh, triangles grouped by face, plus the edges as lines
     model.stl / model.3mf / model.step   on request
 """
-import hashlib
 import importlib.util
 import json
 import sys
@@ -238,24 +237,6 @@ def edges_and_points(groups, parts):
     return segs, edges, points
 
 
-def crossing(shape):
-    """blocked(p, q): does the straight way from p to q meet the part anywhere? One question to the kernel, where
-    asking point by point whether each is inside took a second and more on a part with many faces."""
-    from OCP.gp import gp_Dir, gp_Lin, gp_Pnt
-    from OCP.IntCurvesFace import IntCurvesFace_ShapeIntersector
-    probe = IntCurvesFace_ShapeIntersector()
-    probe.Load(shape.wrapped, 1e-7)
-
-    def blocked(p, q):
-        d = [b - a for a, b in zip(p, q)]
-        length = sum(x * x for x in d) ** 0.5
-        if length < 1e-9:
-            return False
-        probe.Perform(gp_Lin(gp_Pnt(*p), gp_Dir(*d)), 0.0, length)
-        return probe.NbPnt() > 0
-    return blocked
-
-
 def write_glb(path: Path, verts, tris, segs):
     """The preview, written out by hand: one triangle mesh, and the edges as separate line segments, both in exactly
     the order they were made in (the parts of an assembly are ranges of them)."""
@@ -293,21 +274,6 @@ def write_glb(path: Path, verts, tris, segs):
                      + struct.pack("<I4s", len(text), b"JSON") + text + struct.pack("<I4s", len(binary), b"BIN\x00") + binary)
 
 
-def motion(mod, parts, faces, verts, tris, found):
-    """An assembly's joints, found on this build, and what moving them hits; where its parts overlap as built.
-    None for a single part."""
-    joint_spec, ground = getattr(mod, "JOINTS", None) or {}, getattr(mod, "GROUND", None)
-    if len(parts) < 2 and not joint_spec:
-        return None
-    from . import joints
-    t0 = time.time()
-    model = joints.resolve(joint_spec, ground, [p["name"] for p in parts], getattr(mod, "TAGS", {}) or {}, found, faces,
-                           getattr(mod, "TIPS", None) or {})
-    model.update(joints.analyse(model, joints.solids(verts, tris, parts)))
-    model["seconds"] = round(time.time() - t0, 2)
-    return model
-
-
 def load_note(project_dir: Path, note: str):
     sys.path.insert(0, str(project_dir))
     spec = importlib.util.spec_from_file_location(note, project_dir / f"{note}.py")
@@ -328,20 +294,23 @@ def as_shape(obj):
     return obj
 
 
-def imported(project_dir: Path) -> dict:
-    """The project files this build read, with their hashes: what the result depends on."""
+def imported(project_dir: Path, note: str) -> dict:
+    """The project files this build read, with their keys (note.dep_key): what the result depends on."""
+    from .note import dep_key
     root = str(project_dir.resolve())
     out = {}
     for m in list(sys.modules.values()):
         f = getattr(m, "__file__", None)
         if f and str(Path(f).resolve()).startswith(root + "/") and f.endswith(".py"):
             p = Path(f).resolve()
-            out[str(p.relative_to(root))] = hashlib.sha256(p.read_bytes()).hexdigest()
+            name = str(p.relative_to(root))
+            out[name] = dep_key(name, p.read_bytes(), note)
     return out
 
 
 def run(project_dir: Path, note: str, out_dir: Path, exports=()) -> dict:
-    from . import semmelweis, tags
+    from . import derive, semmelweis
+    from .note import literals_key
     t0 = time.time()
     out_dir.mkdir(parents=True, exist_ok=True)
     result = {"note": note, "ok": False, "libs": versions()}
@@ -359,9 +328,9 @@ def run(project_dir: Path, note: str, out_dir: Path, exports=()) -> dict:
         result["doc"] = (mod.__doc__ or "").strip()
         result["triangles"] = len(tris)
         segs, edges, points = edges_and_points(groups, parts)
-        result["tags"] = tags.resolve(getattr(mod, "TAGS", {}) or {}, faces, result["fingerprint"]["bbox"],
-                                      blocked=crossing(shape), edges=edges, points=points, parts=parts)
-        result["motion"] = motion(mod, parts, faces, verts, tris, result["tags"])
+        literals = {k.lower(): getattr(mod, k, None) for k in ("TAGS", "JOINTS", "GROUND", "TIPS")}
+        geo = {"faces": faces, "parts": parts, "edges": edges, "points": points}
+        result["tags"], result["motion"] = derive.found(literals, result["fingerprint"]["bbox"], geo, verts, tris)
         write_glb(out_dir / "model.glb", verts, tris, segs)
         (out_dir / "faces.json").write_text(json.dumps({"faces": faces, "parts": parts, "edges": edges, "points": points}, separators=(",", ":")))
         result["parts"] = [{k: part[k] for k in ("name", "volume", "bbox", "faces")} for part in parts]
@@ -383,49 +352,13 @@ def run(project_dir: Path, note: str, out_dir: Path, exports=()) -> dict:
         where = f" ({Path(mine[-1].filename).name}, line {mine[-1].lineno})" if mine else ""
         result["error"] = f"{type(e).__name__}: {e}{where}"
         result["traceback"] = "".join(traceback.format_exception(e))[-4000:]
-    result["deps"] = imported(project_dir)
+    result["deps"] = imported(project_dir, note)
+    src = project_dir / f"{note}.py"
+    if src.exists():
+        result["literals"] = literals_key(src.read_text())
     result["seconds"] = round(time.time() - t0, 2)
     (out_dir / "result.json").write_text(json.dumps(result, default=str))
     return result
-
-
-def limits(seconds: int, memory_mb: int = 0) -> None:
-    """In the build process: a Note may not run for ever or take the server down with it.
-
-    Memory is capped where it can be done honestly: by the container (deploy/compose.yml). Here the build is only
-    marked as the first to go when that ceiling is hit, so the kernel kills the hungry Note and not the server.
-    (An address-space limit, RLIMIT_AS, is not used unless asked for: the CAD kernel and numpy reserve far more
-    address space than they use, and die under a limit that their real memory would fit in many times.)"""
-    import os
-    import resource
-    resource.setrlimit(resource.RLIMIT_CPU, (seconds, seconds + 5))
-    if sys.platform.startswith("linux"):
-        try:
-            with open("/proc/self/oom_score_adj", "w") as fh:
-                fh.write("1000")
-        except OSError:
-            pass
-        if memory_mb > 0:
-            cap = memory_mb * 1024 * 1024
-            resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
-    os.setsid()
-
-
-KEPT = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
-
-
-def child(project_dir: str, note: str, out_dir: str, exports, seconds: int, memory_mb: int) -> None:
-    """A build, in a process forked for it from one that has the kernel loaded already (monet/warm.py). It is held
-    in like any other build, and sees none of the server's surroundings."""
-    import os
-    limits(seconds, memory_mb)
-    # no bytecode kept: a Note written twice within a second, at the same length, would be run from the first one's
-    sys.dont_write_bytecode = True
-    for key in list(os.environ):
-        if key not in KEPT:
-            del os.environ[key]
-    os.chdir(project_dir)
-    run(Path(project_dir), note, Path(out_dir), tuple(exports))
 
 
 def main(argv=None):

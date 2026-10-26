@@ -55,14 +55,15 @@ ssh root@$IP 'cd /opt/monet && docker compose logs app | grep -A1 "no password y
 
 Open that link once. Then `https://<domain>/users`: add a user, send them their card link (or let
 them scan the QR), and they choose their own password on the first visit. Everything about accounts
-is in `/opt/monet/data` (`users.json`, the audit log `log.jsonl`, the session secret); the container
-that builds Notes does not have that folder.
+is in `/opt/monet/data` (`users.json`, the audit log `log.jsonl`, the session secret). No Note is
+ever run on the droplet: people's agents build on their own computers and upload.
 
 ## Check
 
 - `https://monet.example.org` shows the login page.
-- Log in, open `starter/rod_foot`: the part appears (built by the `runner` container).
-- `https://monet.example.org/api` is the page to point an LLM at.
+- Log in, open `starter/rod_foot`: the part appears (built when the image was made).
+- `https://monet.example.org/api` describes the agent's door; the skill from "Connect your agent"
+  builds with uv on the person's computer.
 - Claude Desktop → Settings → Connectors → Add custom connector → the address from
   "Connect your agent" in the canvas.
 

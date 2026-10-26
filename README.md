@@ -8,9 +8,10 @@ view to say *which* ones you mean, and an AI agent writes and rebuilds the geome
 It's aimed at 3D-printed jigs, fixtures and brackets for hobby workshops, schools and
 small shops, where parts have to fit real plywood, real rods and real printers.
 
-Status: **bare bones, running**. A Python server builds Notes, runs checks, shows the part
-in a browser canvas where you click faces, keeps versions, diffs them and exports
-3MF / STL / STEP. Your own agent connects to it over MCP or plain HTTPS. The first real
+Status: **bare bones, running**. Your own agent writes Notes and builds them on your computer;
+a Python server takes what it built, runs the checks, shows the part in a browser canvas where
+you click faces, keeps versions, diffs them and serves 3MF / STL / STEP. The server never runs a
+Note. Your agent connects to it with the skill's script (a shell with uv) and over MCP. The first real
 project, the MG400 work table, is ported from Fusion 360 and matches it to six digits.
 What is not built yet is listed under [What is missing](#what-is-missing).
 
@@ -19,6 +20,7 @@ What is not built yet is listed under [What is missing](#what-is-missing).
 ```bash
 uv sync                      # Python 3.11+, build123d and OCP pinned in uv.lock
 uv run monet                 # http://localhost:8000, working files in ./storage
+uv run python -m monet.prebuild   # Monet's own templates, built once, so new projects open built
 uv run pytest                # every Note builds, keeps its tags, passes its checks
 ```
 
@@ -49,8 +51,16 @@ server's log.
 | one download | **your skill**, from Connect your agent: the skill with your agent link in it (`link.txt`, which its script reads). Claude Code: unzip it into `~/.claude/skills/` and that is all. Claude Desktop: upload it under Settings → Capabilities → Skills; it reaches Monet where Claude's code sandbox may reach your host, else add the connector too. It holds your key: after a new key, download it again. |
 | Claude Desktop | Settings → Connectors → Add custom connector → `https://<host>/w/<agent key>/mcp`, then add the skill under Settings → Capabilities → Skills. For a server on your own machine use `npx mcp-remote http://localhost:8000/w/<agent key>/mcp` in `claude_desktop_config.json`. |
 | Claude Code | `claude mcp add --transport http monet http://localhost:8000/w/<agent key>/mcp` |
-| any LLM that can open web addresses | tell it: "Read `https://<host>/api` and work in my Monet workspace; my agent link is `https://<host>/w/<agent key>`". Every tool is a plain GET or POST. |
-| a shell | `skill/monet/scripts/monet.py` (standard library only) |
+| a shell | `skill/monet/scripts/monet.py` (standard library only; building runs Monet's builder with [uv](https://docs.astral.sh/uv/)) |
+
+**Your agent builds; the server never runs a Note.** Building needs a shell on your computer with
+uv: `monet.py push <project> <note>.py` sends a Note, builds it there with the same Monet and CAD
+kernel as the server (the skill pins them) and uploads what the build left; `monet.py build
+<project>` builds whatever is not built for its source. The server takes a build only if it is of
+the files it has, with its own Monet and kernel. Tags, joints and the ground you make in the canvas
+change no geometry: the server works them out from the last build. A Note your agent has not built
+since it changed is shown as its last build, marked *waiting for your agent*. MCP alone can look,
+point, add checks and save, not build.
 
 **History is your own git.** Make a folder for the project on your computer and let the
 agent keep the Notes there. It commits after every successful attempt (built, checks green,
@@ -241,9 +251,9 @@ selection, or a plain three.js page loading the GLB files.
 
 ### Chat: the agent
 
-The agent is the user's own: Claude Desktop, Claude Code, or any LLM that can call a web
-address. It connects over **MCP** or plain HTTPS to tools like: write a Note (which builds
-it and runs the checks), look (a rendered picture), selection (what the user is pointing
+The agent is the user's own: Claude Code, Claude Desktop or another harness with a shell. It
+connects over **MCP** or HTTPS (POST) to tools like: write a Note (which it then builds on the
+user's computer and uploads; the server runs the checks), look (a rendered picture), selection (what the user is pointing
 at), add a check, load check, diff two versions, save, export. The agent writes and edits
 Notes; the user describes and points. There is no chat pane and no model in Monet itself.
 
@@ -261,8 +271,9 @@ the easiest person to fool.
 ### Semmelweis: the load check
 
 Named after the doctor who made colleagues wash their hands before touching the
-next patient. Before the agent touches a part, the part is rebuilt from its Note and
-compared with what was saved:
+next patient. Before the agent touches a part, the part is rebuilt from its saved Note, with the
+server's Monet and kernel as they are now, and compared with what was saved. The agent builds it
+(the load check is *waiting* until it has); the server compares:
 
 1. Fingerprint first (volume, surface area, bounding box, centre of mass): milliseconds.
 2. Then every tag must still resolve with the same measurements.
@@ -294,11 +305,15 @@ What actually decides whether a jig works, kept as data the agent must respect:
 ## Layout
 
 ```
-monet/        note.py        read a Note without running it; rewrite its TAGS and JOINTS
-              runner.py      the one place a Note is executed: its own process, a time limit;
-                             writes the preview GLB and what the parts of an assembly are
-              warm.py        what a build needs, loaded once: builds are forked from a process that
-                             has the CAD kernel in it already, instead of loading it every time
+monet/        note.py        read a Note without running it; rewrite its TAGS and JOINTS; what of it
+                             is its shape (geometry_key) and what the canvas changes (literals_key)
+              runner.py      the one place a Note is executed, on the agent's computer: its own
+                             process; writes the preview GLB and what the parts of an assembly are
+              build.py       the agent's builder (in the skill, pinned): a Note built, zipped to upload
+              prebuild.py    Monet's own templates, built when the image is made
+              derive.py      a build's tags and joints found from what it left (no kernel): by the
+                             runner, and by the server after a canvas edit
+              rays.py        does a line meet the part: asked of the preview mesh, by both
               tags.py        find tagged features on a build (planar faces, square and round holes)
               joints.py      an assembly's joints found on a build: where each part is at a pose,
                              what moving a joint hits (manifold3d), what overlaps as built
@@ -309,8 +324,7 @@ monet/        note.py        read a Note without running it; rewrite its TAGS an
               workspace.py   workspaces, projects, versions: the working files in a folder
               store.py       the accounts and the audit log, as files (from Adam Designer)
               auth.py        users, cards, passwords, the cookie, agent keys (from Adam Designer)
-              buildd.py      the runner as a service: where Notes are built when online
-              agent.py       the agent's tools, served over MCP and over plain HTTP
+              agent.py       the agent's tools, served over MCP and over HTTPS (POST); the upload
               app.py         the web app (Starlette): logins, canvas API, agent door, /api for LLMs
 canvas/       the browser view (three.js), no build step:
               canvas.js      the page: the four areas, selection, panels, compare, Motion
@@ -326,29 +340,30 @@ skill/monet/  the skill for Claude: how to work in Monet (also served as /skill.
 deploy/       Dockerfile's companions: compose, Caddy, droplet setup (docs/SETUP-ONLINE.md)
 reference/    material from the Fusion prototype (see below); mg400/: Dobot's robot description
               (URDF, MIT licence) and the sizes of its links, what the MG400 Note is held to
-tests/        pytest: the core, every Note, the Fusion acceptance numbers, both agent doors
+tests/        pytest: the core, every Note, the Fusion acceptance numbers, both agent doors, uploads
 ```
 
 ## Running it for other people
 
-**Monet runs the Notes people send it, and a Note is Python.** Whoever may send one may run
-code on the server. Three things keep that in hand:
+**Monet never runs the Notes people send it.** A Note is Python, so it is built where its author
+is: by their own agent, on their own computer (`monet/build.py`, carried in the skill). The server
+reads Notes as text (`ast`), takes what a build left only if it is a build of the files it has with
+its own Monet and kernel, and works tags and joints out of it without a CAD kernel. Three things
+keep the rest in hand:
 
 - **Accounts.** Only people an admin let in have a workspace, and only their agent links
   work. `/users` shows who there is, when each was last seen, when their agent was last
   there, and what agents changed lately.
 - **The person and their agent are told apart.** What comes in with the agent key can write
-  Notes and add checks. Changing or removing a check, acknowledging a load check and
-  everything about accounts need the login.
-- **Notes are built somewhere that has nothing to steal.** Online (`deploy/compose.yml`) the
-  web app never runs a Note: it asks a second container, which holds the working files and
-  nothing else: no accounts, no session secret, no route to the internet. Both containers
-  run without root, on a read-only file system, under ceilings on memory, CPU, processes
-  and build time.
+  Notes, upload builds and add checks. Changing or removing a check, acknowledging a load check
+  and everything about accounts need the login.
+- **An upload is data, taken by name.** A build arrives as a zip of known file names (result.json,
+  faces.json, model.glb, exports), read into memory, checked for what the server reads in it, and
+  written under those names: nothing in the zip says where a file goes.
 
-What a hostile Note can still do: read or spoil the working files of other users of the same
-instance (they share one folder), and keep its CPU busy. So let in people you would lend the
-machine to, and back up `storage/` if the work matters. A sandbox per build is the step after.
+What a key holder can still do: upload measurements of their own workspace that are not what the
+Note would build. A build is a claim; the canvas says who built it, and a load check compares
+the saved version with a build of it again. Back up `storage/` if the work matters.
 
 ## What is missing
 

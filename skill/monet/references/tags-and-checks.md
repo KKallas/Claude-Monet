@@ -160,11 +160,14 @@ so to the user rather than inventing a check that sounds like it covers them.
 
 ## The load check
 
-`load_check(project, note)` rebuilds the *saved* source and compares it with the saved
-fingerprint (volume, surface, bounding box, centre of mass) and every tag's measurements.
+`load_check(project, note)` compares a build of the *saved* source, made with the server's Monet and
+kernel as they are now, with the saved fingerprint (volume, surface, bounding box, centre of mass)
+and every tag's measurements. That build is yours: until there is one (after an update of the
+server, say) the load check is `waiting`, and `monet.py build <project>` makes it first.
 
 - `green`: identical.
 - `yellow`: differs, but within the printer's tolerance. Usually a library update on the server.
+- `waiting`: not built yet with the server's kernel; `write_note` on that Note is refused until it is.
   Tell the user; you may continue.
 - `red`: something changed. `write_note` on that Note is refused until the user has looked in
   the canvas and pressed "I have looked". Do not try to get around it.

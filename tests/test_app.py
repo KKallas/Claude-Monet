@@ -1,13 +1,27 @@
-"""The doors: the canvas API, the agent's door over plain HTTP (GET and POST) and over MCP."""
-import base64
+"""The doors: the canvas API, the agent's door over plain HTTP (POST) and over MCP, and the upload of what the
+agent built on its own computer."""
 import contextlib
 import json
+import tempfile
 import time
+from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
 
-from monet.app import create_app
+from monet.app import ROOT, create_app
+from monet.build import build, zipped
+
+
+def agent_builds(client, reg, project, note, exports=()):
+    """What monet.py build does: the project's files from the agent's door, built here, the build uploaded."""
+    files = client.post(f"/w/{reg['id']}/agent/sources", json={"project": project}).json()["files"]
+    with tempfile.TemporaryDirectory() as t:
+        for name, text in files.items():
+            (Path(t) / name).write_text(text)
+        build(Path(t), note, Path(t) / "out" / note, exports)
+        return client.post(f"/w/{reg['id']}/upload/{project}/{note}", content=zipped(Path(t) / "out" / note),
+                           headers={"content-type": "application/zip"}).json()
 
 
 @contextlib.contextmanager
@@ -62,7 +76,8 @@ def reg(client):
 def test_the_api_describes_itself(app):
     with browser(app) as nobody:
         text = nobody.get("/api").text
-        assert "agent link" in text and "### write_note" in text and "source_b64" in text and "upload=k7&part=1&of=3" in text and "<" not in text and "&note" not in text and "register" not in text
+        assert "agent link" in text and "### write_note" in text and "monet.py build" in text and "/upload/PROJECT/NOTE" in text
+        assert "source_b64" not in text and "part=1" not in text and "GET  " not in text and "<" not in text and "register" not in text
         assert nobody.get("/llms.txt").text == text
         v = nobody.get("/api/version").json()
         assert v["license"] == "AGPL-3.0-or-later" and "starter" in v["templates"]
@@ -100,11 +115,11 @@ def test_nothing_of_a_workspace_without_a_login(app, reg):
         # there is no signing up
         assert nobody.post("/api/start", json={}).status_code == 404 and nobody.get("/api/register").status_code == 404
         # the agent key opens the agent's door, and only that: not the person's
-        assert nobody.get(f"/w/{reg['id']}/agent/status").json()["projects"] == ["mg400_rakis", "starter"]
+        assert nobody.post(f"/w/{reg['id']}/agent/status", json={}).json()["projects"] == ["mg400_rakis", "starter"]
+        assert nobody.get(f"/w/{reg['id']}/agent/status").status_code == 405      # tools are called by POST
         assert nobody.get(f"/w/{reg['id']}/api/state").status_code == 401
         assert nobody.delete(f"/w/{reg['id']}/api/p/starter/n/rod_foot/checks/bed").status_code == 401
         # and a name is not a key
-        assert nobody.get("/w/mari/agent/status").json()["status"] == 404
         assert nobody.post("/w/mari/agent/status", json={}).status_code == 404
 
 
@@ -170,85 +185,52 @@ def test_the_admin_keeps_the_users(app, admin, reg):
         old = c.get("/w/jaan/api/state").json()["agent"]
         c.put("/w/jaan/api/remote", json={"on": True})
         mine = c.post("/w/jaan/api/key", json={}).json()["agent"]
-        assert mine != old and c.get(old.split("testserver", 1)[1] + "/agent/status").json()["status"] == 404
-        assert c.get(mine.split("testserver", 1)[1] + "/agent/status").json()["projects"]
+        assert mine != old and c.post(old.split("testserver", 1)[1] + "/agent/status", json={}).status_code == 404
+        assert c.post(mine.split("testserver", 1)[1] + "/agent/status", json={}).json()["projects"]
         admin.post(f"/api/users/{jaan['id']}/key")
-        assert c.get(mine.split("testserver", 1)[1] + "/agent/status").json()["status"] == 404
+        assert c.post(mine.split("testserver", 1)[1] + "/agent/status", json={}).status_code == 404
     # the folders of the working files are named by user id, never by a name or a key
     names = {q.name for q in app.state.workspaces.storage.iterdir()}
     assert jaan["id"] in names and "mari" not in names and reg["id"] not in names
 
 
-def test_tools_by_get_with_a_query_string(client, reg):
+def test_the_agent_writes_builds_here_and_uploads(client, reg):
+    """The server keeps a Note and never runs it: the agent builds it on its own computer from the files the server
+    has, and uploads what the build left. Then it is built, measured and checked."""
     agent = f"/w/{reg['id']}/agent"
     assert "write_note" in client.get(agent).json()["tools"]
-    assert client.get(f"{agent}/status").json()["projects"] == ["mg400_rakis", "starter"]
     source = "from build123d import *\nPARAMS = dict(d=8.0)\nTAGS = {\"pin\": {\"kind\": \"boss\", \"axis\": \"Z\", \"at\": [0, 0], \"diameter\": 8.0}}\ndef build(p=PARAMS):\n    return Cylinder(p[\"d\"] / 2, 20)\n"
-    r = client.get(f"{agent}/write_note", params={"project": "starter", "note": "peg", "source": source}).json()
-    assert r["green"] and r["tags"]["pin"]["measure"]["diameter"] == 8.0
-    r = client.get(f"{agent}/add_check", params={"project": "starter", "note": "peg", "what": "tag.pin.diameter", "min": "7.9", "max": "8.1"}).json()
+    sent = client.post(f"{agent}/write_note", json={"project": "starter", "note": "peg", "source": source}).json()
+    assert sent["state"] == "unbuilt" and "monet.py build starter peg" in sent["waiting"]
+    r = agent_builds(client, reg, "starter", "peg")
+    assert r["green"] and r["by"] == "agent" and r["tags"]["pin"]["measure"]["diameter"] == 8.0
+    r = client.post(f"{agent}/add_check", json={"project": "starter", "note": "peg", "what": "tag.pin.diameter", "min": 7.9, "max": 8.1}).json()
     assert r["added"]["min"] == 7.9 and r["report"]["green"]
-    r = client.get(f"{agent}/add_check", params={"project": "starter", "note": "peg", "what": "solids", "equals": "1"}).json()
-    assert r["added"]["equals"] == 1.0 and r["report"]["green"]
-    b64 = base64.urlsafe_b64encode(source.replace("8.0", "9.0").encode()).decode().rstrip("=")
-    r = client.get(f"{agent}/write_note", params={"project": "starter", "note": "peg", "source_b64": b64}).json()
+    client.post(f"{agent}/write_note", json={"project": "starter", "note": "peg", "source": source.replace("8.0", "9.0")})
+    r = agent_builds(client, reg, "starter", "peg")
     assert not r["green"] and [c["id"] for c in r["checks"] if not c["ok"]] == ["tag-pin-diameter"]
-    r = client.post(f"{agent}/write_note", params={"project": "starter", "note": "peg"}, content=source, headers={"content-type": "text/plain"}).json()
-    assert r["green"]
+    client.post(f"{agent}/write_note", json={"project": "starter", "note": "peg", "source": source})
+    assert agent_builds(client, reg, "starter", "peg")["green"]
+    # an upload is a build of what the server has, by name, or nothing
+    up = f"/w/{reg['id']}/upload/starter/peg"
+    assert "as a zip" in client.post(up, json={}).json()["error"]
+    assert "not a zip" in client.post(up, content=b"nope", headers={"content-type": "application/zip"}).json()["error"]
+    assert client.post(f"/w/{reg['name']}/upload/starter/peg", content=b"", headers={"content-type": "application/zip"}).status_code == 404
+    # no Note by GET, in parts or as base64 any more
+    assert client.get(f"{agent}/write_note", params={"project": "starter", "note": "peg", "source": source}).status_code == 405
+    assert client.post(f"{agent}/write_note", json={"project": "starter", "note": "peg", "source_b64": "eA"}).status_code == 400
 
 
-def test_a_note_too_long_for_one_address_is_sent_in_parts(client, reg, admin):
-    """For an agent that can only GET, and not long addresses: parts in any order, twice, and never mixed with
-    those of another try."""
+def test_a_mistake_has_its_status(client, reg):
     agent = f"/w/{reg['id']}/agent"
-    lines = ["from build123d import *", "PARAMS = dict(d=8.0)", "", "def build(p=PARAMS):", "    return Cylinder(p[\"d\"] / 2, 20)"]
-    parts = ["\n".join(lines[:2]), "\n".join(lines[2:4]) + "\n", lines[4]]      # whole lines; a line break at the end or not
-    send = lambda k, text, **more: client.get(f"{agent}/write_note", params={"project": "starter", "note": "parted", "upload": "k7", "part": k, "of": 3, "source": text, **more}).json()
-    r = send(3, parts[2])
-    assert r["written"] is False and r["have"] == [3] and r["missing"] == [1, 2] and "part 1, 2" in r["next"]
-    assert send(3, parts[2])["missing"] == [1, 2]                      # twice does no harm
-    assert send(1, parts[0])["missing"] == [2]
-    assert "parted" not in client.get(f"{agent}/status", params={"project": "starter"}).text      # nothing is written yet
-    r = send(2, parts[1])
-    assert r["written"] is True and r["green"] and r["parts"] == 3 and r["lines"] == 5 and r["measure"]["size_z"] == 20
-    assert client.get(f"{agent}/read_note", params={"project": "starter", "note": "parted"}).json()["source"] == "\n".join(lines) + "\n"
-    again = send(1, parts[0])                                           # the answer got lost: any part again gives the report
-    assert again["written"] is True and again["already"] is True and again["green"]
-    # another upload of the same Note: what was held of an unfinished one is not mixed in
-    other = dict(upload="try2")
-    assert send(1, parts[0], **other)["missing"] == [2, 3]
-    taller = dict(upload="try3")
-    assert send(3, lines[4].replace("20", "30"), **taller)["missing"] == [1, 2]      # try2's part 1 is gone
-    assert send(1, parts[0], **taller)["missing"] == [2]
-    assert send(2, parts[1], **taller)["measure"]["size_z"] == 30
-    # the same in pieces of one base64 string, cut anywhere
-    b64 = base64.urlsafe_b64encode(("\n".join(lines).replace("20", "40") + "\n").encode()).decode()
-    cut = [b64[:7], b64[7:50], b64[50:]]
-    for k in (2, 1):
-        assert client.get(f"{agent}/write_note", params={"project": "starter", "note": "parted", "upload": "b1", "part": k, "of": 3, "source_b64": cut[k - 1]}).json()["written"] is False
-    r = client.get(f"{agent}/write_note", params={"project": "starter", "note": "parted", "upload": "b1", "part": 3, "of": 3, "source_b64": cut[2]}).json()
-    assert r["written"] and r["measure"]["size_z"] == 40
-    # what is wrong is said in words
-    for params, why in (({"part": 1, "of": 2, "source": "x"}, "needs `upload`"), ({"upload": "z", "part": 3, "of": 2, "source": "x"}, "from 1 to `of`"),
-                        ({"upload": "b1x", "part": 1, "of": 0, "source": "x"}, "from 1 to `of`"), ({}, "needs the Note's source")):
-        assert why in client.get(f"{agent}/write_note", params={"project": "starter", "note": "parted", **params}).json()["error"]
-    send(1, "x", upload="w1")
-    assert "began as 3 parts" in client.get(f"{agent}/write_note", params={"project": "starter", "note": "parted", "upload": "w1", "part": 1, "of": 4, "source": "x"}).json()["error"]
-    # the admin's log has a line for every Note written, not for every part
-    assert sum(1 for e in admin.get("/api/users").json()["log"] if e.get("tool") == "write_note" and e.get("note") == "parted") == 3
-
-
-def test_a_mistake_by_get_is_readable_and_by_post_has_its_status(client, reg):
-    agent = f"/w/{reg['id']}/agent"
-    r = client.get(f"{agent}/check", params={"project": "nope", "note": "x"})
-    assert r.status_code == 200 and r.json()["status"] == 404 and "no project" in r.json()["error"]
-    assert client.get(f"{agent}/check").json()["status"] == 400
-    assert client.get(f"{agent}/nonsense").json()["status"] == 404
-    assert client.post(f"{agent}/check", json={"project": "nope", "note": "x"}).status_code == 404
+    r = client.post(f"{agent}/check", json={"project": "nope", "note": "x"})
+    assert r.status_code == 404 and "no project" in r.json()["error"]
+    assert client.post(f"{agent}/check", json={}).status_code == 400
+    assert client.post(f"{agent}/nonsense", json={}).status_code == 404
 
 
 def test_look_gives_the_address_of_a_picture(client, reg):
-    r = client.get(f"/w/{reg['id']}/agent/look", params={"project": "starter", "note": "rod_foot", "views": "iso"}).json()
+    r = client.post(f"/w/{reg['id']}/agent/look", json={"project": "starter", "note": "rod_foot", "views": "iso"}).json()
     path = r["image"].split("testserver", 1)[1]
     img = client.get(path)
     assert img.headers["content-type"] == "image/png" and img.content[:8] == b"\x89PNG\r\n\x1a\n"
@@ -259,9 +241,9 @@ def test_the_person_points_and_tags_and_the_agent_sees_it(client, reg):
     n = f"{h}/api/p/starter/n/rod_foot"
     faces = client.get(f"{n}/faces.json").json()["faces"]
     top = next(f for f in faces if f["type"] == "plane" and f["normal"][2] > 0.99 and abs(f["center"][2] - 22.4) < 0.01)
-    assert not client.get(f"{w}/agent/selection", params={"project": "starter"}).json()["selected"]
+    assert not client.post(f"{w}/agent/selection", json={"project": "starter"}).json()["selected"]
     client.post(f"{h}/api/p/starter/selection", json={"note": "rod_foot", "face": top, "point": top["center"], "tags": []})
-    sel = client.get(f"{w}/agent/selection", params={"project": "starter"}).json()
+    sel = client.post(f"{w}/agent/selection", json={"project": "starter"}).json()
     assert sel["selected"] and sel["selector"] == {"kind": "planar_face", "normal": "+Z", "at": 22.4}
     report = client.post(f"{n}/tags", json={"name": "clamp_face", "role": "the clamp presses here", "face": top}).json()
     assert report["green"] and report["tags"]["clamp_face"]["resolved"]
@@ -279,10 +261,10 @@ def test_pointing_at_a_part_of_an_assembly(client, reg):
     part = next(p for p in described["parts"] if p["name"] == "L_back_pos")
     face = described["faces"][part["faces"][0]]
     client.post(f"{h}/api/p/mg400_rakis/selection", json={"note": "rakis", "face": face, "point": face["center"], "tags": [], "part": part["name"]})
-    assert client.get(f"{w}/agent/selection", params={"project": "mg400_rakis"}).json()["part"] == "L_back_pos"
+    assert client.post(f"{w}/agent/selection", json={"project": "mg400_rakis"}).json()["part"] == "L_back_pos"
     notes = {n["name"]: n["kind"] for n in client.get(f"{h}/api/p/mg400_rakis").json()["notes"]}
     assert notes["rakis"] == "assembly"
-    assert len(client.get(f"{w}/agent/check", params={"project": "mg400_rakis", "note": "rakis"}).json()["parts"]) == 14
+    assert len(client.post(f"{w}/agent/check", json={"project": "mg400_rakis", "note": "rakis"}).json()["parts"]) == 14
 
 
 def test_the_agent_sees_a_selection_of_many_things(client, reg):
@@ -292,13 +274,13 @@ def test_the_agent_sees_a_selection_of_many_things(client, reg):
     edge = {k: v for k, v in d["edges"][0].items() if k not in ("segs", "p")}
     items = [{"kind": "face", **face}, {"kind": "edge", **edge}, {"kind": "vertex", "at": d["points"][0]["at"]}, {"kind": "part", "name": "rod_foot"}]
     client.post(f"{h}/api/p/starter/selection", json={"note": "rod_foot", "mode": "edge", "count": 4, "items": items, "measure": {"length, mm": 45}})
-    sel = client.get(f"{w}/agent/selection", params={"project": "starter"}).json()
+    sel = client.post(f"{w}/agent/selection", json={"project": "starter"}).json()
     assert sel["selected"] and sel["mode"] == "edge" and sel["count"] == 4 and sel["measure"] == {"length, mm": 45}
     assert [i["kind"] for i in sel["items"]] == ["face", "edge", "vertex", "part"]
     assert [i["selector"]["kind"] for i in sel["items"]] == ["planar_face", "edge", "point", "object"]      # how each would be found again
     assert sel["items"][1]["type"] == "line" and sel["items"][2]["at"] == d["points"][0]["at"]
     client.post(f"{h}/api/p/starter/selection", json={})               # cleared in the canvas
-    assert not client.get(f"{w}/agent/selection", params={"project": "starter"}).json()["selected"]
+    assert not client.post(f"{w}/agent/selection", json={"project": "starter"}).json()["selected"]
 
 
 def test_a_tag_of_several_things_and_a_check_on_what_lies_between(client, reg):
@@ -339,7 +321,7 @@ def test_a_sketch_becomes_a_tag_on_its_face(client, reg):
     assert tag["curves"][0] == {"type": "rect", "at": [-9.0, -3.0], "size": [15.0, 7.0]}
     assert client.post(f"{n}/tags", json={"name": "bad", "sketch": {"plane": {}, "curves": []}}).status_code == 400
     # the agent reads the drawing where it reads everything else
-    assert "pocket" in client.get(f"{w}/agent/read_note", params={"project": "starter", "note": "rod_foot"}).json()["source"]
+    assert "pocket" in client.post(f"{w}/agent/read_note", json={"project": "starter", "note": "rod_foot"}).json()["source"]
     client.delete(f"{n}/tags/pocket")
 
 
@@ -373,7 +355,7 @@ def test_a_plane_on_a_face_and_a_sketch_on_that_plane(client, reg):
     assert one["green"] and one["tags"]["label_edge"] == {"resolved": True, "measure": {"length": 28.0, "closed": True}}
     assert client.get(n).json()["tag_hits"]["label_edge"]["curves"] == ["label:0"]
     client.post(f"{h}/api/p/starter/selection", json={"note": "rod_foot", "mode": "edge", "items": [{"kind": "curve", "sketch": "label", "index": 0, "curve": label["curves"][0], "role": ""}]})
-    item = client.get(f"{w}/agent/selection", params={"project": "starter"}).json()["items"][0]
+    item = client.post(f"{w}/agent/selection", json={"project": "starter"}).json()["items"][0]
     assert item["kind"] == "curve" and item["selector"]["kind"] == "sketch_curve" and item["selector"]["sketch"] == "label"
     client.post(f"{h}/api/p/starter/selection", json={})
     for name in ("label_edge", "label", "label_plane", "top_1"):
@@ -404,10 +386,12 @@ def test_checks_are_the_persons_to_change(client, reg):
 
 def test_save_versions_export_over_http(client, reg):
     w, h = f"/w/{reg['id']}", f"/w/{reg['name']}"
-    saved = client.get(f"{w}/agent/save", params={"project": "starter", "message": "first"}).json()
+    saved = client.post(f"{w}/agent/save", json={"project": "starter", "message": "first"}).json()
     assert saved["saved"] and saved["version"] == 1
-    assert client.get(f"{w}/agent/versions", params={"project": "starter"}).json()["versions"][0]["message"] == "first"
-    url = client.get(f"{w}/agent/export", params={"project": "starter", "note": "rod_foot", "format": "stl"}).json()["url"]
+    assert client.post(f"{w}/agent/versions", json={"project": "starter"}).json()["versions"][0]["message"] == "first"
+    assert "--export stl" in client.post(f"{w}/agent/export", json={"project": "starter", "note": "rod_foot", "format": "stl"}).json()["error"]
+    agent_builds(client, reg, "starter", "rod_foot", exports=("stl",))
+    url = client.post(f"{w}/agent/export", json={"project": "starter", "note": "rod_foot", "format": "stl"}).json()["url"]
     stl = client.get(url.split("testserver", 1)[1])
     assert stl.status_code == 200 and "rod_foot.stl" in stl.headers["content-disposition"]
     assert client.get(f"{h}/api/p/starter/n/rod_foot/fingerprint.json").json()["fingerprint"]["solids"] == 1
@@ -415,7 +399,7 @@ def test_save_versions_export_over_http(client, reg):
 
 
 def test_what_agents_change_is_written_down(app, admin, client, reg):
-    client.get(f"/w/{reg['id']}/agent/save", params={"project": "starter", "message": "again"})
+    client.post(f"/w/{reg['id']}/agent/save", json={"project": "starter", "message": "again"})
     log = admin.get("/api/users").json()["log"]
     assert any(e["type"] == "agent" and e["user"] == "mari" and e["tool"] == "write_note" and e["note"] == "peg" for e in log)
     assert not any(e["type"] == "agent" and e.get("tool") in ("status", "look", "check") for e in log)      # looking is not written down
@@ -470,6 +454,12 @@ def test_skill_zip(client):
     names = zipfile.ZipFile(io.BytesIO(client.get("/skill.zip").content)).namelist()
     assert "monet/SKILL.md" in names and "monet/scripts/monet.py" in names and "monet/references/tags-and-checks.md" in names
     assert "monet/link.txt" not in names       # the public one carries nobody's key
+    # the builder the agent builds with: this server's own Monet, and its kernel pinned to the version here
+    z = zipfile.ZipFile(io.BytesIO(client.get("/skill.zip").content))
+    assert {f"monet/lib/monet/{m}.py" for m in ("runner", "build", "derive", "note", "__init__")} <= set(names)
+    assert z.read("monet/lib/monet/runner.py") == (ROOT / "monet" / "runner.py").read_bytes()
+    from importlib.metadata import version
+    assert f'"build123d=={version("build123d")}"' in z.read("monet/scripts/builder.py").decode()
 
 
 def test_the_persons_skill_carries_their_link(admin, client, reg, tmp_path, monkeypatch):
@@ -509,7 +499,8 @@ def test_a_joint_made_in_the_canvas_and_a_pose_for_the_agent(client, reg):
     """The person picks the hinge's hole in Motion: the hole is tagged and the joint turns about it, in one write.
     What a pose hits is the canvas's to ask and the agent's to look at."""
     w, h = f"/w/{reg['id']}", f"/w/{reg['name']}"
-    assert client.post(f"{w}/agent/write_note", params={"project": "starter", "note": "lidbox"}, content=LIDBOX, headers={"content-type": "text/plain"}).json()["green"]
+    assert client.post(f"{w}/agent/write_note", json={"project": "starter", "note": "lidbox", "source": LIDBOX}).json()["state"] == "unbuilt"
+    assert agent_builds(client, reg, "starter", "lidbox")["green"]
     n = f"{h}/api/p/starter/n/lidbox"
     hole = next(f for f in client.get(f"{n}/faces.json").json()["faces"] if f["type"] == "cylinder" and f["concave"])
     report = client.put(f"{n}/joints/hinge", json={"kind": "revolute", "moves": "lid", "on": "base", "face": hole, "range": [0, 120]}).json()
@@ -527,11 +518,11 @@ def test_a_joint_made_in_the_canvas_and_a_pose_for_the_agent(client, reg):
     assert client.post(f"{n}/pose", json={"values": {"nope": 1}}).status_code == 400
 
     # the agent sees the same, with a picture
-    seen = client.get(f"{w}/agent/pose", params={"project": "starter", "note": "lidbox", "values": "hinge=30"}).json()
+    seen = client.post(f"{w}/agent/pose", json={"project": "starter", "note": "lidbox", "values": "hinge=30"}).json()
     assert seen["values"]["hinge"] == 30 and "pose=hinge%3D30" in seen["image"]
     png = client.get(seen["image"].split("testserver", 1)[1])
     assert png.status_code == 200 and png.content[:4] == b"\x89PNG"
-    assert client.get(f"{w}/agent/check", params={"project": "starter", "note": "lidbox"}).json()["motion"]["sweeps"]["hinge"]["clash_mm3"] >= 0
+    assert client.post(f"{w}/agent/check", json={"project": "starter", "note": "lidbox"}).json()["motion"]["sweeps"]["hinge"]["clash_mm3"] >= 0
 
     # and the person takes it away again
     assert "hinge" not in client.delete(f"{n}/joints/hinge").json()["motion"]["joints"]
@@ -540,11 +531,11 @@ def test_a_joint_made_in_the_canvas_and_a_pose_for_the_agent(client, reg):
 
 def test_the_agent_leads_the_nose_and_sees_the_arm_there(client, reg):
     w = f"/w/{reg['id']}"
-    r = client.get(f"{w}/agent/reach", params={"project": "mg400_rakis", "note": "mg400_blocks", "x": 250, "y": 120, "z": 200}).json()
+    r = client.post(f"{w}/agent/reach", json={"project": "mg400_rakis", "note": "mg400_blocks", "x": 250, "y": 120, "z": 200}).json()
     assert r["reached"] and r["off"] < 0.05 and r["tip"] == pytest.approx([250, 120, 200], abs=0.05), r
     assert r["clashes"] == [] and set(r["values"]) == {"j1", "j2", "j3", "j4"}
     png = client.get(r["image"].split("testserver", 1)[1])
     assert png.status_code == 200 and png.content[:4] == b"\x89PNG"
-    far = client.get(f"{w}/agent/reach", params={"project": "mg400_rakis", "note": "mg400_blocks", "x": 900, "y": 0, "z": 0}).json()
+    far = client.post(f"{w}/agent/reach", json={"project": "mg400_rakis", "note": "mg400_blocks", "x": 900, "y": 0, "z": 0}).json()
     assert not far["reached"] and far["off"] > 100
-    assert "no tips" in client.get(f"{w}/agent/reach", params={"project": "mg400_rakis", "note": "rakis", "x": 0, "y": 0, "z": 0}).json()["error"]
+    assert "no tips" in client.post(f"{w}/agent/reach", json={"project": "mg400_rakis", "note": "rakis", "x": 0, "y": 0, "z": 0}).json()["error"]

@@ -1583,32 +1583,28 @@ function tick() {
   track.classList.toggle('over', left != null && left <= 0);
   $('#busyBar').style.width = left == null ? '' : `${Math.min(100, 100 * t / B.eta).toFixed(1)}%`;
 }
-/** A build of these Notes begins: expect what they took last time (several at once, where the server builds so). */
-function building(names, text) {
-  const rows = (S.proj?.notes ?? []).filter((n) => names.includes(n.name) && n.kind !== 'module');
-  const times = rows.map((n) => n.seconds).filter((x) => x > 0);
-  const eta = times.length ? Math.max(Math.max(...times), times.reduce((a, x) => a + x, 0) / (S.proj.workers || 1)) : null;
-  busy(text ?? (names.length === 1 ? `building ${names[0]}…` : 'building…') + (eta ? '' : times.length || !rows.length ? '' : ' (the first time: no estimate yet)'), { eta });
-}
+/** A change the server works into the last build (a tag, a joint, the ground). Nothing is built on the server: the
+agent builds on its own computer and uploads, and this page reloads when that lands (the /rev poll). */
+function building(_names, text) { busy(text ?? 'updating…'); }
 const stale = () => (S.proj?.notes ?? []).filter((n) => n.kind !== 'module' && n.state !== 'built').map((n) => n.name);
+const notBuilt = (r) => r && (r.state === 'stale' || r.state === 'unbuilt');
 /** How long the build on show took: it stays, so the next wait can be judged by it. */
 function showLast() {
   const r = S.data?.note === S.note ? S.data.report : null, el = $('#last');
   const before = (S.proj?.notes ?? []).find((n) => n.name === S.note)?.seconds;      // not on show yet, but built before
   el.hidden = !(S.note && (r?.seconds != null || before));
   if (el.hidden) return;
+  if (notBuilt(r)) { el.classList.add('failed'); el.innerHTML = `${esc(S.note)} · <b>waiting for your agent</b> to build it`; el.title = r.waiting || ''; return; }
   if (!r || r.seconds == null) { el.classList.remove('failed'); el.innerHTML = `${esc(S.note)} · last built in <b>${secs(before)}</b>`; el.title = ''; return; }
-  const k = r.took, at = k?.at ? new Date(k.at) : null;
+  const k = r.took, at = k?.at ? new Date(k.at) : null, who = r.by === 'agent' ? ' by your agent' : '';
   el.classList.toggle('failed', !r.built);
-  el.innerHTML = r.built ? `${esc(S.note)} · built in <b>${secs(r.seconds)}</b>${at ? ` · ${at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`
+  el.innerHTML = r.built ? `${esc(S.note)} · built${who} in <b>${secs(r.seconds)}</b>${at ? ` · ${at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`
     : `${esc(S.note)} · <b>did not build</b> (${secs(r.seconds)})`;
-  el.title = !k ? '' : [`the last build of ${S.note}: ${secs(k.seconds)} from start to finish`,
+  el.title = !k ? '' : [`the last build of ${S.note}, on ${r.by === 'agent' ? "your agent's computer" : 'the computer that made it'}: ${secs(k.seconds)}`,
     k.build != null ? `the Note's own build(): ${secs(k.build)}` : '',
-    k.kernel != null && k.build != null ? `meshing, tags and files: ${secs(Math.max(0, k.kernel - k.build))}` : '',
-    k.kernel != null ? `starting the build and handing it over: ${secs(Math.max(0, k.seconds - k.kernel))}` : '',
-    at ? `built ${at.toLocaleString()}` : ''].filter(Boolean).join('\n');
+    at ? `uploaded ${at.toLocaleString()}` : ''].filter(Boolean).join('\n');
 }
-const state = (n) => (n.kind === 'module' ? '' : n.state === 'error' ? 'red' : n.state === 'unbuilt' ? '' : n.changed ? 'yellow' : 'green');
+const state = (n) => (n.kind === 'module' ? '' : n.state === 'error' ? 'red' : n.state === 'unbuilt' ? '' : n.state === 'stale' ? 'wait' : n.changed ? 'yellow' : 'green');
 const order = { assembly: 0, note: 1, module: 2 };
 
 function renderSketchSide() {
@@ -1631,7 +1627,7 @@ function renderSide() {
   const asm = S.room === 'assembly' || S.room === 'motion';
   const mine = (S.proj?.notes ?? []).filter((n) => (asm ? n.kind === 'assembly' : n.kind !== 'assembly'));
   const sorted = [...mine].sort((a, b) => order[a.kind] - order[b.kind] || a.name.localeCompare(b.name));
-  $('#notes').innerHTML = sorted.map((n) => `<div class="item ${n.name === S.note ? 'sel' : ''}" data-note="${esc(n.name)}" title="${n.kind === 'module' ? 'a helper module, imported by Notes' : n.kind === 'assembly' ? 'an assembly: Notes put together' : n.state === 'error' ? 'does not build' : n.changed ? 'changed since the last save' : 'saved'}">
+  $('#notes').innerHTML = sorted.map((n) => `<div class="item ${n.name === S.note ? 'sel' : ''}" data-note="${esc(n.name)}" title="${n.kind === 'module' ? 'a helper module, imported by Notes' : n.state === 'stale' || n.state === 'unbuilt' ? 'waiting for your agent to build it' : n.kind === 'assembly' ? 'an assembly: Notes put together' : n.state === 'error' ? 'does not build' : n.changed ? 'changed since the last save' : 'saved'}">
     <span class="dot ${state(n)}"></span>${esc(n.name)}${n.kind === 'note' ? '' : ` <small>${n.kind}</small>`}</div>`).join('')
     || `<div class="item muted">${!S.proj ? 'no project open' : asm ? 'no assembly yet' : 'no parts yet: ask your agent for one'}</div>`;
   $('#versions').innerHTML = [...(S.proj?.versions ?? [])].reverse().map((v) => {
@@ -1697,13 +1693,15 @@ async function open(project, note) {
   roomBar();
   renderSide();
   if (!S.note) { S.data = null; S.parts = []; assemble({}); assemblyBar(); showSelection(); renderPanel(true); showLast(); return; }
-  if (S.proj.notes.find((n) => n.name === S.note)?.state === 'built') busy('loading…', {}); else building([S.note]);
+  busy('loading…', {});
   showLast();
   try {
     S.data = await api(`/p/${project}/n/${S.note}`);
-    S.rev = (await api(`/p/${project}/rev`)).rev;   // the build itself moved the revision
-    if (S.data.report?.built) {
-      const stamp = `r=${S.rev}`;
+    S.rev = (await api(`/p/${project}/rev`)).rev;   // working out a tag moved the revision
+    // stale: the agent has not built it since its source changed; its last build is shown meanwhile
+    const last = S.data.report?.state === 'stale';
+    if (S.data.report?.built || last) {
+      const stamp = `r=${S.rev}${last ? '&last=1' : ''}`;
       const [loaded, described] = await Promise.all([loadInto(new THREE.Group(), `${root}/p/${project}/n/${S.note}/model.glb?${stamp}`, true),
         fetch(`${root}/p/${project}/n/${S.note}/faces.json?${stamp}`).then((r) => r.json())]);
       // numbers of faces, lines and points only mean something within one build: a rebuilt part starts unselected
@@ -1820,10 +1818,12 @@ function renderPanel(force) {
     : '<div class="card"><h2>No project open</h2><p class="muted">Start one, or upload an archive of one, under the name at the top left.</p></div>'; return; }
   if (d.error) { panel.innerHTML = `<div class="card"><h2>${esc(S.note)}</h2><p class="err">${esc(d.error)}</p></div>`; return; }
   const r = d.report, cards = [];
-  const pill = !d.is_note ? '<span class="pill muted">module</span>' : !r.built ? '<span class="pill err">does not build</span>'
-    : r.green ? '<span class="pill ok">green</span>' : '<span class="pill err">red</span>';
-  cards.push(card('note', `<h2>${esc(S.note)}</h2>`, `${r && !r.built ? `<p class="err mono">${esc(r.error)}</p>` : ''}${d.doc ? `<pre class="doc">${esc(d.doc)}</pre>` : '<p class="muted">No description.</p>'}`, pill));
-  if (S.room === 'sketch') { panel.innerHTML = cards.join('') + (d.is_note && r.built ? sketchCards() : '<div class="card"><p class="muted">This Note does not build: there is nothing to draw on.</p></div>'); return; }
+  const pill = !d.is_note ? '<span class="pill muted">module</span>' : notBuilt(r) ? '<span class="pill warn">waiting for your agent</span>'
+    : !r.built ? '<span class="pill err">does not build</span>' : r.green ? '<span class="pill ok">green</span>' : '<span class="pill err">red</span>';
+  const why = notBuilt(r) ? `<p class="warn">${r.state === 'stale' ? 'This is its last build: the Note changed since.' : 'Not built yet.'} Your agent builds Notes on its own computer and uploads them: ask it to build ${esc(S.note)} (<code>monet.py build ${esc(S.project)} ${esc(S.note)}</code>).</p>`
+    : r && !r.built ? `<p class="err mono">${esc(r.error)}</p>` : '';
+  cards.push(card('note', `<h2>${esc(S.note)}</h2>`, `${why}${d.doc ? `<pre class="doc">${esc(d.doc)}</pre>` : '<p class="muted">No description.</p>'}`, pill));
+  if (S.room === 'sketch') { panel.innerHTML = cards.join('') + (d.is_note && r.built ? sketchCards() : `<div class="card"><p class="muted">${notBuilt(r) ? 'Your agent has not built this Note for its source yet' : 'This Note does not build'}: there is nothing to draw on.</p></div>`); return; }
 
   if (S.compare) {
     const s = S.compare.summary;
@@ -1898,10 +1898,10 @@ function renderPanel(force) {
     `<span class="pill ${colour}">${esc(lc.status === 'new' ? 'never saved' : lc.status)}</span>`));
   }
 
-  const red = S.saveResult && !S.saveResult.saved ? Object.entries(S.saveResult.red).map(([k, v]) => `<div class="why err"><b>${esc(k)}</b>: ${esc(Array.isArray(v) ? v.join('; ') : v)}</div>`).join('') : '';
+  const red = S.saveResult && !S.saveResult.saved ? Object.entries(S.saveResult.red ?? S.saveResult.waiting ?? {}).map(([k, v]) => `<div class="why err"><b>${esc(k)}</b>: ${esc(Array.isArray(v) ? v.join('; ') : v)}</div>`).join('') : '';
   cards.push(card('save', 'Save the project as a version', `
     <div class="line" style="margin-top:0"><input id="saveMsg" placeholder="what changed, and why" value="${esc(S.message)}"><button class="primary" data-act="save">Save</button></div>
-    ${S.saveResult?.saved ? `<p class="ok">Saved as v${S.saveResult.version}.</p>` : red ? `<p class="err">Nothing is saved on red.</p>${red}` : ''}
+    ${S.saveResult?.saved ? `<p class="ok">Saved as v${S.saveResult.version}.</p>` : red ? `<p class="err">${S.saveResult.waiting ? 'Nothing is saved before your agent has built every Note:' : 'Nothing is saved on red.'}</p>${red}` : ''}
     <p class="muted">Every Note must build and pass its checks. History is your own git folder: your agent commits there after each save.</p>`));
 
   if (d.is_note && r.built) {
@@ -2054,7 +2054,7 @@ $('#panel').addEventListener('click', (e) => {
       equals: eq === '' ? null : eq === 'true' ? true : eq === 'false' ? false : Number(eq) });
   });
   if (a === 'ack') act(() => api(`${n}/ack`, 'POST', {}));
-  if (a === 'save') act(async () => { building(stale(), 'building every Note…'); S.saveResult = await api(`/p/${S.project}/save`, 'POST', { message: S.message }); if (S.saveResult.saved) S.message = ''; });
+  if (a === 'save') act(async () => { busy('saving…'); S.saveResult = await api(`/p/${S.project}/save`, 'POST', { message: S.message }); if (S.saveResult.saved) S.message = ''; });
 });
 
 // ---- projects, the agent, the start ------------------------------------------------------------------------
@@ -2153,7 +2153,8 @@ function connectBody() {
   connectSig = JSON.stringify([v && { ...v, left: 0 }, remote.connected()]);
   const mine = S.state.me.username === S.state.workspace.username;
   const head = `<h2>Connect your agent</h2>
-    <p class="muted">The thinking happens on your computer, with your own model. This page builds, checks, shows and exports.
+    <p class="muted">The thinking and the building happen on your computer, with your own model: your agent builds each Note
+    there and sends what it built. This page checks, shows and exports; it never runs a Note.
     Your agent cannot log in as you do, so it comes with a link that has your <b>agent key</b> in it, and the link opens
     nothing until you switch remote control on.</p>
     <div class="remote-main"><button class="remote-switch ${on ? 'on' : ''}" id="remoteSwitch" role="switch" aria-checked="${on}" ${mine && v ? '' : 'disabled'}><span class="knob"></span><span class="word">${on ? 'On' : 'Off'}</span></button>
@@ -2166,8 +2167,8 @@ function connectBody() {
   const close = '<form method="dialog"><div class="line"><span style="flex:1"></span><button>Close</button></div></form>';
   if (!on) return `${head}
     <h3>What switching it on gives your agent</h3>
-    <p>The link below works, as MCP for Claude and others, or as plain web addresses for any LLM that can open them. Your agent
-      writes Notes, builds, checks, saves and exports in your workspace; it sees what this page shows and takes it to a part or
+    <p>The link below works, for an agent with a shell (Claude Code and the like: building needs one) and as MCP. Your agent
+      writes Notes, builds them on your computer, checks, saves and exports in your workspace; it sees what this page shows and takes it to a part or
       an area. It runs no code in this page, and it cannot change or remove a check, acknowledge a load check, or delete. The link stays the same from one switching on to the next, so a connector
       set up once keeps working.</p>${close}`;
   return `${head}
@@ -2176,9 +2177,12 @@ function connectBody() {
     <div class="line" style="margin-top:0"><span class="muted" style="flex:1">It got out, or an agent should stop?</span><button id="newKey">New key</button></div>
     <h3>1 · Your skill, with your link in it</h3>
     <p>One download: how to work in Monet, and the address to work at. <a href="${root}/skill.zip" download="monet-skill.zip">Download monet-skill.zip</a></p>
-    <p><b>Claude Code</b>: unzip it into <code>~/.claude/skills/</code>. Nothing else to set up: it works through its own script.<br>
-      <b>Claude Desktop</b>: Settings → Capabilities → Skills, upload it. Claude reaches Monet from its code sandbox only where
-      its network access lets it reach <code>${esc(new URL(S.state.origin).host)}</code>; if it cannot, add the connector below as well.</p>
+    <p><b>Claude Code</b>: unzip it into <code>~/.claude/skills/</code>. It works through its own script, which builds with
+      <a href="https://docs.astral.sh/uv/getting-started/installation/" target="_blank" rel="noopener">uv</a>: install that once.
+      The first build fetches the CAD kernel (a few hundred MB); later ones start at once.<br>
+      <b>Claude Desktop</b>: Settings → Capabilities → Skills, upload it. Claude builds in its code sandbox only where that
+      sandbox may install packages and reach <code>${esc(new URL(S.state.origin).host)}</code>; the connector below lets it
+      look and point, not build.</p>
     <p class="muted">The file holds your agent key, as the link does: keep it to yourself. After <i>New key</i>, download it again.</p>
     <h3>Or as a connector, Claude Desktop</h3>
     ${local ? `<p>This server runs on your own computer, which Claude's connectors cannot reach. Add it to
@@ -2188,9 +2192,6 @@ function connectBody() {
     <p>And the skill above, so Claude knows how to work here.</p>
     <h3>Or as a connector, Claude Code</h3>
     <pre>claude mcp add --transport http monet ${esc(agentLink)}/mcp</pre>
-    <h3>Or any LLM that can open web addresses</h3>
-    <p>Everything is also plain HTTPS, by GET or POST. Paste this to it:</p>
-    <pre>Read ${esc(S.state.origin)}/api and work in my Monet workspace. My agent link: ${esc(agentLink)}</pre>
     <h3>2 · A folder of your own, with git</h3>
     <p>Make a folder for the project on your computer and let the agent keep the Notes there, with <code>git init</code>.
       It commits after every successful save, so the history is yours and survives this server.</p>
@@ -2212,6 +2213,7 @@ function drawConnect() {
     e.preventDefault();
     e.currentTarget.disabled = true;
     try { await remote.set(!remote.view()?.on); } catch (err) { tell(err.message); }
+    ended = false;      // switched off here: nothing to be told
     drawConnect();
   };
   if ($('#newKey')) $('#newKey').onclick = async (e) => {
@@ -2221,16 +2223,26 @@ function drawConnect() {
   };
 }
 $('#connect').onclick = () => {
+  ended = false;
   drawConnect();
   $('#connectDialog').showModal();
   remote.refresh();
 };
-// while remote control is on, the header's button says so on every page, counting down to when it ends by itself
+// while remote control is on, the header's button says so on every page, counting down to when it ends by itself; red
+// in the last two minutes, and once it has ended (not by this page's switch) it stays red until the person looks
+const LOW = 120_000;
+let wasOn = false, ended = false;
 function showRemote() {
-  const on = !!remote.view()?.on, left = clock(remote.left());
-  $('#connect').classList.toggle('remote-on', on);
-  $('#connect').textContent = on ? `Remote ${left}` : 'Connect your agent';
-  $('#connect').title = on ? 'Remote control is on: your agent can work in your workspace and in this page. Anything you or the agent do starts the 15 minutes again. Click to see what it did, or to switch it off.' : '';
+  const on = !!remote.view()?.on, ms = remote.left(), left = clock(ms), b = $('#connect');
+  if (wasOn && !on) ended = true;
+  if (on) ended = false;
+  wasOn = on;
+  b.classList.toggle('remote-on', on);
+  b.classList.toggle('remote-low', on && ms < LOW);
+  b.classList.toggle('remote-ended', ended);
+  b.textContent = on ? `Remote ${left}` : ended ? 'Remote off · switch on' : 'Connect your agent';
+  b.title = on ? 'Remote control is on: your agent can work in your workspace and in this page. Anything you or the agent do starts the 15 minutes again. Click to see what it did, or to switch it off.'
+    : ended ? 'Remote control ended: your agent\'s link opens nothing now. Click to switch it on again; the link stays the same.' : '';
   for (const el of document.querySelectorAll('.remote-count')) el.textContent = left;
 }
 remote.onChange(() => {
@@ -2289,15 +2301,12 @@ async function start(project) {
 // follow the agent: when the project moves, look again
 let beat = 0;
 setInterval(async () => {
-  if (beat++ % 4 && !(B.text && !B.mine)) return;      // every two seconds; four times as often while a build is watched
+  if (beat++ % 4) return;      // every two seconds
   if (!S.project || document.hidden || waiting() || press) return;
   try {
-    const { rev, building: now = [] } = await api(`/p/${S.project}/rev`);
+    const { rev } = await api(`/p/${S.project}/rev`);
     if (waiting()) return;
-    // a build someone else began (the agent, most often): show it under way, as one of this page's own would be
-    const b = now.find((x) => x.note === S.note) ?? now[0];
-    if (b && !B.text) busy(`building ${b.note}…`, { eta: b.expect, since: b.since, mine: false });
-    else if (!b && B.text && !B.mine) busy();
+    // the agent wrote a Note or uploaded a build: look again
     if (rev !== S.rev && !S.compare) await open(S.project, S.note);
   } catch { /* the server is away; try again */ }
 }, 500);

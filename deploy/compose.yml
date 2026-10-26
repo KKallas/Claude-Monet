@@ -1,16 +1,14 @@
 # The instance: Monet behind Caddy (HTTPS from Let's Encrypt). Lives in /opt/monet on the droplet together with
 # Caddyfile and .env. `docker compose up -d` starts it and it comes back by itself after a reboot.
 #
-# Monet runs the Notes people send it, and a Note is Python: whoever may send one may run anything in the process
-# that builds it. So that process is a container of its own:
-#   app     the web app: the logins, the canvas, the agents' door. Holds ./data (accounts, session secret).
-#           It never runs a Note.
-#   runner  builds the Notes the app asks it to. Holds ./storage (the working files) and nothing else:
-#           no accounts, no secret, no way out to the internet.
-# Both: no root, no capabilities, a read-only file system apart from their volumes and /tmp, ceilings on memory,
-# CPU and processes. Only Caddy is reachable from outside, and only Caddy can reach out.
-# What a hostile Note can still do: read or spoil the working files of other users (they share ./storage), and
-# keep the CPU busy. So let in people you would lend the machine to, and back up ./storage if the work matters.
+# Monet never runs a Note here: people's agents build on their own computers and upload what a build leaves, which
+# the app checks is a build of the files it has (monet/workspace.py accept_build). So there is one container:
+#   app     the web app: the logins, the canvas, the agents' door. Holds ./data (accounts, session secret) and
+#           ./storage (the working files).
+# No root, no capabilities, a read-only file system apart from its volumes and /tmp, ceilings on memory and
+# processes. Only Caddy is reachable from outside, and only Caddy can reach out. What an agent key can still do:
+# upload measurements of its own workspace that are not what the Note would build (they are claims, and the canvas
+# says who built them). Back up ./storage if the work matters.
 x-shut: &shut
   image: monet:latest
   restart: unless-stopped
@@ -29,30 +27,11 @@ services:
       MONET_BASE_URL: https://${DOMAIN}
       MONET_MAX_USERS: ${MONET_MAX_USERS:-20}
       MONET_NOTE: ${MONET_NOTE:-}
-      MONET_RUNNER_URL: http://runner:8081
-      MONET_BUILD_TIMEOUT: ${MONET_BUILD_TIMEOUT:-120}
     volumes:
       - ./storage:/storage
       - ./data:/data
-    mem_limit: ${APP_MEM:-700m}
-    depends_on:
-      - runner
-
-  runner:
-    <<: *shut
-    command: ["python", "-m", "monet.buildd"]
-    environment:
-      MONET_BUILD_TIMEOUT: ${MONET_BUILD_TIMEOUT:-120}
-      MONET_COLD: ${MONET_COLD:-}      # set to 1 to start every build from nothing
-    volumes:
-      - ./storage:/storage
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8081/healthz', timeout=2)"]
-      interval: 30s
-      timeout: 3s
-      start_period: 10s
-    # the ceiling for every build together; when it is hit, the build is what gets killed
-    mem_limit: ${RUNNER_MEM:-1300m}
+    # working out the joints of a big assembly again (a person's edit in Motion) takes memory: more than the app alone
+    mem_limit: ${APP_MEM:-1500m}
     cpus: ${CPUS:-1.0}
 
   caddy:

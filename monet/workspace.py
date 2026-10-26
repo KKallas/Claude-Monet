@@ -11,9 +11,14 @@ nothing from their names that opens a door).
         <note>.checks.json          the checks (the user's)
         out/<note>/                 the current build: result.json, model.glb, faces.json, exports
         versions/0001/              a save: every source file, and for each Note that changed
-                                    its <note>.glb and <note>.fingerprint.json
+                                    its <note>.glb and <note>.fingerprint.json; out/<note>/ what was
+                                    built of it (result.json, exports), for the load check
 
 A project goes out and comes in as an archive: a zip of all of that but out/, which is made again.
+
+Nothing here runs a Note. The agent builds on its own computer (monet/build.py) and uploads what the build left
+(accept_build); a build is current while every file it read is as it was (but for the Note's TAGS, JOINTS, GROUND
+and TIPS, which are worked out again here from what the build left: monet/derive.py).
 
 History is the user's own git, on their own computer: the agent commits there after
 every successful save. A version here is what the viewer needs to compare and export.
@@ -22,29 +27,22 @@ import hashlib
 import io
 import json
 import math
-import os
 import re
 import shutil
-import subprocess
-import sys
 import threading
 import time
 import zipfile
 import zlib
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import feynman, joints, note as notes, runner, semmelweis
+from . import derive, feynman, joints, note as notes, runner, semmelweis
 
 ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 EXPORTS = {"stl": "model/stl", "3mf": "model/3mf", "step": "model/step", "glb": "model/gltf-binary"}
 MATERIALS = ("pla", "pom", "aluminium")      # what the canvas can render a part as (canvas/look.js)
-BUILD_TIMEOUT = int(os.environ.get("MONET_BUILD_TIMEOUT", "180"))
-BUILD_MEMORY_MB = int(os.environ.get("MONET_BUILD_MEMORY_MB", "0"))     # address space, MB; 0 = no such limit
 MAX_SOURCE = 200_000
-MAX_PARTS = 400      # of a Note that is sent in parts
 MAX_ARCHIVE = 100_000_000      # bytes of a project as an archive: of the zip, and of what it unpacks to
 MAX_ARCHIVE_FILES = 5000
 # what an archive of a project holds, and all that is taken from one that comes in: the Notes, their checks, the
@@ -55,7 +53,6 @@ ARCHIVED = re.compile(rf"^(versions/[0-9]{{4}}/)?({_NOTE}\.py|{_NOTE}\.checks\.j
 
 _locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
-_running: dict[tuple[str, str], float] = {}      # the builds under way now: (project folder, Note) -> when it began
 _times_guard = threading.Lock()
 
 
@@ -92,123 +89,56 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _limits():
-    runner.limits(BUILD_TIMEOUT, BUILD_MEMORY_MB)
+# what an upload of a build may carry, each by its name
+BUILT = re.compile(r"^(result\.json|faces\.json|model\.(glb|stl|3mf|step))$")
+DEP = re.compile(rf"^{_NOTE}\.py$")
+# what result.json has to say for the server to read it
+FINGERPRINT = ("volume", "area", "bbox", "com", "solids", "faces")
 
 
-RUNNER_URL = os.environ.get("MONET_RUNNER_URL", "").rstrip("/")
-WORKERS = min(4, os.cpu_count() or 1)      # how many Notes a save builds at once
-
-
-def run_build(project_dir: Path, name: str, out_dir: Path, exports=()) -> dict:
-    """Run one Note and read back what it left: in the runner, where there is one (another container, which has
-    the working files and nothing else: no accounts, no session secret), else in a process of its own here."""
-    if not RUNNER_URL:
-        return run_build_here(project_dir, name, out_dir, exports)
-    import httpx
+def build_files(data: bytes) -> dict:
+    """The files of an uploaded build, read from its zip into memory: by their names, which must be those a build
+    has (BUILT), at the top of the zip. Nothing in it says where a file goes."""
     try:
-        r = httpx.post(f"{RUNNER_URL}/build", json={"dir": str(project_dir), "note": name, "out": str(out_dir), "exports": list(exports)},
-                       timeout=BUILD_TIMEOUT + 60)
-        r.raise_for_status()
-        return r.json()
-    except (httpx.HTTPError, ValueError) as e:
-        src = project_dir / f"{name}.py"
-        return {"note": name, "ok": False, "error": f"the runner did not answer: {type(e).__name__}", "libs": runner.versions(),
-                "deps": {src.name: _sha(src)} if src.exists() else {}}
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            files = [i for i in z.infolist() if not i.is_dir()]
+            unknown = sorted(i.filename for i in files if not BUILT.match(i.filename))
+            if unknown:
+                raise Problem(f"not part of a build: {', '.join(unknown[:5])}")
+            if sum(i.file_size for i in files) > MAX_ARCHIVE:
+                raise Problem(f"that build unpacks to more than {MAX_ARCHIVE // 1_000_000} MB", 413)
+            return {i.filename: z.read(i) for i in files}
+    except (zipfile.BadZipFile, zlib.error, EOFError, RuntimeError, NotImplementedError):
+        raise Problem("that is not a zip that can be read")
 
 
-_forks = None
-_forks_guard = threading.Lock()
-
-
-def forks():
-    """Where builds are started from: a fork server that has the CAD kernel loaded already (monet/warm.py), so a
-    build begins at once instead of after the seconds it takes to load. None where that cannot be had."""
-    global _forks
-    with _forks_guard:
-        if _forks is None:
-            try:
-                import multiprocessing
-                for key in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
-                    os.environ.setdefault(key, "1")      # one build, one core; and no threads in what gets forked
-                ctx = multiprocessing.get_context("forkserver")
-                # Every build re-runs the server's main module on its way in. Loaded here once, that costs nothing.
-                main = getattr(getattr(sys.modules.get("__main__"), "__spec__", None), "name", None) or "monet.__main__"
-                ctx.set_forkserver_preload(["monet.warm"] + ([main] if main.startswith("monet.") else []))
-                _forks = ctx
-            except (ValueError, ImportError):
-                _forks = False
-    return _forks or None
-
-
-def warm() -> None:
-    """Start the fork server now, in the background, so the first build does not wait for it."""
-    def go():
-        ctx = forks()
-        if ctx is not None:
-            p = ctx.Process(target=print, args=("",), daemon=True)
-            p.start()
-            p.join(120)
-    threading.Thread(target=go, daemon=True).start()
-
-
-def _failed(project_dir: Path, name: str, out_dir: Path, error: str) -> dict:
-    src = project_dir / f"{name}.py"
-    result = {"note": name, "ok": False, "error": error, "libs": runner.versions(), "deps": {src.name: _sha(src)} if src.exists() else {}}
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "result.json").write_text(json.dumps(result))
-    return result
-
-
-def run_build_here(project_dir: Path, name: str, out_dir: Path, exports=()) -> dict:
-    """Run one Note in a process of its own and read back what it left."""
-    result_file = out_dir / "result.json"
-    result_file.unlink(missing_ok=True)
-    ctx = None if os.environ.get("MONET_COLD") else forks()
-    if ctx is None:
-        return run_build_cold(project_dir, name, out_dir, exports)
-    import signal
-    started = time.time()
-    proc = ctx.Process(target=runner.child, args=(str(project_dir), name, str(out_dir), tuple(exports), BUILD_TIMEOUT, BUILD_MEMORY_MB))
+def _build_problem(name: str, files: dict) -> dict:
+    """The result.json of an upload, if it is one the server can read; else why not (a Problem)."""
+    if "result.json" not in files:
+        raise Problem("a build carries result.json (and, built, faces.json and model.glb)")
+    unknown = sorted(k for k in files if not BUILT.match(k))
+    if unknown:
+        raise Problem(f"not part of a build: {', '.join(unknown[:5])}")
     try:
-        proc.start()
-    except (OSError, EOFError, RuntimeError):      # no fork server to be had here: build as before, and stop asking
-        global _forks
-        _forks = False
-        return run_build_cold(project_dir, name, out_dir, exports)
-    proc.join(BUILD_TIMEOUT)
-    if proc.is_alive():
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)      # and whatever it started
-        except (ProcessLookupError, PermissionError):
-            proc.kill()
-        proc.join(10)
-        return _failed(project_dir, name, out_dir, f"the build took longer than {BUILD_TIMEOUT} s and was stopped")
-    if not result_file.exists():
-        why = "killed: most likely it ran out of memory or CPU time" if proc.exitcode in (-9, -24, 137) else "it crashed"
-        return _failed(project_dir, name, out_dir, f"the build process died (exit {proc.exitcode}): {why}")
-    result = json.loads(result_file.read_text())
-    result["wall"] = round(time.time() - started, 2)      # start to finish as the server saw it
-    return result
-
-
-def run_build_cold(project_dir: Path, name: str, out_dir: Path, exports=()) -> dict:
-    """The same in a process started from nothing: every build loads the kernel again. The fallback."""
-    result_file = out_dir / "result.json"
-    env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "VIRTUAL_ENV")}
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    env.update(OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")   # one build, one core
-    try:
-        proc = subprocess.run([sys.executable, "-m", "monet.runner", str(project_dir), name, str(out_dir), ",".join(exports)],
-                              cwd=project_dir, env={**env, "PYTHONPATH": str(Path(__file__).resolve().parent.parent)},
-                              capture_output=True, text=True, timeout=BUILD_TIMEOUT, preexec_fn=_limits)
-    except subprocess.TimeoutExpired:
-        return _failed(project_dir, name, out_dir, f"the build took longer than {BUILD_TIMEOUT} s and was stopped")
-    if not result_file.exists():
-        why = "killed: most likely it ran out of memory or CPU time" if proc.returncode in (-9, -24, 137) else \
-            (proc.stderr or proc.stdout).strip()[-600:] or "no output"
-        return _failed(project_dir, name, out_dir, f"the build process died (exit {proc.returncode}): {why}")
-    return json.loads(result_file.read_text())
+        r = json.loads(files["result.json"].decode("utf-8"))
+        geo = json.loads(files["faces.json"].decode("utf-8")) if "faces.json" in files else None
+    except ValueError:
+        raise Problem("result.json or faces.json of that build cannot be read")
+    if not isinstance(r, dict) or r.get("note") != name or not isinstance(r.get("ok"), bool):
+        raise Problem(f"that result.json is not of a build of {name}")
+    deps = r.get("deps")
+    if not isinstance(deps, dict) or f"{name}.py" not in deps or not all(DEP.match(str(k)) and isinstance(v, str) for k, v in deps.items()):
+        raise Problem("that result.json does not say what the build read (deps)")
+    if r["ok"]:
+        fp, glb = r.get("fingerprint"), files.get("model.glb", b"")
+        good = isinstance(fp, dict) and all(k in fp for k in FINGERPRINT) and isinstance(r.get("tags"), dict) \
+            and isinstance(r.get("parts"), list) and isinstance(r.get("literals"), str) \
+            and isinstance(geo, dict) and all(isinstance(geo.get(k), list) for k in ("faces", "parts"))
+        if not good:
+            raise Problem("that build is missing what a build has: fingerprint, tags, parts, literals, faces.json")
+        if glb[:4] != b"glTF":
+            raise Problem("model.glb of that build is not a GLB")
+    return r
 
 
 class Workspaces:
@@ -277,8 +207,9 @@ class Workspace:
         if template:
             if template not in self.all.template_names():
                 raise Problem(f"no template {template!r}; there are: {', '.join(self.all.template_names())}", 404)
+            # with what Monet built of its own templates when its image was made (monet/prebuild.py): they open built
             shutil.copytree(self.all.templates / template, target,
-                            ignore=shutil.ignore_patterns("_*", "out", "versions", "__pycache__", ".*"))
+                            ignore=shutil.ignore_patterns("_*", "versions", "__pycache__", ".*"))
         else:
             target.mkdir()
         if not (target / "monet.json").exists():
@@ -298,8 +229,6 @@ class Workspace:
         """The project and every saved version of it, gone from the server. The user's door only."""
         p = self.project(name)
         with p.lock:
-            if p.building():
-                raise Problem(f"{name} is being built just now: delete it when that is done", 409)
             gone = self.dir / f".deleted-{name}-{time.time_ns()}"
             p.dir.rename(gone)      # from here on it is no project; then its files go
             shutil.rmtree(gone, ignore_errors=True)
@@ -503,15 +432,31 @@ class Project:
     def note_names(self) -> list[str]:
         return [n for n in self.files() if self.is_note(n)]
 
-    # ---- building ----------------------------------------------------------------
+    # ---- builds (made by the agent; nothing is built here) ---------------------------
     def _building(self, name: str) -> threading.RLock:
         with _locks_guard:
             return _locks.setdefault(f"{self.dir}/{name}", threading.RLock())
 
-    def _fresh(self, result: dict | None) -> bool:
+    def _fresh(self, result: dict | None, where: Path | None = None) -> bool:
+        """Whether a build is of the files as they are now (in the project, or in a saved version: where): with this
+        server's Monet and kernel, and every file it read unchanged (the Note's own TAGS, JOINTS, GROUND and TIPS
+        aside: note.geometry_key)."""
+        where = where or self.dir
         if not result or not result.get("deps") or result.get("libs") != runner.versions():
             return False
-        return all((self.dir / f).exists() and _sha(self.dir / f) == h for f, h in result["deps"].items())
+        return all(DEP.match(f) and (where / f).exists() and notes.dep_key(f, (where / f).read_bytes(), result.get("note")) == h
+                   for f, h in result["deps"].items())
+
+    def _stale(self, where: Path, result: dict) -> str | None:
+        """The first file a build read that is not as it was then, or what else makes it not current."""
+        if result.get("libs") != runner.versions():
+            return f"built with {result.get('libs')}, and this server has {runner.versions()}"
+        for f, h in (result.get("deps") or {}).items():
+            if not DEP.match(f) or not (where / f).exists():
+                return f"{f} is not in the project"
+            if notes.dep_key(f, (where / f).read_bytes(), result.get("note")) != h:
+                return f"{f} is not as it was when that build was made"
+        return None
 
     def cached(self, name: str) -> dict | None:
         f = self.out / name / "result.json"
@@ -520,29 +465,89 @@ class Project:
         except json.JSONDecodeError:
             return None
 
+    def waiting(self, name: str) -> str:
+        """What the agent is told when a Note has no build for its source as it is now."""
+        what = "has no build for its source as it is now" if self.cached(name) else "is not built yet"
+        return f"{name} {what}: your agent builds it on its own computer and uploads it (monet.py build {self.name} {name})"
+
     def result(self, name: str, exports=()) -> dict:
-        """The build of a Note as its files are now: from the cache when nothing it read has changed."""
-        self.read(name)
-        with self._building(name):   # per Note, so a save can build several at once while it holds the project
+        """The current build of a Note: what the agent built for its files as they are now. None is made here: one
+        that is not current is refused (409). Where only the Note's TAGS, JOINTS, GROUND or TIPS changed since (the
+        person tagged a face, made a joint), its tags and joints are worked out again from what the build left."""
+        source = self.read(name)
+        with self._building(name):
             r = self.cached(name)
-            have = all((self.out / name / f"model.{e}").exists() for e in exports)
-            if self._fresh(r) and (have or not r["ok"]):
-                return r
-            key, began = (str(self.dir), name), time.time()
-            _running[key] = began
-            try:
-                r = run_build(self.dir, name, self.out / name, exports)
-            finally:
-                _running.pop(key, None)
-            if r["ok"]:
-                self._took(name, {"seconds": round(time.time() - began, 2), "at": now(), "kernel": r.get("seconds"), "build": r.get("build_seconds")})
-            self.touch()
+            if not self._fresh(r):
+                raise Problem(self.waiting(name), 409)
+            if r["ok"] and r.get("literals") != notes.literals_key(source):
+                r = self._derive(name, r, source)
+            missing = [e for e in exports if not (self.out / name / f"model.{e}").exists()]
+            if r["ok"] and missing:
+                raise Problem(f"{name} was built without {', '.join(missing)}: your agent builds it again with "
+                              f"--export {','.join(missing)} (monet.py build {self.name} {name} --export {','.join(missing)})", 409)
             return r
 
+    def _derive(self, name: str, r: dict, source: str) -> dict:
+        """The build's tags and joints worked out again for the Note's TAGS, JOINTS, GROUND and TIPS as they are now,
+        from what the build left (monet/derive.py): nothing of the Note is run for it."""
+        from . import render
+        out = self.out / name
+        parsed = notes.parse(source)
+        verts, tris, _ = render.load(out / "model.glb")
+        geo = json.loads((out / "faces.json").read_text())
+        r = dict(r)
+        r["tags"], r["motion"] = derive.found({k: parsed[k] for k in ("tags", "joints", "ground", "tips")},
+                                              r["fingerprint"]["bbox"], geo, verts, tris)
+        r["literals"] = notes.literals_key(source)
+        tmp = out / "result.json.new"
+        tmp.write_text(json.dumps(r, default=str))
+        tmp.replace(out / "result.json")
+        return r
+
+    def accept_build(self, name: str, files: dict, version: int | None = None) -> dict:
+        """What the agent built of a Note, uploaded: {file name: bytes}. Taken only if it is a build of the files as
+        they are here (in the project, or in saved version `version`), with this server's Monet and kernel; each file
+        by its name, and nothing else. Answers the report (or, of a saved version, its load check)."""
+        self._path(name)
+        r = _build_problem(name, files)
+        with self.lock, self._building(name):
+            if version is None:
+                where = self.dir
+            else:
+                where = self._vpath(int(version))
+                if not (where / "meta.json").exists():
+                    raise Problem(f"there is no version {version} of {self.name}", 404)
+            if not (where / f"{name}.py").exists():
+                raise Problem(f"there is no Note {name!r} in {self.name}" + (f" version {version}" if version is not None else ""), 404)
+            why = self._stale(where, r)
+            if why:
+                raise Problem(f"that build of {name} is not of the files here: {why}. Build it again from them "
+                              f"(monet.py build fetches them)", 409)
+            r["built"] = "agent"
+            files = {**files, "result.json": json.dumps(r, default=str).encode()}
+            outs = where / "out"
+            outs.mkdir(exist_ok=True)
+            coming, gone = outs / f".incoming-{name}-{time.time_ns()}", outs / f".gone-{name}-{time.time_ns()}"
+            try:
+                coming.mkdir()
+                for f, data in files.items():
+                    (coming / f).write_bytes(data)
+                if (outs / name).exists():
+                    (outs / name).rename(gone)
+                coming.rename(outs / name)      # the new build whole, or the old one as it was
+            finally:
+                shutil.rmtree(coming, ignore_errors=True)
+                shutil.rmtree(gone, ignore_errors=True)
+            if version is not None:
+                return {"version": int(version), "accepted": True, "load_check": self.load_check(name)}
+            if r["ok"]:
+                self._took(name, {"seconds": r.get("wall") or r.get("seconds"), "at": now(), "by": "agent", "build": r.get("build_seconds")})
+            self.touch()
+        return self.report(name)
+
     def took(self) -> dict:
-        """How long the last good build of each Note took, start to finish as the server saw it: {seconds, at, and
-        of that: kernel (in the build process), build (in the Note's own build())}. What the next one is expected
-        to take, and what the canvas shows as its progress."""
+        """How long the last good build of each Note took on the agent's computer: {seconds, at, by, build (in the
+        Note's own build())}."""
         try:
             return json.loads((self.out / ".times.json").read_text())
         except (OSError, json.JSONDecodeError):
@@ -550,30 +555,25 @@ class Project:
 
     def _took(self, name: str, entry: dict) -> None:
         with _times_guard:
+            self.out.mkdir(exist_ok=True)
             times = {**self.took(), name: entry}
             tmp = self.out / ".times.json.new"
             tmp.write_text(json.dumps(times, indent=1))
             tmp.replace(self.out / ".times.json")
 
-    def expected(self, name: str, times: dict | None = None, kept: dict | None = None) -> float | None:
-        """How long a build of this Note is expected to take: as long as its last good one. Of a build kept from
-        before times were kept, what the build process itself said it took."""
-        took = (self.took() if times is None else times).get(name)
-        if took:
-            return took["seconds"]
-        kept = kept if kept is not None else self.cached(name)
-        return kept.get("seconds") if kept and kept.get("ok") else None
-
-    def building(self) -> list:
-        """The builds of this project under way now, with how long each has run and how long it took last time."""
-        times, here = self.took(), str(self.dir)
-        return [{"note": name, "since": round(time.time() - began, 1), "expect": self.expected(name, times)}
-                for (folder, name), began in list(_running.items()) if folder == here]
-
     def report(self, name: str, result: dict | None = None) -> dict:
-        """Build and checks of one Note: what the agent and the canvas both look at."""
-        r = result or self.result(name)
-        out = {"note": name, "built": r["ok"], "seconds": r.get("seconds")}
+        """Build and checks of one Note: what the agent and the canvas both look at. A Note with no build for its
+        source as it is now says so (state "stale": there is an older one; "unbuilt") and what the agent does."""
+        if result is None:
+            try:
+                result = self.result(name)
+            except Problem as e:
+                if e.status != 409:
+                    raise
+                return {"note": name, "built": False, "state": "stale" if self.cached(name) else "unbuilt",
+                        "green": False, "waiting": str(e), "checks": []}
+        r = result
+        out = {"note": name, "built": r["ok"], "state": "built" if r["ok"] else "error", "by": r.get("built"), "seconds": r.get("seconds")}
         if r["ok"] and self.took().get(name):
             out["took"] = self.took()[name]
             out["seconds"] = out["took"]["seconds"]
@@ -618,69 +618,19 @@ class Project:
                     raise Problem(f"load check is RED for {name}: the saved part no longer rebuilds to what was saved "
                                   f"({'; '.join(c['what'] for c in lc['changes'][:4])}). Do not edit it. Ask the user to look at it in "
                                   "the canvas and acknowledge; only they can.", 409)
+                if lc["status"] == "waiting":
+                    raise Problem(f"load check of {name} is waiting: {lc['message']}. Then edit it.", 409)
             path.write_text(source if source.endswith("\n") else source + "\n")
             self.touch()
             if parsed["error"] and "syntax" in parsed["error"]:
                 return {"note": name, "built": False, "green": False, "error": parsed["error"], "checks": []}
             if not parsed["is_note"]:
                 return {"note": name, "module": True, "green": True,
-                        "message": "saved as a helper module (no build() in it); Notes that import it rebuild on their next check"}
+                        "message": "saved as a helper module (no build() in it); the Notes that import it need building again (monet.py build)"}
             report = self.report(name)
             if parsed["error"]:
                 report["warning"] = parsed["error"]
             return report
-
-    def part(self, name: str, upload: str, part: int, of: int, text: str, exact: bool = False) -> dict:
-        """One part of a Note that is too long to send in one request (an agent that can only fetch addresses, and
-        not long ones). Parts come in any order and may come twice; `upload` is a word the sender made up for this
-        one sending of the file, so that parts of an earlier try are never mixed in. Answers {have, missing}, and
-        once every part is here also `source`: the whole file. After uploaded(): {done: True}.
-
-        Parts of text are whole lines, put together with a line break between them; `exact` parts (pieces of one
-        base64 string) are put together as they are."""
-        self._path(name)
-        if not re.match(r"^[A-Za-z0-9_-]{1,40}$", upload or ""):
-            raise Problem("a Note sent in parts needs `upload`: a short word you make up (letters, digits), a new one for every upload")
-        if not 1 <= part <= of <= MAX_PARTS:
-            raise Problem(f"`part` is the number of this part, from 1 to `of`; `of` is how many there are in all (at most {MAX_PARTS})")
-        store = self.out / ".uploads.json"
-        with self.lock:
-            try:
-                uploads = json.loads(store.read_text())
-            except (OSError, json.JSONDecodeError):
-                uploads = {}
-            cur = uploads.get(name)
-            if not cur or cur["upload"] != upload:      # a new sending of this Note: what was held of another is dropped
-                cur = {"upload": upload, "of": of, "exact": exact, "parts": {}}
-            elif cur.get("done"):
-                return {"done": True}
-            elif cur["of"] != of or cur["exact"] != exact:
-                raise Problem(f"upload {upload!r} began as {cur['of']} parts of {'base64' if cur['exact'] else 'text'}: "
-                              "to send it differently, start over with a new word for `upload`")
-            cur["parts"][str(part)] = text
-            if sum(len(t) for t in cur["parts"].values()) > 2 * MAX_SOURCE:
-                raise Problem("that is too long for a Note")
-            have = sorted(int(k) for k in cur["parts"])
-            out = {"have": have, "missing": [k for k in range(1, of + 1) if k not in have]}
-            if not out["missing"]:
-                pieces = [cur["parts"][str(k)] for k in range(1, of + 1)]
-                out["source"] = "".join(pieces) if exact else "\n".join(t.removesuffix("\n").removesuffix("\r") for t in pieces) + "\n"
-            uploads[name] = cur
-            self.out.mkdir(exist_ok=True)
-            store.write_text(json.dumps(uploads))
-            return out
-
-    def uploaded(self, name: str, upload: str) -> None:
-        """The Note of this upload is written: its parts are let go, and it is remembered as done."""
-        store = self.out / ".uploads.json"
-        with self.lock:
-            try:
-                uploads = json.loads(store.read_text())
-            except (OSError, json.JSONDecodeError):
-                return
-            if (uploads.get(name) or {}).get("upload") == upload:
-                uploads[name] = {"upload": upload, "done": True}
-                store.write_text(json.dumps(uploads))
 
     def delete(self, name: str) -> None:
         with self.lock:
@@ -768,13 +718,18 @@ class Project:
         return {**json.loads((self._vpath(v) / f"{name}.fingerprint.json").read_text()), "v": v}
 
     def save(self, message: str = "", commit: str = "") -> dict:
-        """Nothing is saved on red: every Note must build and pass its checks. Then the whole project is one version."""
+        """Nothing is saved on red: every Note must be built for its source as it is and pass its checks. Then the
+        whole project is one version."""
         with self.lock:
             names = self.note_names()
             if not names:
                 raise Problem("there is no Note to save yet")
-            with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-                reports = dict(zip(names, pool.map(self.report, names)))
+            reports = {n: self.report(n) for n in names}
+            waiting = {n: r["waiting"] for n, r in reports.items() if r.get("waiting")}
+            if waiting:
+                return {"saved": False, "waiting": waiting,
+                        "message": "nothing is saved before every Note is built for its source as it is: monet.py build "
+                                   f"{self.name} builds them all, then save again"}
             red = {n: r for n, r in reports.items() if not r["green"]}
             if red:
                 why = {n: r.get("error") or [f"{c['id']}: {c['what']} is {c['value']}, must be {c['expect']}" for c in r["checks"] if not c["ok"]]
@@ -795,6 +750,11 @@ class Project:
             meta = {"n": n, "at": now(), "message": str(message).strip()[:300], "commit": str(commit).strip()[:64], "notes": {}}
             changed = []
             for name in names:
+                # what was built of it, kept with the version: its load check, and exports of the version
+                (vdir / "out" / name).mkdir(parents=True)
+                for f in ("result.json", "model.stl", "model.3mf", "model.step"):
+                    if (self.out / name / f).exists():
+                        shutil.copy2(self.out / name / f, vdir / "out" / name / f)
                 r = self.cached(name)
                 fp = {"fingerprint": r["fingerprint"], "tags": {k: {"resolved": t["resolved"], "measure": t.get("measure", {})} for k, t in r["tags"].items()},
                       "libs": r["libs"], "params": r.get("params", {})}
@@ -820,10 +780,12 @@ class Project:
         then = {f.name: f.read_bytes() for f in list(src.glob("*.py")) + list(src.glob("*.checks.json")) + [src / "monet.json"] if f.exists()}
         return now != then
 
-    def model(self, name: str, version: str | int = "draft") -> Path:
-        """The GLB of the draft or of a saved version."""
+    def model(self, name: str, version: str | int = "draft", last: bool = False) -> Path:
+        """The GLB of the draft or of a saved version. last: the draft's last build even when it is not of the source
+        as it is now (the canvas shows it, marked so, while the agent builds)."""
         if str(version) in ("draft", "", "None"):
-            self.result(name)
+            if not last:
+                self.result(name)
             p = self.out / name / "model.glb"
         else:
             s = self.saved(name, int(version))
@@ -847,8 +809,10 @@ class Project:
             if not (src / f"{name}.py").exists():
                 raise Problem(f"{name} is not in version {version}", 404)
             out = src / "out" / name
-            with self.lock:
-                r = json.loads((out / "result.json").read_text()) if (out / f"model.{fmt}").exists() else run_build(src, name, out, (fmt,))
+            if not (out / f"model.{fmt}").exists():
+                raise Problem(f"version {version} of {name} was built without {fmt}: your agent builds that version with "
+                              f"--export {fmt} (monet.py build {self.name} {name} --version {int(version)} --export {fmt})", 409)
+            r = json.loads((out / "result.json").read_text())
         if not r["ok"]:
             raise Problem(f"{name} does not build: {r.get('error')}", 409)
         return out / f"model.{fmt}"
@@ -866,7 +830,9 @@ class Project:
         (self.out / ".loadcheck.json").write_text(json.dumps(cache))
 
     def load_check(self, name: str) -> dict:
-        """Rebuild the saved Note from its saved source, here and now, and compare with what was saved."""
+        """The saved Note built again from its saved source, with the Monet and kernel this server has now, compared
+        with what was saved. The build is the agent's (of the version's files, uploaded); until there is one, the
+        load check is "waiting"."""
         with self.lock:
             saved = self.saved(name)
             head = self.head()
@@ -877,7 +843,14 @@ class Project:
             if cache.get("key") == key and name in cache.get("notes", {}):
                 return {**cache["notes"][name], "version": head["n"]}
             src = self._vpath(head["n"])
-            r = run_build(src, name, src / "out" / name)
+            try:
+                r = json.loads((src / "out" / name / "result.json").read_text())
+            except (OSError, ValueError):
+                r = None
+            if not self._fresh(r, src):
+                return {"status": "waiting", "changes": [], "version": head["n"],
+                        "message": f"version {head['n']} of {name} has to be built again with this server's Monet and kernel "
+                                   f"(monet.py build {self.name} does that first)"}
             if not r["ok"]:
                 lc = {"status": "red", "tolerance": self.tolerance, "changes": [{"what": "build", "level": "red", "why": r.get("error")}]}
             else:
@@ -942,15 +915,16 @@ class Project:
             saved_src = (self._vpath(head["n"]) / f"{name}.py") if head else None
             # an assembly is a Note whose build has several parts; before it was ever built, one that says how its
             # parts move (JOINTS) or imports two or more other Notes is taken for one
-            assembly = len(r.get("parts") or []) > 1 if fresh and r["ok"] else bool(parsed[name]["joints"]) or len(notes.imports(src) & (note_names - {name})) > 1
+            assembly = len(r.get("parts") or []) > 1 if r and r.get("ok") else bool(parsed[name]["joints"]) or len(notes.imports(src) & (note_names - {name})) > 1
             rows.append({
                 "name": name, "kind": "assembly" if assembly else "note",
-                "state": "unbuilt" if not fresh else "error" if not r["ok"] else "built",
+                # stale: the agent has not built it since its files changed; its last build is still there to look at
+                "state": ("stale" if r else "unbuilt") if not fresh else "error" if not r["ok"] else "built",
                 "saved": bool(head and name in head["notes"]),
                 "changed": not (saved_src and saved_src.exists() and saved_src.read_text() == src),
-                "seconds": self.expected(name, times, r or {}),      # of its last good build
+                "seconds": (times.get(name) or {}).get("seconds"),      # of its last good build, on the agent's computer
             })
         return {"project": self.name, "rev": self.rev, "printer": self.settings.get("printer"), "material": self.settings.get("material"),
                 "looks": self.settings.get("looks", {}),
                 "animations": self.settings.get("animations", {}),
-                "version": head["n"] if head else None, "notes": rows, "building": self.building(), "workers": WORKERS}
+                "version": head["n"] if head else None, "notes": rows}

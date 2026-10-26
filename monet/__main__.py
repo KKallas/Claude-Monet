@@ -4,8 +4,10 @@
     monet --port 8080 --storage /storage --data /data --max-users 30
 
 The same settings from the environment: PORT, MONET_HOST, MONET_STORAGE, MONET_DATA, MONET_MAX_USERS,
-MONET_BASE_URL (the public address, behind a proxy), MONET_NOTE (a line shown on the login page),
-MONET_RUNNER_URL (where Notes are built, when that is another container: see monet/buildd.py).
+MONET_BASE_URL (the public address, behind a proxy), MONET_NOTE (a line shown on the login page).
+
+The server never runs a Note: people's agents build on their own computers and upload (monet/build.py). Monet's
+own templates are built beforehand, once: python -m monet.prebuild.
 
 People are let in by an admin. The first time, the built-in admin has no password: the link printed
 here opens once to choose one.
@@ -33,9 +35,10 @@ def main():
     admin = app.state.admin
     if not admin.get("password"):
         print(f"\nThe admin ({admin['username']}) has no password yet. Open this link once to choose one:\n  {base}/login?card={admin['card']}\n", flush=True)
-    if not os.environ.get("MONET_RUNNER_URL"):
-        from .workspace import warm
-        warm()      # Notes are built here: load the kernel once, now, so the first build does not wait for it
+    from . import prebuild
+    unbuilt = prebuild.stale(app.state.workspaces.templates)
+    if unbuilt:
+        print(f"{len(unbuilt)} template Notes are not built, so new projects open unbuilt: python -m monet.prebuild\n", flush=True)
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning", proxy_headers=True,
                 forwarded_allow_ips=os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1"))
 

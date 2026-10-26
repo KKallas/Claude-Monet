@@ -54,13 +54,22 @@ wrong:
   in; a card link sets the first password; there is no signing up. Each user has one
   workspace, in a folder named by their user id (never by name or key).
 - **Two doors.** The person: `/w/<username>/…`, behind the login (cookie, or HTTP Basic for
-  scripts). Their agent: `/w/<agent key>/agent/<tool>` (GET or POST), `/w/<agent key>/mcp`
-  and `/w/<agent key>/file/…`, with the key as the only credential. A route belongs to one
+  scripts). Their agent: `/w/<agent key>/agent/<tool>` (POST JSON), `/w/<agent key>/mcp`,
+  `/w/<agent key>/upload/<project>/<note>` (a build, as a zip) and `/w/<agent key>/file/…` (GET),
+  with the key as the only credential. There is no GET or parts workflow for fetch-only LLMs:
+  agents need a shell (Kaspar, 2026-10-26). A route belongs to one
   door or the other (`api()` and `door()` in `monet/app.py`); do not make one answer to both.
 - **No model in the server.** The agent is the user's own harness. One definition of the
   tools serves MCP and HTTPS: `monet/agent.py`; it is described for LLMs at `/api`.
-- **Online, the web app never runs a Note**: it asks the runner container (`monet/buildd.py`),
-  which has the working files and nothing else. Keep accounts and secrets out of `storage/`.
+- **The server never runs a Note** (Kaspar, 2026-10-26). The agent builds on the user's computer
+  (`monet/build.py`, shipped in the skill zip with the server's own modules and its kernel pinned:
+  `builder_script()` in `monet/app.py`) and uploads; `Project.accept_build` takes it only if every file
+  it read matches (`note.dep_key`: the Note's own file by `geometry_key`, without its TAGS/JOINTS/GROUND/
+  TIPS) and the libs equal `runner.versions()`. A canvas edit of those literals is worked out on the
+  server from the stored build (`monet/derive.py`, with the mesh ray test of `monet/rays.py`, which the
+  runner uses too). Never add a path that builds on the server; templates are prebuilt into the image
+  (`monet/prebuild.py`). The load check compares an uploaded build of the saved version (`waiting`
+  until there is one). Keep accounts and secrets out of `storage/`.
 - **Git is the user's**, in a folder on their computer; the server keeps numbered versions.
   No git on the server.
 - **The agent's door has no tool to change or remove a check, acknowledge a load check,
@@ -78,8 +87,9 @@ wrong:
 - **An uploaded archive is not trusted**: `Workspace.import_project` takes files by name
   against `ARCHIVED` and writes each under that name; it never extracts a zip to a path the
   zip gives. Keep it that way.
-- **A Note is only ever executed in `monet/runner.py`**, in its own process. The server
-  reads Notes with `ast` (`monet/note.py`), so `TAGS`, `JOINTS` and `GROUND` must stay plain literals.
+- **A Note is only ever executed in `monet/runner.py`**, in its own process, on the agent's computer
+  (or for the templates, when the image is made). The server reads Notes with `ast` (`monet/note.py`),
+  so `TAGS`, `JOINTS`, `GROUND` and `TIPS` must stay plain literals.
 - **Joints are as-built** (`monet/joints.py`; the canvas's copy is `canvas/motion.js`, and a test
   holds the two together): 0 is where `build()` puts the parts, a joint only says how they may
   still move. No solver: a loop is `follows`, a linear sum of other joints. A clash is *new*
@@ -101,7 +111,9 @@ wrong:
 ```bash
 uv sync
 uv run monet                      # http://localhost:8000; prints the admin's first link
-uv run pytest                     # about a minute and a half: builds every Note; runs the node tests too
+uv run python -m monet.prebuild   # the templates, built once (new projects open built; pytest does it too)
+uv run pytest                     # builds every template Note (where not current) and tests the uploads; node tests too
+MONET_URL=<agent link> python skill/monet/scripts/monet.py build <project>   # build here and upload, as an agent does
 node --test tests/measure.test.mjs   # the measuring geometry alone
 node --test tests/motion.test.mjs    # where the canvas puts parts at a pose of their joints
 uv run python notes/mg400_rakis/_verify.py     # the port against the Fusion numbers, as a table

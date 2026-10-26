@@ -3,7 +3,8 @@
 One set of tools, two ways in: MCP (Claude Desktop, Claude Code and anything else that
 speaks it) at /w/<workspace>/mcp, and plain HTTP (POST /w/<workspace>/agent/<tool> with
 a JSON body) for a harness that only has a shell. They open only while the person has
-remote control on (monet/remote.py).
+remote control on (monet/remote.py). Beside them, one route that is not a tool: the upload
+of what the agent built on its own computer (upload(); the server never runs a Note).
 
 What is deliberately not here: changing or removing a check, acknowledging a load check,
 deleting a Note. Those are the user's, in the canvas. The canvas they have open the agent
@@ -20,7 +21,8 @@ from pathlib import Path
 from typing import Callable
 
 from . import joints, render, tags as tagging
-from .workspace import EXPORTS, Problem, Workspace
+from . import note as notes
+from .workspace import EXPORTS, Problem, Workspace, build_files
 
 GUIDE = Path(__file__).resolve().parent.parent / "skill" / "monet"
 _selection: dict[tuple[str, str], dict] = {}
@@ -96,52 +98,43 @@ def read_note(c: Caller, project: str, note: str) -> dict:
     return out
 
 
-def _unbase64(text: str) -> str:
-    text = "".join(text.split()).replace("+", "-").replace("/", "_").rstrip("=")
-    try:
-        return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4)).decode("utf-8")
-    except (ValueError, UnicodeDecodeError):
-        raise Problem("source_b64 is not base64 (or base64url) of UTF-8 text")
-
-
-def write_note(c: Caller, project: str, note: str, source: str = "", source_b64: str = "", upload: str = "", part: int = 0, of: int = 0) -> dict:
-    """Send the whole source of a Note (one Python file: docstring, PARAMS, TAGS, build()), as `source` or, where
-    text gets mangled on the way, as `source_b64` (base64 or base64url of it). The server builds it and runs the
-    checks; the answer is the report. `green: true` means it builds, every tag still finds its feature and every
-    check passes. Refused if the load check of the saved Note is red: then stop and tell the user.
-
-    Too long for one request (a fetch tool that fails on long addresses)? Send it in parts: the same call several
-    times, each with `upload` (a short word you make up, a new one for every upload), `part` (1, 2, 3...) and `of`
-    (how many parts in all). Each part's `source` is some whole lines of the file, in order: the server puts a
-    line break between parts. (Parts of `source_b64` are pieces of the one base64 string, cut anywhere.) Parts
-    may arrive in any order, all at once, and again if one failed. Each answer lists what is `missing`; the answer
-    to the part that completes the file is the report, with `written: true`."""
+def write_note(c: Caller, project: str, note: str, source: str) -> dict:
+    """Send the whole source of a Note (one Python file: docstring, PARAMS, TAGS, build()). The server keeps it and
+    never runs it: then build it on the user's computer and upload what it left (`monet.py push` does all three, and
+    answers the report). Until then the report says `state` "stale" or "unbuilt" and what to run. Refused if the load
+    check of the saved Note is red (stop and tell the user) or waiting (build the saved version first)."""
     p = c.ws.project(project)
-    if part or of or upload:
-        got = p.part(note, upload, part, of, source_b64 or source, exact=bool(source_b64))
-        if got.get("done"):      # sent again after the file was put together: here is how that went
-            report = p.report(note) if p.is_note(note) else {"note": note}
-            return {**report, "upload": upload, "written": True, "already": True, "canvas": c.canvas(project, note)}
-        if got["missing"]:
-            return {"note": note, "upload": upload, "written": False, "of": of, "have": got["have"], "missing": got["missing"],
-                    "next": f"send part {', '.join(map(str, got['missing']))} the same way (upload={upload}, of={of}). "
-                            "The Note is written, built and checked when the last one is here: that answer is the report."}
-        source = _unbase64(got["source"]) if source_b64 else got["source"]
-    elif source_b64:
-        source = _unbase64(source_b64)
-    if not source.strip():
-        raise Problem("write_note needs the Note's source (`source`, or `source_b64`)")
     report = p.write(note, source, agent=True)
     report["canvas"] = c.canvas(project, note)
-    if upload:
-        p.uploaded(note, upload)
-        report.update(upload=upload, written=True, parts=of, lines=source.count("\n"))
     return report
 
 
+def sources(c: Caller, project: str, version: int = 0) -> dict:
+    """Every Python file of a project as the server has it (version 0), or as saved version `version` has it: what
+    a build is made from. `monet.py build` fetches these into a folder of its own and builds there."""
+    p = c.ws.project(project)
+    where = p.dir if not version else p._vpath(int(version))
+    if version and not (where / "meta.json").exists():
+        raise Problem(f"there is no version {version} of {project}", 404)
+    return {"project": project, "version": int(version) or None,
+            "files": {f.name: f.read_bytes().decode("utf-8") for f in sorted(where.glob("*.py")) if notes.NAME_RE.match(f.stem)}}
+
+
+def upload(c: Caller, project: str, note: str, data: bytes, version: int | None = None) -> dict:
+    """What the agent built of a Note on its own computer, as a zip (monet/build.py zipped()): taken by name, and
+    only if it is a build of the files the server has."""
+    p = c.ws.project(project)
+    result = p.accept_build(note, build_files(data), version)
+    result["canvas"] = c.canvas(project, note)
+    if c.done:
+        c.done("build", {"project": project, "note": note}, result)
+    return result
+
+
 def check(c: Caller, project: str, note: str) -> dict:
-    """Build the Note as it is now and run its checks. Use after the user changed something from the canvas, or
-    after you changed a module that this Note imports."""
+    """The Note's checks run again on its current build (none is made here). Use after the user changed something in
+    the canvas: tags and joints they made are worked out again from the build. If its source (or a module it
+    imports) changed since it was built, the report says so and what to run."""
     return c.ws.project(project).report(note)
 
 
@@ -360,10 +353,10 @@ def export(c: Caller, project: str, note: str, format: str = "3mf", version: str
             "bytes": path.stat().st_size, "format": format, "mime": EXPORTS[format]}
 
 
-TOOLS = {f.__name__: f for f in (guide, status, new_project, read_note, write_note, check, look, pose, reach, selection, add_check,
-                                 load_check, save, versions, diff, export, screen, goto, view)}
-READ_ONLY = {"guide", "status", "read_note", "check", "look", "pose", "reach", "selection", "load_check", "versions", "diff", "export",
-             "screen", "view"}
+TOOLS = {f.__name__: f for f in (guide, status, new_project, read_note, write_note, sources, check, look, pose, reach, selection,
+                                 add_check, load_check, save, versions, diff, export, screen, goto, view)}
+READ_ONLY = {"guide", "status", "read_note", "sources", "check", "look", "pose", "reach", "selection", "load_check", "versions", "diff",
+             "export", "screen", "view"}
 TRIED = {"goto"}     # written down before it runs: the person saw the page move, whether or not it got there
 
 

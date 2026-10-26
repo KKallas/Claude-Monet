@@ -15,6 +15,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import urllib.parse
 import zipfile
@@ -135,6 +136,44 @@ def coerce(value, annotation):
     return value
 
 
+# what the agent's builder is made of: Monet's own modules that build a Note, as this server has them
+BUILDER_MODULES = ("__init__", "build", "runner", "derive", "rays", "tags", "joints", "semmelweis", "note")
+BUILDER_PINS = ("build123d", "cadquery-ocp-novtk", "numpy", "manifold3d")
+
+
+def builder_script() -> str:
+    """scripts/builder.py of the skill: a script uv runs in an environment of its own, with exactly the CAD kernel and
+    libraries this server has (a build made with others is not taken: Project.accept_build)."""
+    from importlib.metadata import PackageNotFoundError, version as installed
+    pins = []
+    for name in BUILDER_PINS:
+        try:
+            pins.append(f'#     "{name}=={installed(name)}",')
+        except PackageNotFoundError:
+            pass
+    py = f"{sys.version_info.major}.{sys.version_info.minor}"      # the server's own: its pins are for it
+    return f"""# /// script
+# requires-python = "=={py}.*"
+# dependencies = [
+{chr(10).join(pins)}
+# ]
+# ///
+\"\"\"Monet's builder, as the server this skill came from has it: builds Notes here, on the user's computer.
+
+    uv run --script builder.py <project dir> <out dir> [--export stl,3mf,step] <note> [<note> ...]
+
+monet.py build runs it; you need not. It prints one line of JSON per Note.
+\"\"\"
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from monet.build import main  # noqa: E402
+
+main()
+"""
+
+
 def tool_docs() -> dict:
     out = {}
     for name, fn in agent.TOOLS.items():
@@ -153,11 +192,12 @@ def docs(base: str) -> str:
     return f"""# Monet API
 
 Monet is a CAD workspace for 3D-printed parts. You (an LLM agent) write each part as a small Python file, a
-"Note", using build123d. This server builds it, measures it, runs the user's checks, draws pictures, keeps
-saved versions and exports files for printing. The human watches in a browser canvas and clicks the faces they mean.
+"Note", using build123d, and build it on the user's computer. This server keeps the Notes and what you built of
+them, measures, runs the user's checks, draws pictures, keeps saved versions and serves files for printing. It never
+runs a Note. The human watches in a browser canvas and clicks the faces they mean.
 
-Everything is plain HTTPS, with no headers and no login of your own: the user's agent key, in the address,
-is your access to their workspace.
+You need MCP or a shell: building needs Python, with the same Monet and CAD kernel as this server, on the user's
+computer. The user's agent key, in the address, is your access to their workspace.
 
 ## 1. Your address
 
@@ -168,38 +208,24 @@ it where others can read it. Below, KEY stands for the agent key in that link: p
 
 ## 2. Call tools
 
-    GET  {base}/w/KEY/agent/TOOL?arg=value&arg=value
-    POST {base}/w/KEY/agent/TOOL          with a JSON object of arguments
+    POST {base}/w/KEY/agent/TOOL          with a JSON object of arguments (Content-Type: application/json)
 
-Both do the same; the order of the arguments does not matter. (This page puts `note` first on purpose: some
-page readers turn the letters "&not" into another sign.) Answers are JSON. A mistake of yours comes back as {{"error": "what was wrong", "status": 4xx}}:
-by POST with that HTTP status, by GET inside a 200 (so that a fetch tool which hides failed pages still shows it
-to you). Always look for `error` in the answer.
+or the same tools over MCP: `{base}/w/KEY/mcp`. Answers are JSON; a mistake of yours comes back with its HTTP
+status and {{"error": "what was wrong"}}.
 
-Sending a Note (write_note) needs its whole source. Any of these works:
+## 3. Building
 
-    POST .../agent/write_note   JSON {{"project": "...", "note": "...", "source": "..."}}
-    POST .../agent/write_note?note=...&project=...     with the Python source as the body (Content-Type: text/plain)
-    GET  .../agent/write_note?note=...&project=...&source=THE-SOURCE-URL-ENCODED
-    GET  .../agent/write_note?note=...&project=...&source_b64=THE-SOURCE-AS-BASE64URL
+The skill (the user downloads it from "Connect your agent", with their link in it) has `scripts/monet.py`. It needs
+`uv` (https://docs.astral.sh/uv/), which fetches Python, Monet's builder and the CAD kernel, pinned to this server's:
 
-**If you can only GET, send a Note in parts.** Many fetch tools fail on a long address, without saying why, and
-a Note does not fit in a short one. So cut the file into parts of a few whole lines each, small enough that every
-address stays under about 700 characters after encoding, and fetch one address per part:
+    python scripts/monet.py push PROJECT note.py      send the Note, build it and what uses it here, upload: the report
+    python scripts/monet.py build PROJECT [NOTE…]     build what is not built for its source as it is (and, first, a
+                                                      saved version the load check is waiting for), and upload it
 
-    GET .../agent/write_note?note=cube&project=demo&upload=k7&part=1&of=3&source=THE-FIRST-LINES-URL-ENCODED
-    GET .../agent/write_note?note=cube&project=demo&upload=k7&part=2&of=3&source=THE-NEXT-LINES
-    GET .../agent/write_note?note=cube&project=demo&upload=k7&part=3&of=3&source=THE-LAST-LINES
-
-- `upload` is a short word you make up: the same in every part of one upload, a new one for every upload.
-- A part is whole lines, with their indentation. The server puts a line break between parts, so do not end a
-  part in the middle of a line. In the address a line break inside a part is %0A, a space %20, a quote %22.
-- Any order, all at once if your tool can, and again if a fetch failed: sending a part twice does no harm.
-- Each answer says `written: false` and lists what is `missing`. The answer to the part that completes the file
-  has `written: true` and is the report (built, checks, green). If that answer got lost, send any part again:
-  you get the report.
-- If you can run code but only GET: base64url the whole file, cut that string anywhere, and send the pieces as
-  `source_b64` instead of `source`, the same way.
+A Note that is not built for its source as it is says so: `state` "stale" or "unbuilt", and `waiting` says what to
+run. What a build leaves goes up as a zip, by POST to {base}/w/KEY/upload/PROJECT/NOTE (?version=N for a saved
+version): result.json, faces.json, model.glb and any model.stl, model.3mf, model.step. The server takes it only if it
+is a build of the files it has, with its own Monet and kernel.
 
 **Remote control.** The link opens nothing until the user switches remote control on, in their canvas. It ends by
 itself after 15 minutes in which neither they nor you did anything, and when they log out: then every call says so.
@@ -214,12 +240,9 @@ key. The `canvas` links in the answers are for the user: they open in a browser,
 Start with `guide` (the Note format, tags, checks, the loop to follow, the rules that are not yours to bend),
 then `status`.
 
-    GET {base}/w/KEY/agent/guide
-    GET {base}/w/KEY/agent/status
+## 4. The rules in one breath
 
-## 3. The rules in one breath
-
-Read a Note before you edit it. Send the whole file. Look at the picture, do not assume. A red check means
+Read a Note before you edit it. Send the whole file, then build it. Look at the picture, do not assume. A red check means
 fix the geometry, never the check: checks belong to the user (you can add one, not change or remove one). Save
 only when everything is green. If the load check of a saved Note is red, stop and tell the user. If you can
 write files and run git on the user's computer, keep the Notes in a local folder and commit after every
@@ -231,7 +254,7 @@ successful save: the history is theirs.
 ## Also
 
 - `GET {base}/w/KEY/agent` lists the tools as JSON.
-- MCP (Claude Desktop, Claude Code and others): `{base}/w/KEY/mcp` (streamable HTTP).
+- MCP (Claude Code, Claude Desktop and others): `{base}/w/KEY/mcp` (streamable HTTP). Building still needs the shell.
 - What only the person can do, logged in at their canvas: change or remove a check, acknowledge a load check,
   delete a Note. The agent key does not open those.
 - Source: {version()["source"]} ({version()["license"]}).
@@ -301,7 +324,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
     async def body_of(request: Request):
         if request.method not in ("POST", "PUT"):
             return {}
-        if "zip" in request.headers.get("content-type", ""):      # a project as an archive: bytes, and only so many
+        if "zip" in request.headers.get("content-type", ""):      # a project as an archive, or a build: bytes, and only so many
             got = bytearray()
             async for chunk in request.stream():
                 got += chunk
@@ -309,8 +332,6 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
                     raise Problem(f"that archive is bigger than a project may be ({MAX_ARCHIVE // 1_000_000} MB)", 413)
             return {"_zip": bytes(got)}
         raw = await request.body()
-        if raw and "json" not in request.headers.get("content-type", "json"):
-            return {"_raw": raw.decode("utf-8", "replace")}      # a Note sent as plain text
         if not raw:
             return {}
         try:
@@ -352,7 +373,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
             owner = auth.find_by_key(store, request.path_params["wid"])
             if owner is None or not remote.live(owner):
                 why = remoting.GONE if owner else "this agent link is not valid (any more): ask the user for the one in their canvas, under Connect your agent"
-                return JSONResponse({"error": why, "status": 404}, 200 if request.method == "GET" else 404)
+                return JSONResponse({"error": why}, 404)
             seen(owner)
             remote.note(owner)
             return await inside(request, owner, fn)
@@ -396,13 +417,17 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         return JSONResponse({**info, "templates": workspaces.template_names(), "coming": coming(store.dir, info["commit"])}, headers=NO_STORE)
 
     def skill_archive(link: str = "") -> Response:
-        """The skill (skill/monet/), and with a link: link.txt beside SKILL.md, so that it is the one download an agent
-        needs. That one holds the agent key: it is given only to the person, behind their login."""
+        """The skill (skill/monet/), with the builder the agent builds with (this server's own Monet, and the kernel
+        pinned to this server's: builder_script()); and with a link: link.txt beside SKILL.md, so that it is the one
+        download an agent needs. That one holds the agent key: it is given only to the person, behind their login."""
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             for f in sorted((ROOT / "skill" / "monet").rglob("*")):
                 if f.is_file() and "__pycache__" not in f.parts:
                     z.write(f, Path("monet") / f.relative_to(ROOT / "skill" / "monet"))
+            z.writestr("monet/scripts/builder.py", builder_script())
+            for name in BUILDER_MODULES:
+                z.write(ROOT / "monet" / f"{name}.py", f"monet/lib/monet/{name}.py")
             if link:
                 z.writestr("monet/link.txt", link + "\n")
         return Response(buf.getvalue(), media_type="application/zip",
@@ -638,7 +663,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
 
     def rev(request, ws, _body):
         p = ws.project(request.path_params["project"])
-        return {"rev": p.rev, "building": p.building()}
+        return {"rev": p.rev}
 
     def get_note(request, ws, _body):
         p, name = note_of(request, ws)
@@ -659,12 +684,15 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         return out
 
     def model(request, ws, _body):
+        """?last=1: the draft's last build, even one the agent has not made again since the source changed."""
         p, name = note_of(request, ws)
-        return FileResponse(p.model(name, request.query_params.get("v", "draft")), media_type="model/gltf-binary", headers=NO_STORE)
+        last = request.query_params.get("last") == "1"
+        return FileResponse(p.model(name, request.query_params.get("v", "draft"), last=last), media_type="model/gltf-binary", headers=NO_STORE)
 
     def faces(request, ws, _body):
         p, name = note_of(request, ws)
-        p.result(name)
+        if request.query_params.get("last") != "1":
+            p.result(name)
         f = p.out / name / "faces.json"
         if not f.exists():
             raise Problem(f"{name} does not build", 404)
@@ -841,29 +869,29 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
 
     # ---- the agent's door, as plain HTTP ------------------------------------------
     def agent_call(request, ws, body):
-        """Any tool, by GET with a query string (for an LLM that can only fetch addresses) or by POST with JSON.
-        A Note can also be the body itself (text/plain)."""
+        """Any tool, by POST with a JSON object of its arguments."""
         name = request.path_params["tool"]
         fn = agent.TOOLS.get(name)
-        args = dict(request.query_params)
-        raw = body.pop("_raw", None)
-        args.update(body)
-        if raw is not None:
-            args["source"] = raw
+        args = dict(body)
         if fn:
             args = {k: coerce(v, inspect.signature(fn).parameters[k].annotation) if k in inspect.signature(fn).parameters else v
                     for k, v in args.items()}
         owner = request.state.owner
-        try:
-            result, png = agent.call(name, caller(ws, owner, request.headers, request.url.scheme), args)
-        except Problem as e:
-            if request.method != "GET":
-                raise
-            # many LLM fetch tools show nothing of a 4xx answer: by GET, a mistake is told in a 200 the model can read
-            return {"error": str(e), "status": e.status}
+        result, png = agent.call(name, caller(ws, owner, request.headers, request.url.scheme), args)
         if png and "image/png" in request.headers.get("accept", ""):
             return Response(png, media_type="image/png", headers=NO_STORE)
         return result
+
+    def upload_build(request, ws, body):
+        """What the agent built of a Note on its own computer (monet/build.py), as a zip: taken by name, and only if
+        it is a build of the files here. ?version=N: of a saved version, for its load check."""
+        if "_zip" not in body:
+            raise Problem("send the build as a zip (Content-Type: application/zip): result.json, faces.json, model.glb …")
+        v = request.query_params.get("version")
+        if v is not None and not v.isdigit():
+            raise Problem("version is the number of a saved version")
+        c = caller(ws, request.state.owner, request.headers, request.url.scheme)
+        return agent.upload(c, request.path_params["project"], request.path_params["note"], body["_zip"], int(v) if v else None)
 
     def agent_tools(request, _ws, _body):
         owner = request.state.owner
@@ -934,7 +962,8 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route(n + "/export.{fmt}", api(export)),
         # the agent's door: /w/<agent key>: the tools, and the files their answers point at
         Route("/w/{wid}/agent", door(agent_tools)),
-        Route("/w/{wid}/agent/{tool}", door(agent_call), methods=["GET", "POST"]),
+        Route("/w/{wid}/agent/{tool}", door(agent_call), methods=["POST"]),
+        Route("/w/{wid}/upload/{project}/{note}", door(upload_build), methods=["POST"]),
         Route(f + "/render.png", door(picture)),
         Route(f + "/model.glb", door(model)),
         Route(f + "/fingerprint.json", door(fingerprint)),

@@ -91,11 +91,10 @@ def test_the_link_opens_nothing_until_the_person_switches_it_on(app, live, mari)
     c, link = mari
     assert c.get("/w/mari/api/state").json()["remote"]["on"] is False
     with contextlib.nullcontext(TestClient(app)) as nobody:      # (not entered: the server is started once, by `live`)
-        off = nobody.get(f"{link}/agent/status").json()
-        assert off["status"] == 404 and "remote control is off" in off["error"]
-        assert nobody.post(f"{link}/agent/status", json={}).status_code == 404
-        assert nobody.get(f"{link}/file/p/starter/n/rod_foot/render.png").status_code == 200       # a GET says why inside a 200
-        assert "error" in nobody.get(f"{link}/file/p/starter/n/rod_foot/render.png").json()
+        off = nobody.post(f"{link}/agent/status", json={})
+        assert off.status_code == 404 and "remote control is off" in off.json()["error"]
+        picture = nobody.get(f"{link}/file/p/starter/n/rod_foot/render.png")
+        assert picture.status_code == 404 and "remote control is off" in picture.json()["error"]
     # MCP stays connected while it is off: it lists its tools, and every call says, in words, that it is off
     assert rpc(live, link, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}).status_code == 200
     tools = {t["name"] for t in rpc(live, link, "tools/list").json()["result"]["tools"]}
@@ -106,16 +105,16 @@ def test_the_link_opens_nothing_until_the_person_switches_it_on(app, live, mari)
 
     view = c.put("/w/mari/api/remote", json={"on": True}).json()
     assert view["on"] and 14 * 60_000 < view["left"] <= 15 * 60_000 and view["tabs"] == 0
-    s = c.get(f"{link}/agent/status").json()
+    s = c.post(f"{link}/agent/status", json={}).json()
     assert s["projects"] == ["mg400_rakis", "starter"] and s["remote"]["minutes_left"] == 15 and s["pages"] == []
     assert json.loads(rpc(live, link, "tools/call", {"name": "status", "arguments": {}}).json()["result"]["content"][0]["text"])["pages"] == []
     # no canvas open: the tools that ask one say so, the others work
-    assert "no canvas of Mari is open" in c.get(f"{link}/agent/screen").json()["error"]
-    assert c.get(f"{link}/agent/view").json()["status"] == 503
+    assert "no canvas of Mari is open" in c.post(f"{link}/agent/screen", json={}).json()["error"]
+    assert c.post(f"{link}/agent/view", json={}).status_code == 503
     assert c.put("/w/mari/api/remote", json={"on": False}).json()["on"] is False
-    assert c.get(f"{link}/agent/status").json()["status"] == 404
+    assert c.post(f"{link}/agent/status", json={}).status_code == 404
     assert c.put("/w/mari/api/remote", json={"on": True}).json()["on"]        # the same link works again
-    assert c.get(f"{link}/agent/status").json()["projects"]
+    assert c.post(f"{link}/agent/status", json={}).json()["projects"]
 
 
 def test_the_agent_sees_the_open_canvas_and_takes_it_somewhere(app, live, admin, mari):
@@ -134,22 +133,22 @@ def test_the_agent_sees_the_open_canvas_and_takes_it_somewhere(app, live, admin,
         return False, f'the canvas does not know "{m["what"]}"'
 
     with canvas(c, "mari", answer) as (_ws, asked):
-        assert until(lambda: c.get(f"{link}/agent/status").json()["pages"])
-        assert c.get(f"{link}/agent/status").json()["pages"] == [{"project": "starter", "note": "rod_foot", "room": "part", "on_screen": True}]
+        assert until(lambda: c.post(f"{link}/agent/status", json={}).json()["pages"])
+        assert c.post(f"{link}/agent/status", json={}).json()["pages"] == [{"project": "starter", "note": "rod_foot", "room": "part", "on_screen": True}]
         assert c.get("/w/mari/api/remote").json()["tabs"] == 1
-        assert c.get(f"{link}/agent/screen").json()["panel"].startswith("Part 45")
-        assert c.get(f"{link}/agent/goto", params={"project": "mg400_rakis", "note": "rakis", "room": "assembly"}).json()["note"] == "rakis"
-        assert "room is sketch" in c.get(f"{link}/agent/goto", params={"room": "kitchen"}).json()["error"]       # not asked at all
-        assert "no project 'nope'" in c.get(f"{link}/agent/goto", params={"project": "nope"}).json()["error"]
-        refused = c.get(f"{link}/agent/goto", params={"note": "gone"}).json()
-        assert refused["status"] == 422 and "no Note" in refused["error"]
+        assert c.post(f"{link}/agent/screen", json={}).json()["panel"].startswith("Part 45")
+        assert c.post(f"{link}/agent/goto", json={"project": "mg400_rakis", "note": "rakis", "room": "assembly"}).json()["note"] == "rakis"
+        assert "room is sketch" in c.post(f"{link}/agent/goto", json={"room": "kitchen"}).json()["error"]       # not asked at all
+        assert "no project 'nope'" in c.post(f"{link}/agent/goto", json={"project": "nope"}).json()["error"]
+        refused = c.post(f"{link}/agent/goto", json={"note": "gone"})
+        assert refused.status_code == 422 and "no Note" in refused.json()["error"]
         r = rpc(live, link, "tools/call", {"name": "goto", "arguments": {"room": "motion"}}).json()["result"]
         assert not r["isError"] and json.loads(r["content"][0]["text"])["room"] == "motion"
         # there is no tool that runs code in the page, by any door
-        assert "no tool 'page'" in c.get(f"{link}/agent/page", params={"code": "monet.S.note"}).json()["error"]
+        assert "no tool 'page'" in c.post(f"{link}/agent/page", json={"code": "monet.S.note"}).json()["error"]
         assert rpc(live, link, "tools/call", {"name": "page", "arguments": {"code": "1"}}).json()["result"]["isError"]
         # a picture of the canvas as it is on the screen: its address by HTTP, the picture itself by MCP
-        seen = c.get(f"{link}/agent/view").json()
+        seen = c.post(f"{link}/agent/view", json={}).json()
         assert seen["bytes"] == len(PNG) and "png" not in seen
         assert c.get(seen["image"].split("testserver", 1)[1]).content == PNG
         r = rpc(live, link, "tools/call", {"name": "view", "arguments": {}}).json()["result"]
@@ -161,7 +160,7 @@ def test_the_agent_sees_the_open_canvas_and_takes_it_somewhere(app, live, admin,
     assert not any(w.startswith(("screen", "view", "status")) for w in recent)      # looking is not written down
     log = admin.get("/api/users").json()["log"]
     assert any(e["type"] == "agent" and e["tool"] == "goto" and e.get("project") is None and e.get("note") is None for e in log)      # by MCP too
-    assert until(lambda: c.get(f"{link}/agent/status").json()["pages"] == [])      # the tab closed
+    assert until(lambda: c.post(f"{link}/agent/status", json={}).json()["pages"] == [])      # the tab closed
 
 
 def test_it_ends_by_itself_and_hangs_up_on_the_page(app, admin):
@@ -170,7 +169,7 @@ def test_it_ends_by_itself_and_hangs_up_on_the_page(app, admin):
     u = owner(app, "toomas")
     # every call of the agent starts the 15 minutes again; so does the person doing something in the canvas
     u["agent"]["until"] = time.time() + 60
-    c.get(f"{link}/agent/status")
+    c.post(f"{link}/agent/status", json={})
     assert u["agent"]["until"] > time.time() + 14 * 60
     with canvas(c, "toomas", lambda m: (True, None)) as (ws, _asked):
         u["agent"]["until"] = time.time() + 60
@@ -182,7 +181,7 @@ def test_it_ends_by_itself_and_hangs_up_on_the_page(app, admin):
         assert u["agent"]["until"] < time.time() + 61
     # 15 minutes of nothing: off, and it says why
     u["agent"]["until"] = time.time() - 1
-    assert "remote control is off" in c.get(f"{link}/agent/status").json()["error"]
+    assert "remote control is off" in c.post(f"{link}/agent/status", json={}).json()["error"]
     view = c.get("/w/toomas/api/remote").json()
     assert view["on"] is False and view["off"]["why"] == "idle" and view["recent"] == []
     # switched off: the page is hung up on
@@ -197,11 +196,11 @@ def test_it_ends_by_itself_and_hangs_up_on_the_page(app, admin):
     # a new password ends it, and so does logging out
     c.put("/w/toomas/api/remote", json={"on": True})
     assert c.put("/api/me/password", json={"current": "correct horse", "password": "another good one"}).status_code == 200
-    assert c.get(f"{link}/agent/status").json()["status"] == 404 and c.get("/w/toomas/api/remote").json()["off"]["why"] == "login"
+    assert c.post(f"{link}/agent/status", json={}).status_code == 404 and c.get("/w/toomas/api/remote").json()["off"]["why"] == "login"
     c.put("/w/toomas/api/remote", json={"on": True})
-    assert c.get(f"{link}/agent/status").json()["projects"]
+    assert c.post(f"{link}/agent/status", json={}).json()["projects"]
     c.post("/api/logout")
-    assert c.get(f"{link}/agent/status").json()["status"] == 404
+    assert c.post(f"{link}/agent/status", json={}).status_code == 404
     assert u["agent"]["off"]["why"] == "logout"
     log = [e for e in admin.get("/api/users").json()["log"] if e.get("user") == "toomas" and e["type"].startswith("remote")]
     assert [e.get("why") for e in log if e["type"] == "remote-off"] == ["logout", "login", "you", "idle"]      # newest first

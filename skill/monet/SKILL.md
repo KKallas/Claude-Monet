@@ -1,6 +1,6 @@
 ---
 name: monet
-description: Design 3D-printable parts in Monet, a CAD workspace where each part is a small build123d Python file (a "Note") that a Monet server builds, checks and shows in a browser canvas. Use this whenever the user mentions Monet, a Note, their Monet workspace, canvas or workspace link, or asks to design, change, check, compare or export a printed part, jig, fixture, bracket or holder while Monet tools (status, write_note, look, save and the like) or a Monet workspace link are available. Also use it when the user says "this face" or "that hole" about a part shown in Monet.
+description: Design 3D-printable parts in Monet, a CAD workspace where each part is a small build123d Python file (a "Note") that you build on the user's computer and a Monet server checks and shows in a browser canvas. Use this whenever the user mentions Monet, a Note, their Monet workspace, canvas or workspace link, or asks to design, change, check, compare or export a printed part, jig, fixture, bracket or holder while Monet tools (status, write_note, look, save and the like) or a Monet workspace link are available. Also use it when the user says "this face" or "that hole" about a part shown in Monet.
 ---
 
 # Monet
@@ -10,9 +10,10 @@ The work is split three ways:
 
 - **The user** describes the part and points at faces in a browser canvas. They own the checks.
 - **You** write the part as a *Note*: one Python file with the intent, the parameters, the named
-  features and a `build()` function. You think and write on the user's computer.
-- **The Monet server** runs the Note, measures the result, runs the user's checks, renders
-  pictures, keeps the saved versions and exports files for printing.
+  features and a `build()` function, and **build it** on the user's computer with Monet's builder
+  (`scripts/monet.py`), which uploads what the build left. You think, write and build there.
+- **The Monet server** never runs a Note. It keeps the Notes and your builds of them, measures,
+  runs the user's checks, renders pictures, keeps the saved versions and serves files for printing.
 
 There is no feature tree and no history of operations. The Note plus its written intent is the
 whole state, so when something changes you re-derive the geometry from the intent rather than
@@ -20,24 +21,22 @@ patching the previous shape.
 
 ## Getting connected
 
-Your tools, in whichever form the harness gives them:
+You need a **shell** on the user's computer with [uv](https://docs.astral.sh/uv/) (Claude Code,
+Cowork, Codex and the like): building runs there. Your tools, in whichever form the harness gives them:
 
-- **A `link.txt` beside this file**: the skill was downloaded from the user's canvas and carries
-  their agent link. `scripts/monet.py` reads it by itself (`python scripts/monet.py status`), and
-  with a way to fetch web addresses you can call `<the link>/agent/<tool>` directly.
+- **`scripts/monet.py`**, in this skill: every tool over HTTPS, and the building. When the skill
+  was downloaded from the user's canvas, `link.txt` beside this file carries their agent link and
+  the script reads it by itself (`python scripts/monet.py status`); else set `MONET_URL` to the
+  link (it looks like `https://host/w/AbC123…`; they find it in their canvas under "Connect your
+  agent"). It needs nothing but Python; for building it runs `uv`.
 - **MCP tools** from a connector usually called Monet: `guide`, `status`, `new_project`,
-  `read_note`, `write_note`, `check`, `look`, `pose`, `reach`, `selection`, `add_check`, `load_check`, `save`,
-  `versions`, `diff`, `export`, and for the canvas the user has open: `screen`, `goto`, `view`.
-- **A shell but no MCP tools**: `scripts/monet.py` in this skill does the same over HTTP. Set
-  `MONET_URL` to the user's agent link (it looks like `https://host/w/AbC123…`; they find it in
-  their canvas under "Connect your agent"), then `python scripts/monet.py status`.
-- **Only the ability to fetch web addresses** (a chat interface with internet access): every tool
-  is also a plain HTTPS address, `GET <agent link>/agent/<tool>?arg=value`. Read
-  `<the Monet site>/api` first: it lists every tool. A Note is too long for one address, and fetch
-  tools fail on long ones: send it in parts (`write_note` with `upload`, `part`, `of`; a few whole
-  lines per part, every address under about 700 characters), as `/api` shows.
+  `read_note`, `write_note`, `sources`, `check`, `look`, `pose`, `reach`, `selection`, `add_check`,
+  `load_check`, `save`, `versions`, `diff`, `export`, and for the canvas the user has open: `screen`,
+  `goto`, `view`. Use them when you have them; build with the script all the same.
+- **No shell** (a chat with only the connector): you can read, look, point and add checks, but not
+  build, so you cannot change a part. Say so once, and ask the user for a harness with a shell.
 - **None of these**: ask the user to log in to their Monet site and use "Connect your agent"
-  there. It shows the exact addresses for them to give you.
+  there. It shows what to download and set up.
 
 **The link works only while the user has remote control on.** They switch it on in their canvas,
 under "Connect your agent". It ends by itself after 15 minutes in which neither they nor you did
@@ -52,6 +51,29 @@ tool answers are different: they are the user's own pages, behind their login, a
 Start every session with `status()`. It lists the projects and gives the canvas link: pass that
 link to the user so they can watch the part change and point at it. What only they can do there,
 logged in: change or remove a check, acknowledge a load check.
+
+## Building
+
+The server never runs a Note: you build it here, with the same Monet and the same CAD kernel as
+the server (the skill's `scripts/builder.py` pins them; uv fetches them the first time, a few
+hundred MB, and keeps them), and upload what the build left.
+
+```bash
+python scripts/monet.py push <project> <note>.py ...   # send, build it and every Note that uses it, upload: the reports
+python scripts/monet.py build <project> [<note> ...]   # build what is not built for its source as it is, and upload
+python scripts/monet.py build <project> <note> --export stl,3mf   # with the files for printing
+```
+
+- A Note whose source changed since it was built reports `state: "stale"` (its last build is still
+  shown, marked so, in the canvas) or `"unbuilt"`, and `waiting` says what to run. A change to a
+  module makes every Note that imports it stale; `build` with no Note named finds them all.
+- The user's tags, joints and ground, made in the canvas, change no geometry: the server works them
+  out from your last build, and the Note stays built. A tag that `build()` itself reads (a sketch it
+  cuts) does change the geometry: then the Note is stale until you build it.
+- The server takes a build only if it is of the files it has, with its own Monet and kernel. Build
+  from what it has (`build` and `push` fetch it into a folder of their own), never from your copy.
+- Exports (`export`) are served from what you built: a format you did not build with answers what
+  to run (`--export stl`).
 
 ## The canvas the user has open
 
@@ -110,6 +132,8 @@ Follow this for every change. Each step exists because skipping it has burned so
    `load_check`: green means the saved part still rebuilds to exactly what was saved. Yellow
    (within print tolerance, usually a library update): tell the user and continue. **Red: stop.**
    Do not edit; ask the user to look at it in the canvas and acknowledge. Only they can.
+   **Waiting**: the saved version has not been built with the server's kernel yet (after an update
+   of the server): `monet.py build <project>` builds it first, then the server compares.
 2. **Find out what they mean.** When the user says "this face", "these edges", "here", "that
    hole", call `selection`. In the canvas they select points, lines (edges), faces or whole
    objects, one or many, and you get them as `items`: a face with its kind, place, size and a
@@ -117,15 +141,17 @@ Follow this for every change. Each step exists because skipping it has burned so
    with its coordinates; an object (a part of an assembly) with its name. `measure` carries what
    the canvas worked out: the distance between two points or two parallel faces, total length,
    total area. Coordinates are the part's own, in millimetres.
-3. **Edit the Note** in the local folder, then send the whole file with `write_note`. The answer
-   is the report: does it build, does every tag still find its feature, does every check pass.
+3. **Edit the Note** in the local folder, then `monet.py push <project> <note>.py`: it sends the
+   whole file, builds it here and uploads it. The answer is the report: does it build, does every
+   tag still find its feature, does every check pass. (Sent with `write_note` alone, it is not
+   built: run `monet.py build <project>`.)
 4. **Look at it.** Call `look` and study the picture; "it ran without errors" is not success. Use
    `views` such as `iso_under` or `bottom` when the change is underneath, and `tags=true` to see
    what each tag points at.
 5. **Red? Fix the geometry.** Never the checks. If a check and the request truly conflict, stop
    and tell the user which check and why; changing it is their decision, in the canvas.
-6. **Green: save, then commit.** `save(project, message)` builds every Note in the project and
-   refuses if any is red. On success commit in the local folder as above.
+6. **Green: save, then commit.** `save(project, message)` refuses while any Note is not built for
+   its source (build them) or is red. On success commit in the local folder as above.
 7. **Report plainly**: what changed, the numbers that matter, the canvas link, and that they can
    click a version in the canvas to see the colour-map diff. `diff` gives you the same comparison
    in numbers.
@@ -323,7 +349,11 @@ A **check** is a measurement and the range it must stay in, for example
   step back and rebuild the feature a simpler way.
 - **A tag is "not found"**: read its `why`. Usually you moved or resized the feature; the report
   often says where the nearest match is.
-- **`save` refuses**: it lists every red Note. A change in a shared module can break a Note you
+- **An upload is refused**: it says which file is not as it was when you built (build again: `build`
+  fetches the server's files), or that the build was made with another Monet or kernel (download the
+  skill again from the canvas: it carries the server's).
+- **`save` refuses**: it lists every Note that is not built (`waiting`: run `monet.py build`) and
+  every red one. A change in a shared module can break a Note you
   were not looking at; run `check` on those.
 - **The tools answer "no such workspace"**: the workspace link is wrong or the workspace was
   removed. Ask the user for the link shown in their canvas.

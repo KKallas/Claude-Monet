@@ -2,6 +2,7 @@
 .venv
 storage
 out
+notes/*/out
 tests
 docs
 deploy

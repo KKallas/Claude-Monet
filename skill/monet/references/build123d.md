@@ -1,6 +1,6 @@
 # build123d for Notes: cheat sheet and traps
 
-The server runs build123d 0.13. `from build123d import *` at the top of every Note. Millimetres,
+Notes are built with build123d 0.13 (the skill's builder pins the version the server has). `from build123d import *` at the top of every Note. Millimetres,
 Z up. Return one shape from `build()`.
 
 ## Two styles; pick one per Note
