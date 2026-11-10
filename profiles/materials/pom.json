@@ -1,0 +1,8 @@
+{
+ "name": "POM (acetal)",
+ "printed": false,
+ "density": 1.41,
+ "max_temp_c": 90,
+ "look": "pom",
+ "notes": "Machined or bought: bushings, gears, slides. Low friction."
+}

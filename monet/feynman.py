@@ -12,7 +12,11 @@ Measurements: volume_cm3, area_cm2, size_x/y/z, min_x..max_z, com_x/y/z, solids,
 valid, tag.<name>.resolved, tag.<name>.<measure> (lists as tag.<name>.at[0]); of an assembly
 interference_mm3 (parts overlapping as built), and of each joint joint.<name>.resolved,
 joint.<name>.stop_min / stop_max (where moving it first hits something, each way) and
-joint.<name>.clash_mm3 (the worst new overlap anywhere in its range).
+joint.<name>.clash_mm3 (the worst new overlap anywhere in its range); joint.<name>.torque_max_nmm (force_max_n of a
+slider: what gravity asks of it at worst) and joint.<name>.torque_margin (its DRIVES against that); of each named pose
+(POSES) pose.<name>.interference_mm3, pose.<name>.clash_mm3 and pose.<name>.clear.<keepout>. mass_g (and
+part.<name>.mass_g), from the materials; bom.unlisted (parts the BOM does not name); pieces (how many a part is printed
+in: then fits_bed and solids hold for every piece).
 """
 import json
 import re
@@ -43,17 +47,37 @@ def measurements(result: dict) -> dict:
             else:
                 m[f"tag.{name}.{k}"] = v
     m.update(joints.measurements(result.get("motion")))
+    mats = result.get("materials")
+    if mats:
+        m["mass_g"] = mats["mass_g"]
+        for name, row in mats["parts"].items():
+            if row["mass_g"] is not None and len(mats["parts"]) > 1:
+                m[f"part.{name}.mass_g"] = row["mass_g"]
+    if result.get("bom"):
+        m["bom.unlisted"] = len(result["bom"]["unlisted"])
+    pieces = result.get("pieces")
+    if pieces:     # what is printed is the pieces: one solid each, and each on the bed
+        m["pieces"] = len(pieces)
+        m["solids"] = max(q["solids"] for q in pieces)
     return m
 
 
-def _fits_bed(m, check, printer):
+def _fits(size, bed) -> bool:
+    x, y, z = size
+    flat = (x <= bed[0] and y <= bed[1]) or (y <= bed[0] and x <= bed[1])
+    return flat and (len(bed) < 3 or z <= bed[2])
+
+
+def _fits_bed(m, check, printer, pieces=None):
     bed = check.get("bed") or (printer or {}).get("bed")
     if not bed:
         return False, None, "no bed size: give the check a bed or the project a printer"
-    x, y, z = m["size_x"], m["size_y"], m["size_z"]
-    flat = (x <= bed[0] and y <= bed[1]) or (y <= bed[0] and x <= bed[1])
-    ok = flat and (len(bed) < 3 or z <= bed[2])
-    return ok, [round(x, 2), round(y, 2), round(z, 2)], f"bed {bed}"
+    if pieces:      # printed in pieces: every one of them on the bed, as it lies; the value is the biggest
+        sizes = [[q["bbox"][k + 3] - q["bbox"][k] for k in range(3)] for q in pieces]
+        worst = max(sizes, key=lambda s: (not _fits(s, bed), s[0] * s[1] * s[2]))
+        return all(_fits(s, bed) for s in sizes), [round(x, 2) for x in worst], f"bed {bed}, each of {len(pieces)} pieces"
+    size = [m["size_x"], m["size_y"], m["size_z"]]
+    return _fits(size, bed), [round(x, 2) for x in size], f"bed {bed}"
 
 
 def evaluate(checks: list, result: dict, printer: dict | None = None) -> list:
@@ -64,11 +88,12 @@ def evaluate(checks: list, result: dict, printer: dict | None = None) -> list:
         what = c.get("what", "")
         row = {"id": c.get("id"), "what": what, "why": c.get("why", ""), "by": c.get("by", "user")}
         if what == "fits_bed":
-            row["ok"], row["value"], row["expect"] = _fits_bed(m, c, printer)
+            row["ok"], row["value"], row["expect"] = _fits_bed(m, c, printer, result.get("pieces"))
         elif what not in m:
             row.update(ok=False, value=None, expect=_expect(c),
                        note="tag not found on the part" if what.startswith("tag.")
                        else "nothing hit within the sweep" if re.match(r"^joint\.[^.]+\.stop_(min|max)$", what)
+                       else "no such pose, or it is not resolved" if what.startswith("pose.")
                        else "nothing by that name to measure")
         else:
             v = m[what]

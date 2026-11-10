@@ -1,0 +1,8 @@
+{
+ "name": "Aluminium (6060/6061)",
+ "printed": false,
+ "density": 2.7,
+ "max_temp_c": 150,
+ "look": "aluminium",
+ "notes": "Bought stock: tube, rod, sheet. Not printed: no bed or thickness checks apply."
+}

@@ -52,11 +52,12 @@ def _camera(eye, up):
     return r, np.cross(d, r), d      # right, up, towards the camera
 
 
-def _view(verts, tris, segs, tri_colour, eye, up, size, pad=26):
+def _view(verts, tris, segs, tri_colour, eye, up, size, pad=26, fit=None):
+    """fit: (lo, hi) of the view in the camera's x and y, to hold it still over several pictures (an animation)."""
     r, u, d = _camera(eye, up)
     basis = np.stack([r, u, d], axis=1)
     p = verts @ basis                                   # x right, y up, z towards the camera
-    lo, hi = p[:, :2].min(0), p[:, :2].max(0)
+    lo, hi = (p[:, :2].min(0), p[:, :2].max(0)) if fit is None else (np.asarray(fit[0]), np.asarray(fit[1]))
     scale = (size - 2 * pad) / max(1e-9, float((hi - lo).max()))
     off = (size - (hi - lo) * scale) / 2
     px = np.column_stack([(p[:, 0] - lo[0]) * scale + off[0], size - 1 - ((p[:, 1] - lo[1]) * scale + off[1]), p[:, 2]])
@@ -179,3 +180,60 @@ def png(glb: Path, views=("iso", "top", "front", "right"), size=560, faces=None,
     out = io.BytesIO()
     sheet.save(out, format="PNG", optimize=True)
     return out.getvalue()
+
+
+def animation(glb: Path, parts: list, poses: list, view: str = "iso", size: int = 480, fps: float = 15, hide=(), title: str = "",
+              format: str = "gif") -> bytes:
+    """A GIF or an MP4 of an assembly moving: one picture per pose (poses: [{part: 4x4}]), all from one camera that
+    holds the whole motion. hide: parts left out of the picture (keep-outs). Every part in its own colour, as look()
+    paints an assembly. An MP4 is H.264, made by ffmpeg."""
+    size += size % 2          # a video's sides are even
+    verts, tris, segs = load(glb)
+    colour = np.tile(BODY, (len(tris), 1))
+    keep_t, keep_s = np.ones(len(tris), dtype=bool), np.ones(len(segs), dtype=bool)
+    for n, q in enumerate(parts):
+        a, m = q["tris"]
+        if q["name"] in hide:
+            keep_t[a:a + m] = False
+            if "edges" in q:
+                keep_s[q["edges"][0]:q["edges"][0] + q["edges"][1]] = False
+        elif len(parts) > 1:
+            colour[a:a + m] = PALETTE[n % len(PALETTE)]
+    eye, up = VIEWS[view if view in VIEWS else "iso"]
+    r, u, d = _camera(eye, up)
+    basis = np.stack([r, u, d], axis=1)
+    shown = np.unique(tris[keep_t].reshape(-1))
+    moved = [posed(verts, tris, segs, parts, frames) for frames in poses]
+    lo = np.min([(v[shown] @ basis)[:, :2].min(0) for v, _ in moved], axis=0)
+    hi = np.max([(v[shown] @ basis)[:, :2].max(0) for v, _ in moved], axis=0)
+    images = []
+    for n, (v, sg) in enumerate(moved):
+        img, _ = _view(v, tris[keep_t], sg[keep_s], colour[keep_t], eye, up, size, fit=(lo, hi))
+        pic = Image.fromarray(img)
+        ImageDraw.Draw(pic).text((8, 6), f"{title}  {n + 1}/{len(moved)}".strip(), fill=(70, 74, 90))
+        images.append(pic if format == "mp4" else pic.convert("P", palette=Image.Palette.ADAPTIVE, colors=128))
+    if format == "mp4":
+        return mp4(images, fps)
+    out = io.BytesIO()
+    images[0].save(out, format="GIF", save_all=True, append_images=images[1:], duration=max(20, round(1000 / fps)), loop=0, optimize=False)
+    return out.getvalue()
+
+
+def mp4(images: list, fps: float) -> bytes:
+    """RGB pictures of one size as an H.264 MP4 that plays anywhere (yuv420p, the index at the front), by ffmpeg."""
+    import shutil
+    import subprocess
+    import tempfile
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg is not installed on this server: a video cannot be made (a GIF can)")
+    w, h = images[0].size
+    raw = b"".join(np.asarray(im.convert("RGB"), dtype=np.uint8).tobytes() for im in images)
+    with tempfile.TemporaryDirectory() as t:
+        out = Path(t) / "out.mp4"
+        done = subprocess.run([ffmpeg, "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", f"{fps:g}",
+                               "-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-preset", "medium",
+                               "-movflags", "+faststart", str(out)], input=raw, capture_output=True, timeout=600)
+        if done.returncode != 0 or not out.exists():
+            raise RuntimeError(f"ffmpeg could not make the video: {done.stderr.decode(errors='replace')[-300:]}")
+        return out.read_bytes()

@@ -1,0 +1,10 @@
+{
+ "name": "ABS",
+ "printed": true,
+ "density": 1.04,
+ "max_temp_c": 85,
+ "max_solid_thickness": 15,
+ "shrinkage": 0.007,
+ "look": "pla",
+ "notes": "Good to about 85 °C. Warps and cracks between layers on tall parts: enclosure closed, brim, no drafts. Fumes: ventilate."
+}

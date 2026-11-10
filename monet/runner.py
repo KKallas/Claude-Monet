@@ -308,6 +308,69 @@ def imported(project_dir: Path, note: str) -> dict:
     return out
 
 
+def bundle(shapes):
+    """One compound of these shapes, made in the kernel: the shapes stay where they are in the assembly's tree."""
+    from build123d import Compound
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+    c, b = TopoDS_Compound(), BRep_Builder()
+    b.MakeCompound(c)
+    for q in shapes:
+        b.Add(c, q.wrapped)
+    return Compound(c)
+
+
+def printed_pieces(got) -> list:
+    """[(name, shape)] of what pieces() returned: a list (named piece_1 …, or by their labels), a dict {name: shape},
+    or what split() returns (pieces with .shape and .name)."""
+    if isinstance(got, dict):
+        items = list(got.items())
+    else:
+        got = list(got or [])
+        items = [(getattr(q, "name", None) or getattr(getattr(q, "shape", q), "label", "") or f"piece_{i + 1}", getattr(q, "shape", q))
+                 for i, q in enumerate(got)]
+    if not items:
+        raise ValueError("pieces() returned nothing: give the pieces to print, or leave pieces() out")
+    out, seen = [], set()
+    for name, q in items:
+        q = as_shape(q)
+        name = str(name)
+        while name in seen:
+            name += "_"
+        seen.add(name)
+        out.append((name, q))
+    return out
+
+
+def laid_out(pieces, gap=10.0):
+    """The pieces side by side along X, each as it lies (no turning), for one file of them all."""
+    from build123d import Compound, Pos
+    placed, x = [], 0.0
+    for name, q in pieces:
+        bb = q.bounding_box()
+        moved = Pos(x - bb.min.X, -(bb.min.Y + bb.max.Y) / 2, -bb.min.Z) * q
+        moved.label = name
+        placed.append(moved)
+        x += bb.max.X - bb.min.X + gap
+    return Compound(children=placed)
+
+
+def export(out_dir: Path, shape, exports, objects=None):
+    """The files for printing and for other CAD. objects: the pieces, each its own object in a 3MF."""
+    if "stl" in exports:
+        from build123d import export_stl
+        export_stl(shape, str(out_dir / "model.stl"), tolerance=EXPORT_LINEAR, angular_tolerance=EXPORT_ANGULAR)
+    if "step" in exports:
+        from build123d import export_step
+        export_step(shape, str(out_dir / "model.step"))
+    if "3mf" in exports:
+        from build123d import Mesher
+        mesher = Mesher()
+        for q in (shape.children if objects else None) or [shape]:
+            mesher.add_shape(q.solids() or q, linear_deflection=EXPORT_LINEAR, angular_deflection=EXPORT_ANGULAR)
+        mesher.write(str(out_dir / "model.3mf"))
+
+
 def run(project_dir: Path, note: str, out_dir: Path, exports=()) -> dict:
     from . import derive, semmelweis
     from .note import literals_key
@@ -320,32 +383,34 @@ def run(project_dir: Path, note: str, out_dir: Path, exports=()) -> dict:
             raise TypeError("a Note needs a build() function that returns the solid")
         shape = as_shape(mod.build())
         result["build_seconds"] = round(time.time() - t0, 2)
-        result["fingerprint"] = semmelweis.fingerprint(shape)
-        result["valid"] = bool(shape.is_valid)
         groups = parts_of(shape, note)
+        # keep-outs (a beam, an airflow: room to keep clear) are drawn, posed and checked, but they are no material:
+        # not in the fingerprint, the exports or the count of solids
+        from .materials import keepouts
+        keep = set(keepouts([n for n, _ in groups], getattr(mod, "KEEPOUT", None)))
+        if keep:
+            result["keepouts"] = sorted(keep)
+        solid = shape if not keep else bundle([sub for name, sub in groups if name not in keep])
+        result["fingerprint"] = semmelweis.fingerprint(solid)
+        result["valid"] = bool(shape.is_valid)
+        # what is printed, when the part is bigger than the bed: pieces() gives them, each lying as it prints
+        pieces = None
+        if callable(getattr(mod, "pieces", None)):
+            pieces = printed_pieces(mod.pieces())
+            result["pieces"] = [{"name": n, **semmelweis.fingerprint(q)} for n, q in pieces]
         faces, verts, tris, parts = describe(shape, groups)
         result["params"] = getattr(mod, "PARAMS", {})
         result["doc"] = (mod.__doc__ or "").strip()
         result["triangles"] = len(tris)
         segs, edges, points = edges_and_points(groups, parts)
-        literals = {k.lower(): getattr(mod, k, None) for k in ("TAGS", "JOINTS", "GROUND", "TIPS", "PLACED")}
+        literals = {k.lower(): getattr(mod, k, None) for k in ("TAGS", "JOINTS", "GROUND", "TIPS", "PLACED", "POSES", "KEEPOUT")}
         result["snaps"] = derive.clean_snaps(getattr(mod, "SNAPS", None))      # where other Notes may be put
         geo = {"faces": faces, "parts": parts, "edges": edges, "points": points}
         result["tags"], result["motion"] = derive.found(literals, result["fingerprint"]["bbox"], geo, verts, tris, result["snaps"])
         write_glb(out_dir / "model.glb", verts, tris, segs)
         (out_dir / "faces.json").write_text(json.dumps({"faces": faces, "parts": parts, "edges": edges, "points": points}, separators=(",", ":")))
         result["parts"] = [{k: part[k] for k in ("name", "volume", "bbox", "faces")} for part in parts]
-        if "stl" in exports:
-            from build123d import export_stl
-            export_stl(shape, str(out_dir / "model.stl"), tolerance=EXPORT_LINEAR, angular_tolerance=EXPORT_ANGULAR)
-        if "step" in exports:
-            from build123d import export_step
-            export_step(shape, str(out_dir / "model.step"))
-        if "3mf" in exports:
-            from build123d import Mesher
-            mesher = Mesher()
-            mesher.add_shape(shape.solids() or shape, linear_deflection=EXPORT_LINEAR, angular_deflection=EXPORT_ANGULAR)
-            mesher.write(str(out_dir / "model.3mf"))
+        export(out_dir, solid if pieces is None else laid_out(pieces), exports, [q for _, q in pieces] if pieces else None)
         result["ok"] = True
     except BaseException as e:   # also SystemExit and the like: a Note may do anything
         tb = traceback.extract_tb(e.__traceback__)

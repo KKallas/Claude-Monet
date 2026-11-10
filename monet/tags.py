@@ -192,7 +192,10 @@ def _cylinder(concave):
         if not cands:
             return None
         if at is not None:
-            near = min(cands, key=lambda f: math.dist((f["origin"][u], f["origin"][v]), at))
+            # the nearest centre line; of the cylinders on it (a stem under a disc, a counterbore), the one nearest the
+            # diameter. It still measures what is there: one hole on that line, resized, reports its new size
+            near = min(cands, key=lambda f: (round(math.dist((f["origin"][u], f["origin"][v]), at), 2),
+                                             abs(2 * f["radius"] - float(dia)) if dia is not None else 0.0))
         else:
             near = cands[0]
         centre = (near["origin"][u], near["origin"][v])

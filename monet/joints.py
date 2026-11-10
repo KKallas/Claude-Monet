@@ -33,6 +33,7 @@ values of the joints moved by hand that put it there, within their ranges (inver
 canvas does the same, live, when the tip is dragged (canvas/motion.js).
 """
 import math
+import re
 
 import numpy as np
 
@@ -285,10 +286,12 @@ def values(model: dict, given: dict | None = None) -> dict:
     return out
 
 
-def frames(model: dict, given: dict | None = None, free: dict | None = None) -> dict:
+def frames(model: dict, given: dict | None = None, free: dict | None = None, extra: dict | None = None) -> dict:
     """{body: 4x4} where each body is at these joint values (as built: the identity). `free` places free bodies
-    (a dragged part): {body: 4x4}."""
+    (a dragged part): {body: 4x4}. `extra` moves joints by that much more, alone: what follows them stays."""
     v = values(model, given)
+    for k, x in (extra or {}).items():
+        v[k] = v.get(k, 0.0) + x
     out = {b: np.array((free or {}).get(b, np.eye(4)), dtype=float) for b in model["bodies"]}
     for name in model["tree"]:
         row = model["joints"][name]
@@ -301,9 +304,9 @@ def frames(model: dict, given: dict | None = None, free: dict | None = None) -> 
     return out
 
 
-def part_frames(model: dict, given: dict | None = None, free: dict | None = None) -> dict:
+def part_frames(model: dict, given: dict | None = None, free: dict | None = None, extra: dict | None = None) -> dict:
     """{part: 4x4}."""
-    fb = frames(model, given, free)
+    fb = frames(model, given, free, extra)
     return {p: fb[b] for b, ps in model["bodies"].items() for p in ps}
 
 
@@ -545,11 +548,126 @@ def sweep(model: dict, shapes: dict, joint: str, home: dict | None = None) -> di
     return out
 
 
-def analyse(model: dict, shapes: dict) -> dict:
-    """Interference as built, and a sweep of every joint moved by hand."""
-    out = {"interference": interference(shapes), "unchecked": sorted(n for n, m in shapes.items() if m is None), "sweeps": {}}
+def analyse(model: dict, shapes: dict, keepouts=(), poses: dict | None = None) -> dict:
+    """Interference as built, a sweep of every joint moved by hand, and every named pose. Keep-outs (room to keep
+    clear: a beam, an airflow, a hand) are no material: they count only against the others at the named poses."""
+    keep = set(keepouts or ())
+    real = {n: m for n, m in shapes.items() if n not in keep}
+    out = {"interference": interference(real), "unchecked": sorted(n for n, m in shapes.items() if m is None), "sweeps": {}}
     for name in drivers(model):
-        out["sweeps"][name] = sweep(model, shapes, name)
+        out["sweeps"][name] = sweep(model, real, name)
+    if keep:
+        out["keepouts"] = sorted(keep)
+    if poses:
+        out["poses"] = {name: at_pose(model, shapes, given, keep) for name, given in clean_poses(model, poses).items()}
+    return out
+
+
+POSE_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def clean_poses(model: dict, poses) -> dict:
+    """{pose: {joint: value}} as a Note's POSES gives them, or {pose: {"why": …}} for one that cannot be taken."""
+    out = {}
+    if not isinstance(poses, dict):
+        return {"POSES": {"why": "POSES is {name: {joint: value, …}}"}}
+    for name, given in poses.items():
+        if not isinstance(name, str) or not POSE_NAME.match(name):
+            out[str(name)[:64]] = {"why": "a pose's name is letters, digits, _ . -"}
+            continue
+        if not isinstance(given, dict) or not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in given.values()):
+            out[name] = {"why": "a pose is {joint: value, …}: degrees or mm"}
+            continue
+        why = []
+        for j, v in given.items():
+            row = model["joints"].get(j)
+            if row is None:
+                why.append(f"there is no joint {j!r}")
+            elif row["kind"] == "rigid" or not row["resolved"]:
+                why.append(f"{j} does not move" + (f": {row.get('why')}" if row.get("why") else ""))
+            elif row["follows"]:
+                why.append(f"{j} follows {', '.join(row['follows'])}: give those instead")
+            elif row["range"] and not row["range"][0] - 1e-9 <= v <= row["range"][1] + 1e-9:
+                why.append(f"{j} = {v:g} is outside its range {row['range']}")
+        out[name] = {"why": "; ".join(why)} if why else {str(k): float(v) for k, v in given.items()}
+    return out
+
+
+def at_pose(model: dict, shapes: dict, given: dict, keepouts=()) -> dict:
+    """One named pose: every joint's value, the parts that overlap there (all of it: pairs and their sum), what is
+    new over the as-built (clashes, the worst as clash_mm3), and for every keep-out how much of it the parts take up
+    (`clear`: 0 is clear; the body a keep-out rides on does not count against it)."""
+    if "why" in given:
+        return {"resolved": False, "why": given["why"]}
+    keep = set(keepouts or ())
+    real = {n: m for n, m in shapes.items() if n not in keep and m is not None}
+    pf = part_frames(model, given)
+    moved = _moved(real, pf)
+    names = list(moved)
+    hit = overlaps(moved, [(a, b) for i, a in enumerate(names) for b in names[i + 1:]])
+    pairs = sorted(([a, b, round(v, 3)] for (a, b), v in hit.items() if v > CLASH / 2), key=lambda r: -r[2])
+    clashes = pose_clashes(model, real, given)
+    out = {"resolved": True, "values": {k: round(v, 4) for k, v in values(model, given).items()},
+           "interference_mm3": round(sum(r[2] for r in pairs), 3), "pairs": pairs,
+           "clash_mm3": max((c[2] for c in clashes), default=0.0), "clashes": clashes, "clear": {}, "keepout_hits": {}}
+    body_of = {p: b for b, ps in model["bodies"].items() for p in ps}
+    for k in sorted(keep):
+        if shapes.get(k) is None:
+            out["clear"][k] = None
+            continue
+        mk = _moved({k: shapes[k]}, pf)[k]
+        got = overlaps({**moved, k: mk}, [(k, n) for n in names if body_of.get(n) != body_of.get(k)])
+        out["clear"][k] = round(sum(got.values()), 3)
+        out["keepout_hits"][k] = sorted(([n, round(v, 3)] for (_, n), v in got.items() if v > 1e-3), key=lambda r: -r[1])
+    return out
+
+
+def torque(model: dict, masses_g: dict, centres: dict, samples: int = 37) -> dict:
+    """What gravity asks of every joint that moves, over its range (-Z of the assembly is down; the ground holds).
+    By virtual work: the change of the parts' weight times height as the joint moves. For a joint moved by hand that
+    is what its drive must hold, with everything that moves with it (what hangs on it, and what follows it, at the
+    factors of follows); for a joint that follows, `own` is what hangs on it alone, and `at_driver` the same at each
+    joint it follows. Revolute: N·mm (per radian); slider: N. Friction, acceleration and springs are not in it."""
+    weights = {p: (float(masses_g.get(p) or 0.0) / 1000.0 * 9.80665, centres.get(p)) for p in masses_g}
+    weights = {p: (w, np.asarray(c, dtype=float)) for p, (w, c) in weights.items() if w > 0 and c is not None}
+    missing = sorted(p for p, m in masses_g.items() if m is None)
+
+    def energy(given=None, extra=None):
+        pf = part_frames(model, given, None, extra)
+        return sum(w * float((np.asarray(pf.get(p, np.eye(4)))[:3, :3] @ c + np.asarray(pf.get(p, np.eye(4)))[:3, 3])[2])
+                   for p, (w, c) in weights.items())
+
+    out = {}
+    for name, row in model["joints"].items():
+        if row["kind"] == "rigid" or not row["resolved"]:
+            continue
+        per = 180.0 / math.pi if row["kind"] == "revolute" else 1.0     # per degree to per radian; mm stays mm
+        h = 0.01
+        if row["follows"]:
+            spans = [(f * a, f * b) for k, f in row["follows"].items() for a, b in [model["joints"][k]["range"] or ((-180.0, 180.0) if model["joints"][k]["kind"] == "revolute" else (0.0, 0.0))]]
+            lo, hi = (row["range"] or [sum(min(a, b) for a, b in spans), sum(max(a, b) for a, b in spans)])
+        else:
+            lo, hi = row["range"] or ((-180.0, 180.0) if row["kind"] == "revolute" else (0.0, 0.0))
+        xs = [lo + (hi - lo) * k / (samples - 1) for k in range(samples)] if hi > lo else [lo]
+        rows = []
+        for x in xs:
+            if row["follows"]:
+                # the drivers put where this joint is at x (the first one carries it), then this joint alone nudged
+                (d, f), = list(row["follows"].items())[:1]
+                base = {d: x / f} if f else {}
+                t = (energy(base, {name: h}) - energy(base, {name: -h})) / (2 * h) * per
+            else:
+                t = (energy({name: x + h}) - energy({name: x - h})) / (2 * h) * per
+            rows.append([round(x, 3), round(t, 3)])
+        worst = max(rows, key=lambda r: abs(r[1]))
+        unit = "N·mm" if row["kind"] == "revolute" else "N"
+        entry = {"unit": unit, "max": round(abs(worst[1]), 3), "at": worst[0], "samples": rows}
+        if row["follows"]:
+            entry["own"] = True
+            entry["at_driver"] = {k: round(abs(f) * entry["max"], 3) for k, f in row["follows"].items()}
+        if missing:
+            entry["without"] = missing
+        out[name] = entry
     return out
 
 
@@ -580,6 +698,18 @@ def measurements(motion: dict) -> dict:
         for k in ("stop_min", "stop_max", "clash_mm3"):
             if s.get(k) is not None:
                 m[f"joint.{name}.{k}"] = s[k]
+    for name, t in (motion.get("torque") or {}).items():
+        m[f"joint.{name}.torque_max_nmm" if t["unit"] == "N·mm" else f"joint.{name}.force_max_n"] = t["max"]
+        if t.get("margin") is not None:
+            m[f"joint.{name}.torque_margin"] = t["margin"]
+    for name, pose in (motion.get("poses") or {}).items():
+        m[f"pose.{name}.resolved"] = bool(pose.get("resolved"))
+        if pose.get("resolved"):
+            m[f"pose.{name}.interference_mm3"] = pose["interference_mm3"]
+            m[f"pose.{name}.clash_mm3"] = pose["clash_mm3"]
+            for k, v in pose["clear"].items():
+                if v is not None:
+                    m[f"pose.{name}.clear.{k}"] = v
     return m
 
 

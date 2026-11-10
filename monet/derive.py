@@ -8,7 +8,7 @@ import math
 import re
 import time
 
-from . import joints, rays, tags
+from . import joints, materials, rays, tags
 
 
 MAX_SNAPS = 2000
@@ -54,18 +54,38 @@ def attached(spec: dict, placed: dict, snaps: dict, part_names: list) -> dict:
     return spec
 
 
+def riding(spec: dict, keepout, part_names: list) -> dict:
+    """JOINTS with every keep-out that is `on` a part (KEEPOUT = {name: {"on": part}}) held on that part's body, as
+    a placed instance is: the beam goes where the projector goes."""
+    if not isinstance(keepout, dict):
+        return spec
+    spec = dict(spec or {})
+    groups = {n: j for n, j in spec.items() if isinstance(j, dict) and j.get("kind") == "rigid" and j.get("parts")}
+    grouped = {q for j in groups.values() for q in j["parts"]}
+    for name, how in keepout.items():
+        on = how.get("on") if isinstance(how, dict) else None
+        if name not in part_names or not isinstance(on, str) or name in grouped:
+            continue
+        owner = next((g for g, j in groups.items() if on in j["parts"]), on)
+        spec[f"{name}_on"] = {"kind": "rigid", "moves": name, "on": owner}
+    return spec
+
+
 def found(literals: dict, bbox, geo: dict, verts, tris, snaps: dict | None = None) -> tuple:
-    """(tags found, motion or None). literals: the Note's {"tags", "joints", "ground", "tips", "placed"}; geo:
-    faces.json; snaps: the build's snap points."""
+    """(tags found, motion or None). literals: the Note's {"tags", "joints", "ground", "tips", "placed", "poses",
+    "keepout"}; geo: faces.json; snaps: the build's snap points."""
     parts = geo["parts"]
+    names = [p["name"] for p in parts]
     got = tags.resolve(literals.get("tags") or {}, geo["faces"], bbox, blocked=rays.crossing(verts, tris),
                        edges=geo.get("edges"), points=geo.get("points"), parts=parts)
-    spec = attached(literals.get("joints") or {}, literals.get("placed") or {}, snaps or {}, [p["name"] for p in parts])
+    spec = attached(literals.get("joints") or {}, literals.get("placed") or {}, snaps or {}, names)
+    spec = riding(spec, literals.get("keepout"), names)
     if len(parts) < 2 and not spec:
         return got, None
     t0 = time.time()
-    model = joints.resolve(spec, literals.get("ground"), [p["name"] for p in parts], literals.get("tags") or {}, got,
+    model = joints.resolve(spec, literals.get("ground"), names, literals.get("tags") or {}, got,
                            geo["faces"], literals.get("tips") or {})
-    model.update(joints.analyse(model, joints.solids(verts, tris, parts)))
+    model.update(joints.analyse(model, joints.solids(verts, tris, parts), materials.keepouts(names, literals.get("keepout")),
+                                literals.get("poses")))
     model["seconds"] = round(time.time() - t0, 2)
     return got, model

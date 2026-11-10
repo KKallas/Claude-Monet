@@ -14,6 +14,10 @@ builder with uv: https://docs.astral.sh/uv/).
                                              first any saved version the load check waits for, and upload it
     monet.py look <project> <note> [out.png] [views]
     monet.py pose <project> <note> "j1=30, j2=-10" [out.png]   an assembly moved: what it hits, and its picture
+    monet.py animate <project> <note> <keys.json>    keyframes on the timeline: {"fps", "length", "tracks": {joint: [[frame, value], …]}}
+                                             ("none" takes the animation away)
+    monet.py render-animation <project> <note> [out.gif|out.mp4] [view] [fps]   the timeline as a GIF or MP4, rendered by the server
+    monet.py bom <project> <note> [out.csv]  the bill of materials; with out.csv, also as a spreadsheet
     monet.py save <project> "message"        then: git add -A && git commit
     monet.py export <project> <note> <3mf|stl|step|glb> [out]
     monet.py tool <name> ['{"json": "arguments"}']    any tool, raw
@@ -25,7 +29,9 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -35,11 +41,61 @@ LINK = Path(__file__).resolve().parent.parent / "link.txt"
 URL = (os.environ.get("MONET_URL") or (LINK.read_text().strip() if LINK.exists() else "")).rstrip("/")
 
 
+# seconds to wait before each try again, when the server cannot be reached
+RETRIES = tuple(float(x) for x in (os.environ.get("MONET_RETRIES") or "1,3,9").split(",") if x.strip())
+STEP = ["starting"]       # the last thing that was done, for the one line said when the server cannot be reached
+
+
+def done(what: str) -> None:
+    """Say a step finished, as it finishes: a retry after a cut connection then starts from a known place."""
+    STEP[0] = what
+    print(f"  {what}", file=sys.stderr, flush=True)
+
+
+def _host() -> str:
+    return urllib.parse.urlsplit(URL).netloc or "the server"      # never the path: it holds the agent key
+
+
+def _open(req, what: str):
+    """urlopen, tried again when the server cannot be reached (a timeout, a dropped connection); an answer from the
+    server, even an error, is not tried again. In the end one line, never a traceback and never the link."""
+    for wait in (*RETRIES, None):
+        try:
+            return urllib.request.urlopen(req, timeout=600)
+        except urllib.error.HTTPError:
+            raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+            reason = getattr(e, "reason", e)
+            if wait is None:
+                sys.exit(f"monet: cannot reach {_host()} ({_why(reason)}) while {what}; nothing after \"{STEP[0]}\" was done: "
+                         "run the same command again")
+            print(f"  {_host()} did not answer ({_why(reason)}): trying again in {wait} s", file=sys.stderr, flush=True)
+            time.sleep(wait)
+
+
+def _why(reason) -> str:
+    text = str(getattr(reason, "strerror", None) or reason)
+    return "timed out" if "timed out" in text.lower() else text.replace(URL, _host())[:120]
+
+
+def _read(req, what: str):
+    """The answer's bytes; a connection that drops half way through an answer is tried again too."""
+    for wait in (*RETRIES, None):
+        r = _open(req, what)
+        try:
+            with r:
+                return r.read()
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+            if wait is None:
+                sys.exit(f"monet: cannot reach {_host()} ({_why(e)}) while {what}; nothing after \"{STEP[0]}\" was done: "
+                         "run the same command again")
+            time.sleep(wait)
+
+
 def call(tool: str, **args):
     req = urllib.request.Request(f"{URL}/agent/{tool}", json.dumps(args).encode(), {"content-type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=600) as r:
-            return json.load(r)
+        return json.loads(_read(req, f"asking {tool}"))
     except urllib.error.HTTPError as e:
         try:
             sys.exit(f"monet: {json.load(e).get('error')}")
@@ -49,11 +105,18 @@ def call(tool: str, **args):
 
 def fetch(path: str, out: Path) -> bool:
     try:
-        with urllib.request.urlopen(f"{URL}/file{path}", timeout=600) as r:
-            out.write_bytes(r.read())
+        out.write_bytes(_read(f"{URL}/file{path}", f"fetching {path.split('?')[0]}"))
         return True
     except urllib.error.HTTPError:
         return False
+
+
+def get(url: str, out: Path, what: str) -> None:
+    """A file an answer pointed at (a picture, an animation)."""
+    try:
+        out.write_bytes(_read(url, what))
+    except urllib.error.HTTPError as e:
+        sys.exit(f"monet: HTTP {e.code} while {what}")
 
 
 SKILL = Path(__file__).resolve().parent.parent
@@ -82,8 +145,7 @@ def upload(project: str, note: str, out: Path, version=None) -> dict:
     url = f"{URL}/upload/{project}/{note}" + (f"?version={version}" if version else "")
     req = urllib.request.Request(url, buf.getvalue(), {"content-type": "application/zip"})
     try:
-        with urllib.request.urlopen(req, timeout=600) as r:
-            return json.load(r)
+        return json.loads(_read(req, f"uploading {note}"))
     except urllib.error.HTTPError as e:
         try:
             return {"note": note, "green": False, "error": json.load(e).get("error")}
@@ -110,19 +172,43 @@ def build(project: str, notes=None, exports=(), version=None) -> dict:
     print(f"building {', '.join(notes)}" + (f" of version {version}" if version else "") + " here (the first time, uv fetches the CAD kernel) …",
           file=sys.stderr, flush=True)
     cmd = builder() + [str(place), str(place / "out")] + (["--export", ",".join(exports)] if exports else []) + list(notes)
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    done = [json.loads(line) for line in proc.stdout.splitlines() if line.startswith("{")]
-    if not done:
-        sys.exit(f"monet: the builder did not run: {(proc.stderr or proc.stdout).strip()[-1500:]}")
-    answers = {}
-    for row in done:
-        out = place / "out" / row["note"]
-        if (out / "result.json").exists():
-            answers[row["note"]] = upload(project, row["note"], out, version)
+    # each Note is uploaded as soon as it is built: a connection lost half way leaves what was done done, and said
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    answers, ran = {}, False
+    for line in proc.stdout:
+        if not line.startswith("{"):
+            continue
+        ran, row = True, json.loads(line)
+        name, out = row["note"], place / "out" / row["note"]
+        what = f"{name}" + (f" v{version}" if version else "")
+        if row["ok"]:
+            done(f"built {what} in {row.get('seconds')} s")
         else:
-            answers[row["note"]] = {"note": row["note"], "green": False, "error": row.get("error")}
-        print(f"  {row['note']}: built in {row.get('seconds')} s" if row["ok"] else f"  {row['note']}: {row.get('error')}", file=sys.stderr, flush=True)
+            print(f"  {what}: {row.get('error')}", file=sys.stderr, flush=True)
+        if (out / "result.json").exists():
+            answers[name] = upload(project, name, out, version)
+            if answers[name].get("error"):
+                print(f"  {what}: upload refused: {answers[name]['error']}", file=sys.stderr, flush=True)
+            else:
+                done(f"uploaded {what}")
+        else:
+            answers[name] = {"note": name, "green": False, "error": row.get("error")}
+    err = proc.stderr.read()
+    proc.wait()
+    if not ran:
+        sys.exit(f"monet: the builder did not run: {err.strip()[-1500:]}")
     return answers
+
+
+def summary(project: str) -> None:
+    """Where the project stands now, as status(project) has it: what is built, and what still waits for a build."""
+    rows = [n for n in call("status", project=project)["notes"] if n.get("kind") != "module"]
+    built = [n["name"] for n in rows if n.get("state") == "built"]
+    error = [n["name"] for n in rows if n.get("state") == "error"]
+    waiting = [n["name"] for n in rows if n.get("state") in ("stale", "unbuilt")]
+    print(f"{project}: built {', '.join(built) or 'nothing'}" + (f"; does not build: {', '.join(error)}" if error else "")
+          + (f"; still waiting for a build: {', '.join(waiting)} (monet.py build {project})" if waiting else "; nothing waits for a build"),
+          file=sys.stderr, flush=True)
 
 
 def build_all(project: str, notes=None, exports=(), version=None) -> dict:
@@ -168,6 +254,7 @@ def main(argv):
         sent = []
         for f in a[1:]:
             r = call("write_note", project=a[0], note=Path(f).stem, source=Path(f).read_text())
+            done(f"sent {Path(f).name}")
             if r.get("module"):
                 print(f"  {Path(f).stem}: a helper module", file=sys.stderr)
             else:
@@ -178,6 +265,7 @@ def main(argv):
             report = built.get(name) or call("check", project=a[0], note=name)
             show(report)
             red = red or not (report.get("green") or report.get("module"))
+        summary(a[0])
         sys.exit(1 if red else 0)
     elif cmd == "build":
         exports, version, notes = (), None, []
@@ -195,20 +283,36 @@ def main(argv):
         for name, r in answers.items():
             print(json.dumps({"note": name, "green": r.get("green"), "state": r.get("state"), "error": r.get("error"),
                               "load_check": (r.get("load_check") or {}).get("status")}, ensure_ascii=False))
+        summary(a[0])
         sys.exit(0 if all(r.get("green") or r.get("accepted") for r in answers.values()) else 1)
     elif cmd == "look":
         out = Path(a[2] if len(a) > 2 else f"{a[1]}.png")
         r = call("look", project=a[0], note=a[1], **({"views": a[3]} if len(a) > 3 else {}))
-        with urllib.request.urlopen(r["image"], timeout=600) as img:
-            out.write_bytes(img.read())
+        get(r["image"], out, "fetching the picture")
         print(out)
     elif cmd == "pose":
         out = Path(a[3] if len(a) > 3 else f"{a[1]}-pose.png")
         r = call("pose", project=a[0], note=a[1], values=a[2] if len(a) > 2 else "")
-        with urllib.request.urlopen(r.pop("image"), timeout=600) as img:
-            out.write_bytes(img.read())
+        get(r.pop("image"), out, "fetching the picture")
         show(r)
         print(out)
+    elif cmd == "animate":
+        keys = None if a[2] == "none" else json.loads(Path(a[2]).read_text())
+        show(call("animate", project=a[0], note=a[1], animation=keys))
+    elif cmd == "render-animation":
+        out = Path(a[2] if len(a) > 2 else f"{a[1]}.gif")
+        r = call("render_animation", project=a[0], note=a[1], format="mp4" if out.suffix.lower() == ".mp4" else "gif",
+                 **({"view": a[3]} if len(a) > 3 else {}), **({"fps": float(a[4])} if len(a) > 4 else {}))
+        get(r.pop("url"), out, "fetching the animation")
+        show(r)
+        print(out)
+    elif cmd == "bom":
+        r = call("bom", project=a[0], note=a[1])
+        csv_url = r.pop("csv")
+        show(r)
+        if len(a) > 2:
+            get(csv_url, Path(a[2]), "fetching the bill of materials")
+            print(a[2])
     elif cmd == "save":
         commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
         r = call("save", project=a[0], message=a[1] if len(a) > 1 else "", commit=commit)

@@ -1,0 +1,8 @@
+{
+ "name": "Polycarbonate",
+ "printed": false,
+ "density": 1.2,
+ "max_temp_c": 115,
+ "look": "pc",
+ "notes": "Clear sheet or bought parts: not printed here."
+}

@@ -1,0 +1,10 @@
+{
+ "name": "PETG",
+ "printed": true,
+ "density": 1.27,
+ "max_temp_c": 70,
+ "max_solid_thickness": 25,
+ "shrinkage": 0.004,
+ "look": "pla",
+ "notes": "Tougher than PLA and good to about 70 °C. Strings; bridges a little worse. Sticks too well to a smooth PEI sheet: use glue or the textured plate."
+}

@@ -64,6 +64,7 @@ def status(c: Caller, project: str = "") -> dict:
     whether each builds, is saved, or has changed since the last save."""
     if not project:
         return {"projects": c.ws.projects(), "templates": c.ws.all.template_names(), "canvas": c.canvas(), **_remote(c),
+                "printers": c.ws.all.profile_names("printers"), "materials": c.ws.all.profile_names("materials"),
                 "hint": "the canvas link is where the user watches and points (they log in there); call guide() if you have not read the rules"}
     p = c.ws.project(project)
     return {**p.status(), "printer_profile": p.printer, "material_profile": p.material, "canvas": c.canvas(project), **_remote(c)}
@@ -79,11 +80,20 @@ def _remote(c: Caller) -> dict:
             "pages": c.remote.pages(c.owner["id"])}
 
 
-def new_project(c: Caller, name: str, template: str = "") -> dict:
+def new_project(c: Caller, name: str, template: str = "", printer: str = "", material: str = "") -> dict:
     """Start a project (a folder of Notes). name: lowercase letters, digits, dashes. template: copy one of the
-    templates listed by status(), or leave empty for an empty project."""
-    p = c.ws.create_project(name, template)
-    return {"project": p.name, "notes": p.files(), "canvas": c.canvas(p.name)}
+    templates listed by status(), or leave empty for an empty project. printer and material: profiles listed by
+    status() (default bambu_x1c and pla); the material is what every part is made of unless its Note says otherwise."""
+    p = c.ws.create_project(name, template, printer, material)
+    return {"project": p.name, "notes": p.files(), "printer": p.settings.get("printer"), "material": p.settings.get("material"),
+            "canvas": c.canvas(p.name)}
+
+
+def set_profile(c: Caller, project: str, printer: str = "", material: str = "") -> dict:
+    """Change the project's printer or its material (what its parts are made of unless a Note says otherwise with
+    MATERIAL or MATERIALS): one of the profiles status() lists. Empty leaves it as it is. Answers both profiles: bed
+    size, density, max_temp_c (where it starts to soften: choose PETG or ASA near anything warm), printed or not."""
+    return c.ws.project(project).set_profile(printer or None, material or None)
 
 
 def read_note(c: Caller, project: str, note: str) -> dict:
@@ -136,6 +146,16 @@ def check(c: Caller, project: str, note: str) -> dict:
     the canvas: tags and joints they made are worked out again from the build. If its source (or a module it
     imports) changed since it was built, the report says so and what to run."""
     return c.ws.project(project).report(note)
+
+
+def given_pose(p, note: str, values) -> dict:
+    """Joint values as given, or the name of one of the Note's POSES."""
+    if isinstance(values, str) and values.strip() and "=" not in values and ":" not in values:
+        poses = notes.parse(p.read(note)).get("poses") or {}
+        if values.strip() in poses and isinstance(poses[values.strip()], dict):
+            return pose_values(poses[values.strip()])
+        raise Problem(f"{note} has no pose {values.strip()!r}" + (f"; it has: {', '.join(poses)}" if poses else ": give values as j1=30, j2=-10, or name the Note's POSES"))
+    return pose_values(values)
 
 
 def pose_values(values) -> dict:
@@ -196,12 +216,13 @@ def look(c: Caller, project: str, note: str, views: str = "iso,top,front,right",
 def pose(c: Caller, project: str, note: str, values: str = "", views: str = "iso,front"):
     """An assembly with its joints moved: what it hits there, and a picture of it. values: the joints moved by hand
     (read_note() or check() lists them under motion.joints; a joint with `follows` is worked out from the others),
-    as "j1=30, j2=-10" or {"j1": 30}: degrees for a revolute joint, mm for a slider, 0 is as built. Returns every
+    as "j1=30, j2=-10" or {"j1": 30}: degrees for a revolute joint, mm for a slider, 0 is as built; or the name of
+    one of the Note's POSES ("projecting"). Returns every
     joint's value, the pairs of parts that newly overlap (mm³; what overlapped as built already is under
     motion.interference) and the picture, those parts painted. Each joint's own sweep, where it first hits each
     way, is in check()'s motion.sweeps."""
     p = c.ws.project(project)
-    given = pose_values(values)
+    given = given_pose(p, note, values)
     out = p.pose(note, given)
     png = picture(p, note, views, "draft", False, given)
     query = urllib.parse.urlencode({"views": views, "pose": ",".join(f"{k}={v:g}" for k, v in given.items()), "r": p.rev[-8:]})
@@ -230,6 +251,50 @@ def reach(c: Caller, project: str, note: str, x: float, y: float, z: float, tip:
     query = urllib.parse.urlencode({"views": views, "pose": ",".join(f"{k}={v:g}" for k, v in given.items()), "r": p.rev[-8:]})
     return {"note": note, "tip": tip, "target": [x, y, z], **solved, "clashes": out["clashes"],
             "image": f"{c.base}/file/p/{project}/n/{note}/render.png?{query}"}, png
+
+
+def animate(c: Caller, project: str, note: str, animation: dict | None = None) -> dict:
+    """Put keyframes on an assembly's timeline (Motion in the canvas), for the user to play there, or for
+    render_animation. animation: {"fps": 30, "length": 120, "tracks": {joint: [[frame, value], …]}}: frames whole,
+    from 0 to length; between two keys a joint moves evenly, before the first and after the last it holds; a joint
+    with `follows` moves along by itself. null takes the animation away. Nothing is built from it."""
+    p = c.ws.project(project)
+    if not p.is_note(note):
+        raise Problem(f"{note} is a helper module, not a Note")
+    kept = p.set_animation(note, animation)
+    try:
+        r = p.result(note)
+        moved = joints.drivers(r["motion"]) if r.get("ok") and r.get("motion") else []
+    except Problem:          # not built for its source yet: nothing to say about its joints
+        moved = None
+    unknown = sorted(set((kept.get(note) or {}).get("tracks") or {}) - set(moved)) if moved is not None else []
+    return {"note": note, "animation": kept.get(note), "canvas": c.canvas(project, note),
+            **({"warning": f"not joints of {note} moved by hand, so they do nothing: {', '.join(unknown)}"} if unknown else {})}
+
+
+def render_animation(c: Caller, project: str, note: str, view: str = "iso", fps: float = 0, format: str = "gif") -> dict:
+    """The assembly's animation (its timeline: animate, or Motion in the canvas) as a GIF or an MP4 (format "gif" or
+    "mp4": H.264, plays anywhere), rendered on the server frame by frame from the last build, with every joint that
+    follows moving along, from one camera that holds the whole motion. view: iso, front, top … as in look. fps:
+    pictures a second (at most the timeline's own, default 15). Returns `url`, a link to fetch (it carries your
+    agent key: do not pass it on)."""
+    if format not in ("gif", "mp4"):
+        raise Problem("format is gif or mp4")
+    p = c.ws.project(project)
+    fps = float(fps or 0)
+    path, info = p.render_animation(note, view, fps or None, format=format)
+    query = urllib.parse.urlencode({"view": view, "fps": fps, "r": p.rev[-8:]})
+    return {"note": note, **info, "bytes": path.stat().st_size, "format": format,
+            "url": f"{c.base}/file/p/{project}/n/{note}/animation.{format}?{query}"}
+
+
+def bom(c: Caller, project: str, note: str) -> dict:
+    """The bill of materials of an assembly, from its BOM literal and its build: what to print (each Note, how many,
+    grams, whether it fits the bed), the cut list of each stock (lengths measured along each part's axis), what to
+    buy, and `unlisted`: parts the BOM does not name. `csv` is a link to the same as a spreadsheet."""
+    p = c.ws.project(project)
+    out = p.bom(note)
+    return {**out, "csv": f"{c.base}/file/p/{project}/n/{note}/bom.csv?r={p.rev[-8:]}"}
 
 
 def selection(c: Caller, project: str) -> dict:
@@ -300,9 +365,12 @@ def view(c: Caller):
 def add_check(c: Caller, project: str, note: str, what: str, min: float | None = None, max: float | None = None,
               equals: float | bool | None = None, why: str = "", id: str = "") -> dict:
     """Add a check to a Note: a measurement and the range it must stay in. what: volume_cm3, area_cm2, size_x,
-    size_y, size_z, min_x..max_z, solids, fits_bed, or tag.NAME.MEASURE (the name of a tag, then one of its measures) such as tag.rod_bore.width,
+    size_y, size_z, min_x..max_z, solids, fits_bed, mass_g, or tag.NAME.MEASURE (the name of a tag, then one of its measures) such as tag.rod_bore.width,
     tag.rod_bore.through, tag.base.at. Of an assembly with joints: interference_mm3, joint.NAME.stop_min / stop_max
-    (where moving that joint first hits something) and joint.NAME.clash_mm3 (the worst new overlap within its range). Give min and/or max, or equals. why: the rule in the user's words.
+    (where moving that joint first hits something), joint.NAME.clash_mm3 (the worst new overlap within its range),
+    joint.NAME.torque_max_nmm and joint.NAME.torque_margin (gravity, against its DRIVES); of a named pose (POSES)
+    pose.NAME.interference_mm3, pose.NAME.clash_mm3, pose.NAME.clear.KEEPOUT; part.NAME.mass_g; bom.unlisted; pieces.
+    Give min and/or max, or equals. why: the rule in the user's words.
     You can add checks; you cannot change or remove one. Propose checks for every rule in the docstring."""
     p = c.ws.project(project)
     added = p.add_check(note, {"id": id, "what": what, "min": min, "max": max, "equals": equals, "why": why}, by="agent")
@@ -353,10 +421,11 @@ def export(c: Caller, project: str, note: str, format: str = "3mf", version: str
             "bytes": path.stat().st_size, "format": format, "mime": EXPORTS[format]}
 
 
-TOOLS = {f.__name__: f for f in (guide, status, new_project, read_note, write_note, sources, check, look, pose, reach, selection,
-                                 add_check, load_check, save, versions, diff, export, screen, goto, view)}
-READ_ONLY = {"guide", "status", "read_note", "sources", "check", "look", "pose", "reach", "selection", "load_check", "versions", "diff",
-             "export", "screen", "view"}
+TOOLS = {f.__name__: f for f in (guide, status, new_project, set_profile, read_note, write_note, sources, check, look, pose, reach,
+                                 animate, render_animation, bom, selection, add_check, load_check, save, versions, diff, export,
+                                 screen, goto, view)}
+READ_ONLY = {"guide", "status", "read_note", "sources", "check", "look", "pose", "reach", "render_animation", "bom", "selection",
+             "load_check", "versions", "diff", "export", "screen", "view"}
 TRIED = {"goto"}     # written down before it runs: the person saw the page move, whether or not it got there
 
 

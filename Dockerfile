@@ -10,8 +10,8 @@ COPY monet ./monet
 RUN uv sync --frozen --no-dev
 
 FROM python:3.12-slim
-# the CAD kernel (OCP) links against these even when nothing is ever drawn
-RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libxrender1 libxext6 libsm6 libfontconfig1 \
+# the CAD kernel (OCP) links against these even when nothing is ever drawn; ffmpeg makes an animation an MP4
+RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libxrender1 libxext6 libsm6 libfontconfig1 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd --uid 1000 --create-home monet && mkdir -p /storage /data && chown monet:monet /storage /data
 WORKDIR /app

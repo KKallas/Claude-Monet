@@ -133,11 +133,18 @@ def coerce(value, annotation):
             return int(low)
         except ValueError:
             raise Problem(f"{value!r} is not a whole number")
+    if "dict" in kind:
+        if low in ("", "none", "null"):
+            return None
+        try:
+            return json.loads(value)
+        except ValueError:
+            raise Problem(f"{value[:80]!r} is not JSON")
     return value
 
 
 # what the agent's builder is made of: Monet's own modules that build a Note, as this server has them
-BUILDER_MODULES = ("__init__", "build", "runner", "derive", "rays", "tags", "joints", "semmelweis", "note")
+BUILDER_MODULES = ("__init__", "build", "runner", "derive", "rays", "tags", "joints", "semmelweis", "note", "materials", "split")
 BUILDER_PINS = ("build123d", "cadquery-ocp-novtk", "numpy", "manifold3d")
 
 
@@ -655,7 +662,13 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
 
     def project(request, ws, _body):
         p = ws.project(request.path_params["project"])
-        return {**p.status(), "versions": p.versions(), "tolerance": p.tolerance}
+        return {**p.status(), "versions": p.versions(), "tolerance": p.tolerance,
+                "profiles": {"printers": ws.all.profiles_of("printers"), "materials": ws.all.profiles_of("materials")}}
+
+    def put_profile(request, ws, body):
+        """The project's printer and material, chosen in the canvas."""
+        p = ws.project(request.path_params["project"])
+        return p.set_profile(body.get("printer") or None, body.get("material") or None)
 
     def looks(request, ws, body):
         p = ws.project(request.path_params["project"])
@@ -890,6 +903,29 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         label = name if v == "draft" else f"{name}-v{v}"
         return FileResponse(path, media_type=EXPORTS[fmt], filename=f"{label}.{fmt}", headers=NO_STORE)
 
+    def animation_file(request, ws, _body):
+        """The timeline of an assembly as a GIF or an MP4, rendered here from its build (render_animation)."""
+        p, name = note_of(request, ws)
+        q, fmt = request.query_params, request.path_params["fmt"]
+        if fmt not in ("gif", "mp4"):
+            raise Problem("an animation is a .gif or an .mp4", 404)
+        try:
+            fps = float(q.get("fps") or 0) or None
+        except ValueError:
+            raise Problem("fps is a number")
+        path, _ = p.render_animation(name, q.get("view", "iso"), fps, format=fmt)
+        return FileResponse(path, media_type="image/gif" if fmt == "gif" else "video/mp4", filename=f"{name}.{fmt}", headers=NO_STORE)
+
+    def bom_of(request, ws, _body):
+        p, name = note_of(request, ws)
+        return p.bom(name)
+
+    def bom_csv(request, ws, _body):
+        p, name = note_of(request, ws)
+        from . import bom as boms
+        return Response(boms.as_csv(p.bom(name)), media_type="text/csv; charset=utf-8",
+                        headers={**NO_STORE, "Content-Disposition": f'attachment; filename="{name}-bom.csv"'})
+
     def select(request, ws, body):
         p = ws.project(request.path_params["project"])
         agent.remember_selection(ws.id, p.name, body if body.get("items") or body.get("face") else None)
@@ -968,6 +1004,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route("/w/{wid}/api/p/{project}/archive.zip", api(archive)),
         Route("/w/{wid}/api/p/{project}/rev", api(rev)),
         Route("/w/{wid}/api/p/{project}/looks", api(looks), methods=["PUT"]),
+        Route("/w/{wid}/api/p/{project}/profile", api(put_profile), methods=["PUT"]),
         Route("/w/{wid}/api/p/{project}/save", api(save), methods=["POST"]),
         Route("/w/{wid}/api/p/{project}/selection", api(select), methods=["POST"]),
         Route(n, api(get_note)),
@@ -989,6 +1026,9 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route(n + "/diff", api(diff)),
         Route(n + "/diff.glb", api(diff_model)),
         Route(n + "/export.{fmt}", api(export)),
+        Route(n + "/animation.{fmt}", api(animation_file)),
+        Route(n + "/bom", api(bom_of)),
+        Route(n + "/bom.csv", api(bom_csv)),
         # the agent's door: /w/<agent key>: the tools, and the files their answers point at
         Route("/w/{wid}/agent", door(agent_tools)),
         Route("/w/{wid}/agent/{tool}", door(agent_call), methods=["POST"]),
@@ -997,6 +1037,8 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route(f + "/model.glb", door(model)),
         Route(f + "/fingerprint.json", door(fingerprint)),
         Route(f + "/export.{fmt}", door(export)),
+        Route(f + "/animation.{fmt}", door(animation_file)),
+        Route(f + "/bom.csv", door(bom_csv)),
         Route("/w/{wid}/file/view.png", door(view_png)),
         Mount("/static/{build}", Fresh(directory=CANVAS)),      # /static/<commit>/canvas.js: what the pages ask for
         Mount("/static", Fresh(directory=CANVAS)),

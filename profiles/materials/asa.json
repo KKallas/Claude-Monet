@@ -1,0 +1,10 @@
+{
+ "name": "ASA",
+ "printed": true,
+ "density": 1.07,
+ "max_temp_c": 90,
+ "max_solid_thickness": 15,
+ "shrinkage": 0.006,
+ "look": "pla",
+ "notes": "UV stable and good to about 90 °C. Warps: needs the enclosure closed and a brim on big parts; keep sections thin. Fumes: ventilate."
+}

@@ -298,7 +298,10 @@ are reference geometry only.
 What actually decides whether a jig works, kept as data the agent must respect:
 - printer: bed size, hole/shaft compensation from a printed calibration coupon,
   nozzle and layer limits
-- material: shrinkage and warping tendency (big solid PLA blocks lift), creep under clamps
+- material: density (so mass), where it softens (`max_temp_c`), whether it is printed at all
+  (aluminium tube and steel rod are not), shrinkage and warping tendency (big solid PLA blocks
+  lift), creep under clamps. A project has one; a Note can say its own (`MATERIAL`), an assembly
+  per part (`MATERIALS`), and what is bought weighs what `MASS` says
 - stock: measured plywood thickness (12 mm sheet is often ~11.6 mm), rod diameters,
   fasteners
 
@@ -315,6 +318,9 @@ monet/        note.py        read a Note without running it; rewrite its TAGS an
                              runner, and by the server after a canvas edit
               rays.py        does a line meet the part: asked of the preview mesh, by both
               tags.py        find tagged features on a build (planar faces, square and round holes)
+              materials.py   what each part is made of and weighs (MATERIAL, MATERIALS, MASS), by the server
+              bom.py         the bill of materials of an assembly (BOM): print counts, cut list, what to buy
+              split.py       a part bigger than the bed cut into pieces with dowel holes (used in a Note's pieces())
               joints.py      an assembly's joints found on a build: where each part is at a pose,
                              what moving a joint hits (manifold3d), what overlaps as built
               feynman.py     the checks
@@ -376,8 +382,9 @@ the saved version with a build of it again. Back up `storage/` if the work matte
 - Motion: joints are rigid, revolute and slider; no cylindrical, pin-slot, planar or ball yet.
   A loop is written as `follows` (linear), never solved: a toggle clamp or a four-bar whose
   links do not stay parallel needs a solver. A sweep moves one joint at a time, the others as
-  built: no studies of several joints in steps (keyframes), no clearance (smallest distance)
-  or reach checks, no traced path of a point. Free parts dragged in the canvas are not saved.
+  built; several joints together are checked only at the named poses (`POSES`), not between them.
+  No clearance (smallest distance) or reach checks, no traced path of a point. Torque is gravity
+  alone: no friction, springs or acceleration, and no speed from a servo's deg/s yet. Free parts dragged in the canvas are not saved.
   A joint's axis drawn in the view is the only gizmo: no arrows to drag.
 - Canvas: Series (versions side by side), section caps, screen-space reflections (Adam
   Designer has them on WebGPU). A sketch's points cannot be dragged yet: remove a curve
@@ -388,7 +395,10 @@ the saved version with a build of it again. Back up `storage/` if the work matte
   helper module, made by hand (as `mg400_mesh.py` was); its triangles cannot be tagged as holes or
   bosses, so a joint on it takes its axis as origin and direction. Such a part is heavy for the canvas
   (the MG400's 21,700 faces are a 5.7 MB `faces.json`).
-- Profiles are data only: hole and shaft compensation is not applied to geometry yet.
+- Profiles are data only: hole and shaft compensation is not applied to geometry yet, and a
+  material's `max_temp_c` is not checked against anything (there is no thermal check).
+- Splitting a big part makes dowel joints only: no laps, dovetails or bolt tabs, and no cradle for a
+  piece that will not stand on its cut face.
 - The ten-edit experiment below has not been run.
 
 ## First milestone: the MG400 work table

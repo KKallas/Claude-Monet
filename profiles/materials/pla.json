@@ -1,6 +1,10 @@
 {
  "name": "PLA",
+ "printed": true,
+ "density": 1.24,
+ "max_temp_c": 55,
  "max_solid_thickness": 20,
  "shrinkage": 0.002,
- "notes": "Large solid blocks warp and lift: keep parts hollow or ribbed, no solid section over about 20 mm. Use brims or mouse ears on parts over about 150 mm. Creeps under clamps."
+ "look": "pla",
+ "notes": "Large solid blocks warp and lift: keep parts hollow or ribbed, no solid section over about 20 mm. Use brims or mouse ears on parts over about 150 mm. Creeps under clamps. Softens from about 55 °C: not near lamps, motors or a car in the sun."
 }

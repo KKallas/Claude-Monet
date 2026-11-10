@@ -1,0 +1,8 @@
+{
+ "name": "Steel",
+ "printed": false,
+ "density": 7.85,
+ "max_temp_c": 400,
+ "look": "aluminium",
+ "notes": "Bought stock and fasteners: threaded rod, bolts, shafts. Not printed."
+}

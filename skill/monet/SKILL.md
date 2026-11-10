@@ -30,9 +30,9 @@ Cowork, Codex and the like): building runs there. Your tools, in whichever form 
   link (it looks like `https://host/w/AbC123…`; they find it in their canvas under "Connect your
   agent"). It needs nothing but Python; for building it runs `uv`.
 - **MCP tools** from a connector usually called Monet: `guide`, `status`, `new_project`,
-  `read_note`, `write_note`, `sources`, `check`, `look`, `pose`, `reach`, `selection`, `add_check`,
-  `load_check`, `save`, `versions`, `diff`, `export`, and for the canvas the user has open: `screen`,
-  `goto`, `view`. Use them when you have them; build with the script all the same.
+  `set_profile`, `read_note`, `write_note`, `sources`, `check`, `look`, `pose`, `reach`, `animate`,
+  `render_animation`, `bom`, `selection`, `add_check`, `load_check`, `save`, `versions`, `diff`,
+  `export`, and for the canvas the user has open: `screen`, `goto`, `view`. Use them when you have them; build with the script all the same.
 - **No shell** (a chat with only the connector): you can read, look, point and add checks, but not
   build, so you cannot change a part. Say so once, and ask the user for a harness with a shell.
 - **None of these**: ask the user to log in to their Monet site and use "Connect your agent"
@@ -63,6 +63,10 @@ python scripts/monet.py push <project> <note>.py ...   # send, build it and ever
 python scripts/monet.py build <project> [<note> ...]   # build what is not built for its source as it is, and upload
 python scripts/monet.py build <project> <note> --export stl,3mf   # with the files for printing
 ```
+
+- Every step is said as it finishes (`sent forge.py`, `built cage`, `uploaded cage`), and at the end
+  what is built and what still waits. If the server cannot be reached the script tries again three
+  times, then says in one line what was done; run the same command again and it carries on.
 
 - A Note whose source changed since it was built reports `state: "stale"` (its last build is still
   shown, marked so, in the canvas) or `"unbuilt"`, and `waiting` says what to run. A change to a
@@ -200,9 +204,9 @@ def build(p=PARAMS):
 - A Note's file name is its name: lowercase letters, digits, underscores.
 - A file without `build()` is a helper module that Notes import (shared parameters, shared
   functions).
-- Notes run on the server in their own process with a time limit. Use only `build123d`, `math`
-  and the project's own files: a Note describes a part, it has no business reading files or
-  reaching the network.
+- Notes run in their own process, on the user's computer. Use only `build123d`, `math`, Monet's
+  own `monet.split` and the project's own files: a Note describes a part, it has no business
+  reading files or reaching the network.
 
 `references/build123d.md` has the modelling cheat sheet and the mistakes that cost time.
 
@@ -286,8 +290,8 @@ JOINTS = {
   about a line through that overlap are a pin in its hole: not a clash, wherever the pin is.
 - `mg400.py` (Dobot's own link shapes, from a mesh module) and `mg400_blocks.py` (the same joints on
   simple links) in the `mg400_rakis` template are the worked examples.
-- `pose(project, note, values="j1=30, j2=-10")` shows the assembly moved and lists what it hits
-  there. Look at it moved before you say it works.
+- `pose(project, note, values="j1=30, j2=-10")` (or the name of one of its `POSES`) shows the
+  assembly moved and lists what it hits there. Look at it moved before you say it works.
 - **Tips**: `TIPS = {"nose": {"on": "tool", "at": [x, y, z]}}`, a point on a part (where it is as
   built). `reach(project, note, x, y, z)` solves the joints moved by hand to put it there (inverse
   kinematics, within their ranges) and returns the values, `off` (more than 0.05 mm: out of reach,
@@ -326,6 +330,110 @@ def build(p=PARAMS):
 - An instance rides the part its snap point is `on` (the server adds a rigid joint: a block on the grid slides
   with the table top). Check an assembly with instances as any other: `solids`, `interference_mm3` (a foot in its
   pocket adds nothing), the joints still free.
+
+### Keep-outs and named poses
+
+Some rules are about room, not parts: "with the leaves open, the beam passes clear", a fan's airflow,
+a hand reaching in, a robot's working space. Draw that room as a part of the assembly named
+`keepout_<…>` (or list it in `KEEPOUT`), and name the poses the rule is about in `POSES`:
+
+```python
+POSES = {"projecting": {"leaf_left": 36, "leaf_right": -36}}       # joints moved by hand, as pose() takes them
+KEEPOUT = {"keepout_beam": {"on": "projector"}}                     # rides on the projector, as it moves
+```
+
+- A keep-out is drawn translucent, posed with the part it is `on`, and is **no material**: not in
+  the fingerprint, the exports, `solids`, `fits_bed`, the mass, the interference or the sweeps. So the
+  beam standing in the closed leaves is neither interference nor a clash.
+- Every named pose is checked from the build (no build again when you change `POSES`):
+  `motion.poses.<name>` has `values`, `pairs` and `interference_mm3` (everything that overlaps
+  there), `clash_mm3` (what is new over the as-built) and `clear.<keepout>` (mm³ of the keep-out the
+  parts take up: 0 is clear; the part it rides on does not count). Checks:
+  `pose.projecting.clear.keepout_beam` max 1, `pose.projecting.interference_mm3` max 1.
+- Write the pose once, in `POSES`; never a second assembly with the parts turned by hand in
+  `build()`. `pose(project, note, "projecting")` shows it; the canvas lists the poses in Motion.
+
+### Materials and mass
+
+`status(project)` gives the project's printer and material; `status()` lists the profiles there
+are (`pla`, `petg`, `asa`, `abs`, and not printed: `aluminium`, `steel`, `pom`, `pc`). Each has
+`density` (g/cm³), `max_temp_c` (where it starts to soften or creep) and `printed`.
+`set_profile(project, printer, material)` changes the project's; `new_project` takes both too.
+
+```python
+MATERIAL = "petg"                                     # a Note: what it is printed in (else the project's)
+MATERIALS = {"rail_*|mast": "aluminium", "projector": None}   # an assembly, by part name or pattern; None: bought
+MASS = {"projector": 2700}                            # grams of what is bought or not drawn as it is
+```
+
+- Anything near heat (a lamp, a motor, a power supply, a car in the sun): PLA softens from about
+  55 °C, choose PETG or ASA and say why in the docstring.
+- A pattern is a part's name with `*` and `?`, `|` between alternatives; the first key that matches
+  decides. A part of an assembly that the BOM says is a printed Note has that Note's `MATERIAL`.
+- The report gives `mass_g` (and per part in an assembly); a check holds it: `mass_g` max 3000,
+  `part.projector.mass_g`. None of these literals needs a build again.
+
+### What gravity asks of a joint
+
+With masses known, the report's `motion.torque.<joint>` says what gravity asks of every joint that
+moves, over its range (`max`, `at`, `samples`; N·mm, or N for a slider): for a joint moved by hand,
+everything that moves with it, followers at their factors (what its drive must hold); for a follower,
+what hangs on it (`own`) and the same at its driver (`at_driver`). A joint about a vertical axis
+needs nothing from gravity; friction and acceleration are not in it, so leave a margin.
+
+```python
+DRIVES = {"leaf_left": {"servo": "MG996R", "torque_nmm": 900}}     # what drives it: the margin is reported
+```
+
+Checks: `joint.leaf_left.torque_max_nmm` max 450, `joint.leaf_left.torque_margin` min 2.
+
+### Bill of materials
+
+An assembly says what each part is, and Monet counts and measures:
+
+```python
+BOM = {
+    "vertebra_*": {"print": "vertebra"},                              # a Note: its instances counted
+    "rail_*|post_*|mast": {"stock": "alu_tube_16x1.5", "material": "aluminium"},   # a cut list from the geometry
+    "projector": {"buy": "Epson EB-X49", "mass_g": 2700},
+    "_extra": [{"buy": "M5x30 bolt + nut", "qty": 40}, {"buy": "M8 threaded rod", "length_mm": 300}],
+}
+```
+
+`bom(project, note)` rolls it up: each printed Note with how many, grams and whether it fits the
+bed; each stock with its cut list (a part's length along its own axis) and total; what to buy; and
+`unlisted`, the parts it does not name. `csv` is the same as a spreadsheet (`monet.py bom … out.csv`).
+Never keep a hand-written list in the docstring or a README: it drifts. Check `bom.unlisted` equals 0.
+
+### Parts bigger than the bed
+
+`fits_bed` can only say no. When a part must be bigger than the bed, keep `build()` the whole part
+(the assembly uses it) and give the Note a `pieces()` that says how it is printed:
+
+```python
+from monet.split import split
+
+def pieces(p=PARAMS):
+    return split(build(p), planes=[Plane.XY], dowel=(4, 12), clearance=0.15)
+```
+
+- `split` cuts at the planes (or, given none, across the longest side into as few pieces as fit),
+  puts `count` dowel holes (default 2) on both faces of every cut, lined up, and lays each piece on
+  its cut face, as it prints. `piece.place * piece.shape` is the piece back where it was.
+- With `pieces()`, the export is the pieces (a 3MF has one object each, laid side by side), and
+  `fits_bed` and `solids` hold for every piece; `pieces` counts them. The report lists their sizes.
+- Where to cut: where a seam does least harm and the cut face is big enough for the dowels (they
+  keep 1.6 mm off every edge; a face too small gets none): across a strip at a gap, along a rib,
+  never through a hole or a thin wall. A doubly curved sheet prints best upright on its cut face,
+  which is how `split` lays it; otherwise on a printed cradle.
+
+### Animation
+
+`animate(project, note, {"fps": 30, "length": 120, "tracks": {"leaf_left": [[0, 0], [60, 36], [120, 0]]}})`
+puts keyframes on the timeline in Motion, for the user to play (`null` takes it away; a joint that
+follows moves along by itself). `render_animation(project, note, view="iso", fps=15, format="gif")`
+renders it on the server as a GIF, or with `format="mp4"` as an H.264 video, and answers a link
+(`monet.py render-animation <project> <note> out.mp4`). Do not stitch `pose()` pictures together yourself.
 
 ## Tags and checks
 
@@ -367,7 +475,9 @@ A **check** is a measurement and the range it must stay in, for example
 - No supports: square tunnels with flat roofs bridge fine; round holes on their side do not.
   Prefer chamfers to fillets on edges that touch the bed.
 - Big solid blocks of PLA warp and lift. Keep sections hollow or ribbed; respect the material's
-  `max_solid_thickness`.
+  `max_solid_thickness`. A Note printed in another material says so (`MATERIAL = "petg"`): its
+  report and profile follow.
+- Bigger than the bed: `pieces()` with `split` (above), never a Note per piece by hand.
 - Fits are designed, not hoped for: a 16 mm rod wants about 0.2 mm clearance per side. Put the
   clearance in `PARAMS` and a check on the result.
 

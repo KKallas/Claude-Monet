@@ -101,6 +101,13 @@ wrong:
   overlap as a joint moves; what overlaps as built is the interference, reported apart. The
   server answers what a pose hits from the build's preview mesh (`Project.pose`), never by
   running the Note.
+- **Facts that are no shape** (Kaspar's lamp issues, 2026-11-10): `MATERIAL`, `MATERIALS`, `MASS`, `POSES`, `BOM`
+  and `DRIVES` are plain literals (`note.FACTS`), left out of `geometry_key`, worked out by the server from the stored
+  build when it reports (`Project.facts`: mass from `materials.py`, torque by virtual work in `joints.torque`, the BOM in
+  `bom.py`; `POSES` in `derive`, as joints are). `KEEPOUT` and parts named `keepout_*` *are* geometry: the runner leaves
+  them out of the fingerprint and exports, `joints.analyse` out of interference and sweeps. A Note's optional
+  `pieces()` (usually `monet.split.split`) is what is printed: exports and `fits_bed`/`solids` follow it, the
+  assembly still uses `build()`. The agent may write a timeline (`animate`): it changes no geometry.
 - **`skill/monet/` is the single source of the agent's instructions**: the skill zip and the
   `guide` tool both serve it. When behaviour changes, change it there.
 

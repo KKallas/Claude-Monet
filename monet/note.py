@@ -22,7 +22,8 @@ def _literal(node):
 
 def parse(source: str) -> dict:
     """What a Note says about itself, without running it."""
-    out = {"doc": "", "params": {}, "tags": {}, "joints": {}, "ground": None, "tips": {}, "placed": {}, "is_note": False, "error": None}
+    out = {"doc": "", "params": {}, "tags": {}, "joints": {}, "ground": None, "tips": {}, "placed": {}, "is_note": False, "error": None,
+           **{k.lower(): None for k in FACTS}}
     try:
         tree = ast.parse(source)
     except SyntaxError as e:
@@ -42,7 +43,7 @@ def parse(source: str) -> dict:
                     # user tags a face in the canvas, so they have to be readable without running anything
                     if name == "TAGS":
                         out["error"] = "TAGS must be a plain literal (no expressions): it is read and rewritten without running the Note"
-            elif name in ("JOINTS", "GROUND", "TIPS", "PLACED"):
+            elif name in ("JOINTS", "GROUND", "TIPS", "PLACED", *FACTS):
                 try:
                     out[name.lower()] = _literal(node.value)
                 except (ValueError, TypeError, SyntaxError):
@@ -100,8 +101,11 @@ def set_joints(source: str, joints: dict, ground=None) -> str:
     return _replace(source, "JOINTS", format_joints(joints).splitlines())
 
 
-# what the canvas rewrites (and the server works out again from a build without running it)
-LITERALS = ("TAGS", "JOINTS", "GROUND", "TIPS")
+# what the canvas rewrites (and the server works out again from a build without running it), and the facts about a
+# part that are no shape: what it is made of, what it weighs, the poses to check, what it is in a bill of materials,
+# what drives its joints (FACTS: read here, used by the server when it reports; none of them needs a build)
+FACTS = ("MATERIAL", "MATERIALS", "MASS", "POSES", "BOM", "DRIVES", "KEEPOUT")
+LITERALS = ("TAGS", "JOINTS", "GROUND", "TIPS", "MATERIAL", "MATERIALS", "MASS", "POSES", "BOM", "DRIVES")
 
 
 def geometry_key(source: str) -> str:
@@ -129,9 +133,9 @@ def dep_key(name: str, data: bytes, note: str) -> str:
 
 
 def literals_key(source: str) -> str:
-    """The Note's TAGS, JOINTS, GROUND and TIPS as they are: what a build's tags and joints were found for."""
+    """The Note's TAGS, JOINTS, GROUND, TIPS and POSES as they are: what a build's tags and joints were found for."""
     p = parse(source)
-    return hashlib.sha256(json.dumps([p["tags"], p["joints"], p["ground"], p["tips"]], sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps([p["tags"], p["joints"], p["ground"], p["tips"], p["poses"]], sort_keys=True).encode()).hexdigest()
 
 
 def format_placed(placed: dict) -> str:

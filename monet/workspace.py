@@ -36,7 +36,7 @@ import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import derive, feynman, joints, note as notes, runner, semmelweis
+from . import bom as boms, derive, feynman, joints, materials, note as notes, runner, semmelweis
 
 ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
@@ -56,6 +56,19 @@ _locks_guard = threading.Lock()
 _times_guard = threading.Lock()
 
 
+def value_at(keys: list, f: float) -> float:
+    """A track's value at frame f: straight between its keys, held outside them (as valueAt in canvas/timeline.js)."""
+    if f <= keys[0][0]:
+        return keys[0][1]
+    if f >= keys[-1][0]:
+        return keys[-1][1]
+    i = 1
+    while keys[i][0] < f:
+        i += 1
+    (f0, v0), (f1, v1) = keys[i - 1], keys[i]
+    return v1 if f1 == f0 else v0 + (v1 - v0) * (f - f0) / (f1 - f0)
+
+
 class Problem(Exception):
     """Something the caller did that cannot be done. The message is for them."""
 
@@ -69,6 +82,21 @@ def now() -> str:
 
 
 _solid_cache: dict = {}
+_mesh_cache: dict = {}
+_facts_cache: dict = {}
+
+
+def _mesh(out_dir: Path) -> tuple:
+    """(verts, tris, faces.json) of a build's preview: read once, kept while it is."""
+    glb = out_dir / "model.glb"
+    key = (str(out_dir), glb.stat().st_mtime_ns)
+    if key not in _mesh_cache:
+        from . import render
+        verts, tris, _ = render.load(glb)
+        if len(_mesh_cache) > 8:
+            _mesh_cache.clear()
+        _mesh_cache[key] = (verts, tris, json.loads((out_dir / "faces.json").read_text()))
+    return _mesh_cache[key]
 
 
 def _shapes(out_dir: Path) -> dict:
@@ -76,12 +104,10 @@ def _shapes(out_dir: Path) -> dict:
     glb = out_dir / "model.glb"
     key = (str(out_dir), glb.stat().st_mtime_ns)
     if key not in _solid_cache:
-        from . import render
-        verts, tris, _ = render.load(glb)
-        parts = json.loads((out_dir / "faces.json").read_text())["parts"]
+        verts, tris, geo = _mesh(out_dir)
         if len(_solid_cache) > 8:
             _solid_cache.clear()
-        _solid_cache[key] = joints.solids(verts, tris, parts)
+        _solid_cache[key] = joints.solids(verts, tris, geo["parts"])
     return _solid_cache[key]
 
 
@@ -142,6 +168,15 @@ def _build_problem(name: str, files: dict) -> dict:
             r["snaps"] = derive.clean_snaps(r.get("snaps"))
         except ValueError as e:
             raise Problem(f"the snap points of that build: {e}")
+        num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+        keep = r.get("keepouts")
+        if keep is not None and not (isinstance(keep, list) and all(isinstance(k, str) and len(k) <= 200 for k in keep)):
+            raise Problem("the keepouts of that build are not a list of part names")
+        pieces = r.get("pieces")
+        if pieces is not None and not (isinstance(pieces, list) and 0 < len(pieces) <= 500 and all(
+                isinstance(q, dict) and isinstance(q.get("name"), str) and num(q.get("volume")) and isinstance(q.get("solids"), int)
+                and isinstance(q.get("bbox"), list) and len(q["bbox"]) == 6 and all(num(x) for x in q["bbox"]) for q in pieces)):
+            raise Problem("the pieces of that build are not what a build says of its pieces")
     return r
 
 
@@ -180,6 +215,13 @@ class Workspaces:
         f = self.profiles / kind / f"{name}.json"
         return json.loads(f.read_text()) if re.match(r"^[a-z0-9_]+$", name or "") and f.exists() else None
 
+    def profile_names(self, kind: str) -> list[str]:
+        """The printers or materials there are profiles of: profiles/<kind>/<name>.json."""
+        return sorted(f.stem for f in (self.profiles / kind).glob("*.json") if re.match(r"^[a-z0-9_]+$", f.stem))
+
+    def profiles_of(self, kind: str) -> dict:
+        return {n: self.profile(kind, n) for n in self.profile_names(kind)}
+
 
 class Workspace:
     def __init__(self, all_: Workspaces, wid: str):
@@ -202,9 +244,12 @@ class Workspace:
             raise Problem(f"no project {name!r}; there are: {', '.join(self.projects()) or 'none yet'}", 404)
         return Project(self, name)
 
-    def create_project(self, name: str, template: str = "") -> "Project":
+    def create_project(self, name: str, template: str = "", printer: str = "", material: str = "") -> "Project":
         if not PROJECT_RE.match(name or ""):
             raise Problem("a project name is lowercase letters, digits, dashes or underscores")
+        for kind, value in (("printers", printer), ("materials", material)):
+            if value and value not in self.all.profile_names(kind):
+                raise Problem(f"no {kind[:-1]} {value!r}; there are: {', '.join(self.all.profile_names(kind))}", 404)
         target = self.dir / name
         if target.exists():
             raise Problem(f"there is already a project {name!r}", 409)
@@ -218,7 +263,10 @@ class Workspace:
             target.mkdir()
         if not (target / "monet.json").exists():
             (target / "monet.json").write_text(json.dumps({"printer": "bambu_x1c", "material": "pla"}, indent=1) + "\n")
-        return Project(self, name)
+        p = Project(self, name)
+        if printer or material:
+            p.set_profile(printer or None, material or None)
+        return p
 
     def listing(self) -> list[dict]:
         """The projects, each with what tells it from the others: how many Notes, the last saved version and when."""
@@ -322,6 +370,23 @@ class Project:
     def material(self) -> dict | None:
         return self.ws.all.profile("materials", self.settings.get("material", ""))
 
+    def set_profile(self, printer: str | None = None, material: str | None = None) -> dict:
+        """The project's printer and the material its parts are made of unless a Note says otherwise (MATERIAL,
+        MATERIALS): profiles/printers and profiles/materials. None leaves one as it is."""
+        for kind, value in (("printers", printer), ("materials", material)):
+            if value is not None and value not in self.ws.all.profile_names(kind):
+                raise Problem(f"no {kind[:-1]} {value!r}; there are: {', '.join(self.ws.all.profile_names(kind))}")
+        with self.lock:
+            settings = self.settings
+            if printer is not None:
+                settings["printer"] = printer
+            if material is not None:
+                settings["material"] = material
+            (self.dir / "monet.json").write_text(json.dumps(settings, indent=1) + "\n")
+            self.touch()
+            return {"printer": settings.get("printer"), "material": settings.get("material"),
+                    "printer_profile": self.printer, "material_profile": self.material}
+
     def set_look(self, names: list, material: str | None = None, color: str | None = "") -> dict:
         """What Notes (or the parts of an assembly, by name) are made of and their colour: how the canvas renders
         them. color None goes back to the material's own; "" leaves it as it is."""
@@ -389,6 +454,55 @@ class Project:
             (self.dir / "monet.json").write_text(json.dumps(settings, indent=1) + "\n")
             self.touch()
             return animations
+
+    def render_animation(self, name: str, view: str = "iso", fps: float | None = None, size: int = 480, format: str = "gif") -> tuple:
+        """(the GIF or MP4, what is in it) of the Note's timeline, rendered here frame by frame from its build (as
+        pose() draws it, followers moved along): one camera for the whole motion. Kept until the build or the keys
+        change."""
+        from . import render
+        if format not in ("gif", "mp4"):
+            raise Problem("format is gif or mp4")
+        anim = (self.settings.get("animations") or {}).get(name)
+        if not anim or not anim.get("tracks"):
+            raise Problem(f"{name} has no animation: give it keyframes first (animate, or the timeline in Motion)", 404)
+        if view not in render.VIEWS:
+            raise Problem(f"view is one of {', '.join(render.VIEWS)}")
+        r = self.result(name)
+        if not r["ok"] or not r.get("motion"):
+            raise Problem(f"{name} has no joints to move" if r["ok"] else f"{name} does not build", 409)
+        mo = r["motion"]
+        moved = set(joints.drivers(mo))
+        used = {j: k for j, k in anim["tracks"].items() if j in moved}
+        if not used:
+            raise Problem(f"none of the animated joints ({', '.join(anim['tracks'])}) is a joint of {name} moved by hand: "
+                          f"there are {', '.join(sorted(moved)) or 'none'}")
+        out_fps = float(min(anim["fps"], fps or 15))
+        if not 1 <= out_fps <= 60:
+            raise Problem("fps is from 1 to 60")
+        size = int(min(1024, max(160, size)))
+        count = int(anim["length"] / anim["fps"] * out_fps) + 1
+        if count > 240:          # at most 240 pictures: a long timeline is shown at fewer of them a second
+            out_fps, count = out_fps * 240 / count, 240
+        frames = [k * anim["fps"] / out_fps for k in range(count)]
+        out = self.out / name
+        key = hashlib.sha256(json.dumps([used, frames, view, out_fps, size, (out / "model.glb").stat().st_mtime_ns], default=str).encode()).hexdigest()[:16]
+        path = out / f"animation-{key}.{format}"
+        info = {"frames": count, "fps": round(out_fps, 3), "seconds": round(anim["length"] / anim["fps"], 3), "view": view,
+                "joints": sorted(used), "ignored": sorted(set(anim["tracks"]) - set(used))}
+        if not path.exists():
+            parts = json.loads((out / "faces.json").read_text())["parts"]
+            poses = [joints.part_frames(mo, {j: value_at(k, f) for j, k in used.items()}) for f in frames]
+            try:
+                data = render.animation(out / "model.glb", parts, poses, view, size, out_fps, hide=set(r.get("keepouts") or []),
+                                        title=f"{self.name}/{name}", format=format)
+            except RuntimeError as e:          # no ffmpeg here, or it failed: said, not a crash
+                raise Problem(str(e), 503) from None
+            for old in out.glob(f"animation-*.{format}"):
+                old.unlink(missing_ok=True)
+            tmp = out / f".{path.name}.new"
+            tmp.write_bytes(data)
+            tmp.replace(path)
+        return path, info
 
     @property
     def tolerance(self) -> float:
@@ -463,6 +577,8 @@ class Project:
         return None
 
     def cached(self, name: str) -> dict | None:
+        if not notes.NAME_RE.match(name or ""):
+            return None
         f = self.out / name / "result.json"
         try:
             return json.loads(f.read_text()) if f.exists() else None
@@ -500,7 +616,7 @@ class Project:
         verts, tris, _ = render.load(out / "model.glb")
         geo = json.loads((out / "faces.json").read_text())
         r = dict(r)
-        r["tags"], r["motion"] = derive.found({k: parsed[k] for k in ("tags", "joints", "ground", "tips", "placed")},
+        r["tags"], r["motion"] = derive.found({k: parsed[k] for k in ("tags", "joints", "ground", "tips", "placed", "poses", "keepout")},
                                               r["fingerprint"]["bbox"], geo, verts, tris, r.get("snaps") or {})
         r["literals"] = notes.literals_key(source)
         tmp = out / "result.json.new"
@@ -565,6 +681,92 @@ class Project:
             tmp.write_text(json.dumps(times, indent=1))
             tmp.replace(self.out / ".times.json")
 
+    # ---- facts worked out when reporting: what it is made of and weighs, what gravity asks of its joints, its BOM ----
+    def note_material(self, name: str) -> str | None:
+        """The MATERIAL a Note says it is made of, if it says (read, not run)."""
+        try:
+            m = notes.parse(self.read(name)).get("material")
+        except Problem:
+            return None
+        return m if isinstance(m, str) else None
+
+    def _printed(self, name: str) -> dict | None:
+        """What a printed Note of this project is as it prints: its size, its pieces' sizes, its material."""
+        if not isinstance(name, str) or not notes.NAME_RE.match(name):      # a name from a Note: never a path
+            return None
+        r = self.cached(name)
+        if not r or not r.get("ok") or not self._fresh(r):
+            return None
+        bb = r["fingerprint"]["bbox"]
+        size = [bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2]]
+        pieces = [[q["bbox"][3] - q["bbox"][0], q["bbox"][4] - q["bbox"][1], q["bbox"][5] - q["bbox"][2]] for q in r.get("pieces") or []]
+        return {"size": size, "pieces": pieces, "material": self.note_material(name) or self.settings.get("material")}
+
+    def facts(self, name: str, r: dict, source: str | None = None) -> dict:
+        """A build with what the server works out from it and the Note's literals, none of which needs a build again:
+        `materials` (each part's material and grams), torque in `motion` (what gravity asks of each joint), `bom`.
+        Worked out again whenever any of it can have changed."""
+        if not r.get("ok"):
+            return r
+        source = self.read(name) if source is None else source
+        parsed = notes.parse(source)
+        out = self.out / name
+        bom_spec = parsed.get("bom") if isinstance(parsed.get("bom"), dict) else {}
+        printed = sorted({e["print"] for e in bom_spec.values() if isinstance(e, dict) and isinstance(e.get("print"), str)
+                          and notes.NAME_RE.match(e["print"])})       # names of Notes of this project, never paths
+        stamp = json.dumps([str(out), (out / "model.glb").stat().st_mtime_ns if (out / "model.glb").exists() else 0, r.get("literals"),
+                            [parsed[k] for k in ("material", "materials", "mass", "bom", "drives")], self.settings.get("material"),
+                            self.settings.get("printer"),
+                            {n: [self.note_material(n), (self.cached(n) or {}).get("fingerprint")] for n in printed}],
+                           sort_keys=True, default=str)
+        if stamp in _facts_cache:
+            return {**r, **_facts_cache[stamp], "motion": {**(r.get("motion") or {}), **_facts_cache[stamp].get("motion", {})} if r.get("motion") else None}
+        profiles = self.ws.all.profiles_of("materials")
+        keep = set(r.get("keepouts") or [])
+        parts = [q for q in (r.get("parts") or []) if q["name"] not in keep] or [{"name": name, "volume": r["fingerprint"]["volume"]}]
+        if len(parts) == 1 and not r.get("keepouts"):       # one part: the whole of it, by the kernel's own volume
+            parts = [{**parts[0], "volume": r["fingerprint"]["volume"]}]
+        spec = parsed.get("bom") if isinstance(parsed.get("bom"), dict) else None
+        rows = materials.of_parts(parsed, parts, self.settings.get("material"), profiles, self.note_material,
+                                  (lambda part: materials.first(spec, part)[1]) if spec else None)
+        got = {"materials": {"parts": rows, **materials.summary(rows), "default": self.settings.get("material"),
+                             "problems": materials.problems_of(parsed, set(profiles)) + boms.problems_of(parsed.get("bom"))}}
+        if len(rows) == 1:
+            only = next(iter(rows.values()))
+            got["materials"]["material"] = only["material"]
+            got["materials"]["profile"] = profiles.get(only["material"]) if only["material"] else None
+        motion = r.get("motion")
+        if motion or spec:
+            verts, tris, geo = _mesh(out)
+        if motion and motion.get("joints"):
+            centres = materials.centres(verts, tris, geo["parts"])
+            torque = joints.torque(motion, {p: rows[p]["mass_g"] for p in rows}, centres)
+            drives = parsed.get("drives") if isinstance(parsed.get("drives"), dict) else {}
+            for j, d in drives.items():
+                if j in torque and isinstance(d, dict) and isinstance(d.get("torque_nmm" if torque[j]["unit"] == "N·mm" else "force_n"), (int, float)):
+                    have = float(d.get("torque_nmm" if torque[j]["unit"] == "N·mm" else "force_n"))
+                    torque[j]["drive"] = d
+                    torque[j]["margin"] = round(min(1e6, have / max(torque[j]["max"], 1e-6)), 3)
+            got["motion"] = {"torque": torque}
+        if spec:
+            by_name = {q["name"]: q for q in geo["parts"]}
+            got["bom"] = boms.roll_up(spec, r.get("parts") or [], rows, keep,
+                                      lambda q: boms.length_along(verts, tris, geo["faces"], by_name.get(q["name"], q)),
+                                      self._printed, (self.printer or {}).get("bed"))
+        if len(_facts_cache) > 32:
+            _facts_cache.clear()
+        _facts_cache[stamp] = got
+        return {**r, **got, "motion": {**motion, **got.get("motion", {})} if motion else motion}
+
+    def bom(self, name: str) -> dict:
+        """The bill of materials of an assembly: what to print and how many, the cut list, what to buy."""
+        r = self.facts(name, self.result(name))
+        if not r["ok"]:
+            raise Problem(f"{name} does not build: {r.get('error')}", 409)
+        if "bom" not in r:
+            raise Problem(f"{name} has no BOM: give the Note BOM = {{part or pattern: {{print: Note}} | {{stock: name}} | {{buy: name}}}}")
+        return {"note": name, **r["bom"], "mass_g": r["materials"]["mass_g"]}
+
     def report(self, name: str, result: dict | None = None) -> dict:
         """Build and checks of one Note: what the agent and the canvas both look at. A Note with no build for its
         source as it is now says so (state "stale": there is an older one; "unbuilt") and what the agent does."""
@@ -576,7 +778,7 @@ class Project:
                     raise
                 return {"note": name, "built": False, "state": "stale" if self.cached(name) else "unbuilt",
                         "green": False, "waiting": str(e), "checks": []}
-        r = result
+        r = self.facts(name, result)
         out = {"note": name, "built": r["ok"], "state": "built" if r["ok"] else "error", "by": r.get("built"), "seconds": r.get("seconds")}
         if r["ok"] and self.took().get(name):
             out["took"] = self.took()[name]
@@ -587,11 +789,24 @@ class Project:
         fp = r["fingerprint"]
         m = feynman.measurements(r)
         out["measure"] = {k: round(m[k], 3) for k in ("volume_cm3", "area_cm2", "size_x", "size_y", "size_z", "min_z", "max_z")}
-        out["measure"].update(solids=fp["solids"], faces=fp["faces"], valid=r.get("valid", True))
+        out["measure"].update(solids=fp["solids"], faces=fp["faces"], valid=r.get("valid", True), mass_g=m.get("mass_g"))
+        mats = r.get("materials") or {}
+        if "material" in mats:
+            out["material"] = {"name": mats["material"], **({k: mats["profile"].get(k) for k in ("density", "max_temp_c", "printed", "max_solid_thickness")}
+                                                             if mats.get("profile") else {}), "how": next(iter(mats["parts"].values()))["how"]}
         if len(r.get("parts") or []) > 1:     # an assembly: what it is made of
+            rows = mats.get("parts") or {}
             out["parts"] = [{"name": q["name"], "volume_cm3": round(q["volume"] / 1000, 3),
                              "size": [round(q["bbox"][i + 3] - q["bbox"][i], 2) for i in range(3)],
-                             "at": [round((q["bbox"][i + 3] + q["bbox"][i]) / 2, 2) for i in range(3)]} for q in r["parts"]]
+                             "at": [round((q["bbox"][i + 3] + q["bbox"][i]) / 2, 2) for i in range(3)],
+                             **({"material": rows[q["name"]]["material"], "mass_g": rows[q["name"]]["mass_g"]} if q["name"] in rows else {"keepout": True})}
+                            for q in r["parts"]]
+            out["mass"] = {k: mats.get(k) for k in ("mass_g", "unknown", "by_material")}
+        if r.get("pieces"):
+            out["pieces"] = [{"name": q["name"], "size": [round(q["bbox"][i + 3] - q["bbox"][i], 2) for i in range(3)],
+                              "volume_cm3": round(q["volume"] / 1000, 3), "solids": q["solids"]} for q in r["pieces"]]
+        if r.get("bom"):
+            out["bom"] = {**r["bom"]["counts"], "unlisted_parts": r["bom"]["unlisted"][:20], "more": "bom(project, note) gives the whole list"}
         out["tags"] = {k: {"resolved": t["resolved"], **({"why": t["why"]} if t.get("why") else {}), "measure": t.get("measure", {})}
                        for k, t in r["tags"].items()}
         rows = [{"id": f"tag-{k}", "what": f"tag.{k}.resolved", "ok": bool(t["resolved"]), "value": bool(t["resolved"]), "expect": "= True",
@@ -607,6 +822,12 @@ class Project:
                       "why": j.get("why") or "every joint must find its parts and its axis", "by": "monet"} for k, j in mo["joints"].items()]
             if mo["problems"]:
                 rows.append({"id": "joints", "what": "joints", "ok": False, "value": False, "expect": "= True", "why": "; ".join(mo["problems"]), "by": "monet"})
+            rows += [{"id": f"pose-{k}", "what": f"pose.{k}.resolved", "ok": False, "value": False, "expect": "= True",
+                      "why": pose.get("why") or "a pose names joints that move, within their ranges", "by": "monet"}
+                     for k, pose in (mo.get("poses") or {}).items() if not pose.get("resolved")]
+        if mats.get("problems"):
+            rows.append({"id": "facts", "what": "MATERIAL, MATERIALS, MASS, BOM", "ok": False, "value": False, "expect": "= True",
+                         "why": "; ".join(mats["problems"]), "by": "monet"})
         out["checks"] = rows + feynman.evaluate(self.checks(name), r, self.printer)
         out["green"] = all(c["ok"] for c in out["checks"])
         return out

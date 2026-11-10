@@ -17,6 +17,7 @@ import { railWidth } from './rails.js';
 import { sideEdge } from './side.js';
 import { createTimeline } from './timeline.js';
 import { remote } from './remote.js';
+import { bomLines, grams, howWords, materialName, materialWords, partWords, poseLines, poseValues, torqueWords } from './facts.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -204,17 +205,33 @@ function lookOf(part) {
   const looks = S.proj?.looks ?? {}, name = S.parts.length > 1 ? S.parts[part]?.name : S.note;
   // a part of an instance put at a snap point (glass_stack_1/glass_3) looks as its Note does (glass)
   const spec = looks[name] ?? looks[String(name ?? '').split('/').pop().replace(/_\d+$/, '')] ?? {};
-  const kind = MATERIALS[spec.material] ? spec.material : 'pla';
+  // none set: as what it is made of looks (the engineering material's profile says which look), else printed PLA
+  const made = S.parts.length > 1 ? partFact(name)?.material : S.data?.report?.material?.name;
+  const own = S.proj?.profiles?.materials?.[made]?.look;
+  const kind = MATERIALS[spec.material] ? spec.material : MATERIALS[own] ? own : 'pla';
   return { material: kind, color: spec.color || MATERIALS[kind].color, name };
 }
+// what the report says of a part of the assembly, by its name: its material and grams, or that it is a keep-out
+let factsOf = { data: null, by: new Map() };
+function partFact(name) {
+  if (factsOf.data !== S.data) factsOf = { data: S.data, by: new Map((S.data?.report?.parts ?? []).map((q) => [q.name, q])) };
+  return factsOf.by.get(name);
+}
+// a keep-out (keepout_*, or the Note's KEEPOUT) is room to keep clear, a projector's beam: drawn as a glow, not picked
+const isKeepout = (i) => S.parts.length > 1 && !!partFact(S.parts[i]?.name)?.keepout;
+const KEEPOUT = 0.22;
+const keepoutMaterial = () => new THREE.MeshBasicMaterial({ color: 0xfff1a0, transparent: true, opacity: KEEPOUT, depthWrite: false, side: THREE.DoubleSide,
+  toneMapped: false, userData: { opacity: KEEPOUT, keepout: true } });
 
 // give every part the material of the style it is shown in
 function dress() {
   const edge = look.edge();
   for (const one of groups.part.children) {
+    const keep = isKeepout(one.userData.part);
     for (const o of one.children) {
       if (o.userData.cap || o.userData.neon) continue;
-      if (o.isMesh) { o.material.dispose(); o.material = look.material(lookOf(one.userData.part)); }
+      if (o.isMesh) { o.material.dispose(); o.material = keep ? keepoutMaterial() : look.material(lookOf(one.userData.part)); o.userData.keepout = keep; }
+      else if (o.userData.edges && keep) { o.material.color.set(0xfff1a0); o.material.opacity = 0.18; o.material.transparent = true; }
       else if (o.userData.edges) { o.material.color.set(edge.color); o.material.opacity = edge.opacity; o.material.transparent = edge.opacity < 1; }
       else if (o.userData.dots) o.material.color.set(edge.color);
     }
@@ -330,9 +347,12 @@ function assemble({ mesh, lines }) {
     m.userData.part = one.userData.part = i;
     one.userData.tris = part.tris;
     one.add(m);
-    const cap = new THREE.Mesh(pg, capMaterial);
-    cap.userData.cap = true;
-    one.add(cap);
+    if (!isKeepout(i)) meshes.push(m);      // what a click can hit
+    if (!isKeepout(i)) {      // a keep-out has no inside to show red where the section cuts it
+      const cap = new THREE.Mesh(pg, capMaterial);
+      cap.userData.cap = true;
+      one.add(cap);
+    }
     if (lines && part.edges[1]) {
       const lg = new THREE.BufferGeometry();
       lg.setAttribute('position', lines.geometry.attributes.position);
@@ -352,7 +372,6 @@ function assemble({ mesh, lines }) {
       one.add(dots);
     }
     groups.part.add(one);
-    meshes.push(m);
   });
   dress();
 }
@@ -594,7 +613,7 @@ function boxPick(x0, y0, x1, y1, touching) {
       return touching ? any : all;
     };
     S.parts.forEach((part, p) => {
-      if (S.hidden.has(p)) return;
+      if (S.hidden.has(p) || isKeepout(p)) return;
       if (S.mode === 'part') { if (test(part.tris[0], part.tris[1], p)) out.push({ kind: 'part', i: p }); return; }
       for (let i = part.faces[0]; i < part.faces[0] + part.faces[1]; i++) if (test(S.faces[i].tris[0], S.faces[i].tris[1], p)) out.push({ kind: 'face', i });
     });
@@ -1219,9 +1238,48 @@ function syncSliders() {
   document.querySelectorAll('[data-pose]').forEach((el) => { if (document.activeElement !== el) el.value = S.pose[el.dataset.pose] ?? 0; });
   document.querySelectorAll('[data-posenum]').forEach((el) => { if (document.activeElement !== el) el.value = fmt(S.pose[el.dataset.posenum] ?? 0); });
   document.querySelectorAll('[data-follow]').forEach((el) => { el.textContent = `${fmt(Math.round((v[el.dataset.follow] ?? 0) * 100) / 100)}${mo.joints[el.dataset.follow]?.unit ?? ''}`; });
+  document.querySelectorAll('[data-posename]').forEach((el) => el.classList.toggle('on', atPose(el.dataset.posename)));
   timeline.values();
 }
 function goHome() { stopPlaying(); timeline.pause(); Object.assign(S, { pose: {}, freePose: {}, clash: [] }); spread(); syncSliders(); paint(); showClashes(); }
+/** The joints moved by hand put at these values, each kept within its range; the locked ones and those that follow stay. */
+function poseTo(values) {
+  const mo = model();
+  if (!mo) return [];
+  stopPlaying();
+  const set = [];
+  for (const [k, v] of Object.entries(values)) {
+    const row = mo.joints[k];
+    if (row && !row.locked && !row.follows && row.kind !== 'rigid') { const [lo, hi] = span(row); S.pose[k] = Math.min(hi, Math.max(lo, v)); set.push(k); }
+  }
+  spread(); syncSliders(); checkPose();
+  return set;
+}
+/** A named pose of the Note (POSES): every joint moved by hand to where it has it (0 where it says nothing). */
+function goPose(name) {
+  const p = model()?.poses?.[name];
+  if (!p?.resolved) return;
+  timeline.pause();
+  S.pose = {};
+  timeline.touched(poseTo(p.values));      // as a hand would: with auto key on, it is keyed
+}
+const atPose = (name) => {
+  const mo = model(), p = mo?.poses?.[name];
+  return !!p?.resolved && drivers(mo).every((k) => Math.abs((S.pose[k] ?? 0) - (p.values[k] ?? 0)) < 1e-6);
+};
+/** The timeline as a GIF or an MP4, drawn on the server from the build: fetched with the wait shown, then saved. */
+async function exportAnimation(fmt = 'gif') {
+  const view = $('#gifView')?.value || 'iso', note = S.note, what = fmt === 'mp4' ? 'video' : 'GIF';
+  busy(`drawing the ${what}…`, {});
+  try {
+    const r = await fetch(`${root}/p/${S.project}/n/${note}/animation.${fmt}?view=${encodeURIComponent(view)}&fps=${fmt === 'mp4' ? 30 : 15}`);
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `error ${r.status}`);
+    const url = URL.createObjectURL(await r.blob()), a = Object.assign(document.createElement('a'), { href: url, download: `${note}.${fmt}` });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    busy();
+  } catch (e) { busy(); tell(`The ${what} was not made: ${e.message}`); }
+}
 
 // a joint driven back and forth through its range, the whole way in four seconds
 let playing = 0;
@@ -1250,16 +1308,7 @@ function play(name) {
 // the timeline along the bottom of the view in Motion (timeline.js): keys of the joints over frames, kept in the project
 const timeline = createTimeline($('#timeline'), {
   pose: () => S.pose,
-  setPose(values) {
-    const mo = model();
-    if (!mo) return;
-    stopPlaying();
-    for (const [k, v] of Object.entries(values)) {
-      const row = mo.joints[k];
-      if (row && !row.locked && !row.follows && row.kind !== 'rigid') { const [lo, hi] = span(row); S.pose[k] = Math.min(hi, Math.max(lo, v)); }
-    }
-    spread(); syncSliders(); checkPose();
-  },
+  setPose(values) { poseTo(values); },
   async save(animation, key) {
     const [project, note] = key.split('/');
     try {
@@ -1267,6 +1316,7 @@ const timeline = createTimeline($('#timeline'), {
       if (S.project !== project) return;
       S.proj.animations = animations;
       S.rev = (await api(`/p/${project}/rev`)).rev;      // our own change: nothing to load again
+      if (!$('#panel [data-card="gif"]') !== !Object.values(animations[note]?.tracks ?? {}).some((k) => k.length)) renderPanel();      // Export GIF comes or goes
     } catch (e) { notice(`the keyframes were not kept: ${e.message}`); }
   },
   height(px) { view.style.setProperty('--tl-h', `${px}px`); view.classList.toggle('timed', px > 0); },
@@ -1463,14 +1513,15 @@ function motionCards() {
     if (!row.resolved) return `<div class="check joint" data-joint="${esc(name)}">${top}<div class="why err">${esc(row.why)}</div></div>`;
     if (row.kind === 'rigid') return `<div class="check joint" data-joint="${esc(name)}">${top}<div class="why">held fast</div></div>`;
     if (row.follows) return `<div class="check joint" data-joint="${esc(name)}">${top}<div class="row"><span class="why">follows ${Object.entries(row.follows).map(([k, f]) => `${esc(k)} × ${fmt(f)}`).join(' + ')}</span>
-      <span class="v mono" data-follow="${esc(name)}">${fmt(Math.round(v[name] * 100) / 100)}${row.unit}</span></div></div>`;
+      <span class="v mono" data-follow="${esc(name)}">${fmt(Math.round(v[name] * 100) / 100)}${row.unit}</span></div>${fact(torqueWords(mo.torque?.[name], row.unit))}</div>`;
     const [lo, hi] = span(row), off = row.locked ? 'disabled' : '';
     return `<div class="check joint" data-joint="${esc(name)}">${top}
       <div class="line"><input type="range" data-pose="${esc(name)}" name="pose:${esc(name)}" min="${lo}" max="${hi}" step="${row.kind === 'revolute' ? 0.5 : 0.1}" value="${S.pose[name] ?? 0}" ${off}
         data-icon="${KIND[row.kind] ?? '◈'}" data-label="${esc(name)}" data-unit="${esc(row.unit)}" data-key="joint:${row.kind}" data-default="0" title="where ${esc(name)} is">
         <input class="num" data-posenum="${esc(name)}" value="${fmt(S.pose[name] ?? 0)}" inputmode="decimal" ${off}><span class="muted unit">${row.unit}</span>
         <button class="x" data-act="play" data-name="${esc(name)}" title="move it back and forth through its range" ${off}>${S.playing === name ? '■' : '▶'}</button></div>
-      <div class="why">${row.range ? `${fmt(lo)} … ${fmt(hi)}${row.unit}` : 'no range'} · ${sweepWords(mo.sweeps?.[name], row.unit)}</div></div>`;
+      <div class="why">${row.range ? `${fmt(lo)} … ${fmt(hi)}${row.unit}` : 'no range'} · ${sweepWords(mo.sweeps?.[name], row.unit)}</div>
+      ${fact(torqueWords(mo.torque?.[name], row.unit))}</div>`;
   });
   const picked = [...S.sel.part].map((i) => S.parts[i]?.name).filter(Boolean);
   const cards = [card('motion', `Motion · ${n} joint${n === 1 ? '' : 's'}`, `
@@ -1490,12 +1541,24 @@ function motionCards() {
       <button class="primary" data-act="jointnew">New joint</button></div>
     <p class="muted">Drag a part in the view: it moves as its joint lets it. A joint that follows others moves with them.</p>`)];
   if (S.edit) cards.push(editCard(mo));
+  const poses = Object.entries(mo.poses ?? {});
+  if (poses.length) cards.push(card('poses', `Poses · ${poses.length}`, `${poses.map(([name, p]) => `<div class="check pose ${atPose(name) ? 'on' : ''}" data-posename="${esc(name)}">
+      <div class="row"><span><b>${esc(name)}</b> <span class="muted">${p.resolved ? esc(poseValues(p.values, mo.joints)) : ''}</span></span>
+        <button data-act="posego" data-name="${esc(name)}" ${p.resolved ? '' : 'disabled'} title="put the joints where this pose has them">Go</button></div>
+      ${poseLines(p).map(fact).join('')}</div>`).join('')}
+    <p class="muted">The Note's POSES, worked out from the build. A check can hold pose.NAME.clear.KEEPOUT, interference_mm3 and clash_mm3.</p>`));
   const inter = mo.interference ?? { pairs: [] };
   cards.push(card('clash', `Clashes${S.clash.length ? ` · ${S.clash.length}` : ''}`, `<div id="poseClashes">${clashWords()}</div>
     <div class="row" style="margin-top:8px"><span class="k">as built</span><span class="v">${inter.pairs.length ? `${fmt(inter.total_mm3)} mm³ overlap` : 'nothing overlaps'}</span></div>
     ${inter.pairs.map(([a, b, vol]) => `<div class="why warn"><b>${esc(a)}</b> and <b>${esc(b)}</b>: ${fmt(vol)} mm³</div>`).join('')}
     ${mo.unchecked?.length ? `<p class="muted">Not checked, their mesh is not closed: ${mo.unchecked.map(esc).join(', ')}</p>` : ''}
     <p class="muted">A clash is new overlap as parts move; what overlaps as built is listed apart. A check can hold joint.NAME.stop_min, stop_max and clash_mm3.</p>`));
+  const anim = S.proj?.animations?.[S.note];
+  if (Object.values(anim?.tracks ?? {}).some((k) => k.length)) {
+    cards.push(card('gif', 'Animation', `<p class="muted" style="margin-top:0">The timeline's keyframes, ${fmt(anim.length)} frames at ${fmt(anim.fps)} fps, drawn on the server as a GIF or an MP4 video: it takes a few seconds.</p>
+      <div class="line"><select id="gifView" title="where the camera stands">${['iso', 'front', 'right', 'top', 'iso_back'].map((k) => `<option value="${k}">${k.replace('_', ' ')}</option>`).join('')}</select>
+        <button class="primary" data-act="gif">GIF</button><button class="primary" data-act="mp4">MP4</button></div>`));
+  }
   return cards;
 }
 
@@ -1879,6 +1942,61 @@ function selectionCard() {
   return card('selection', n ? `Selected · ${kinds}` : S.measuring ? 'Measure' : `Select · ${NAMES[S.mode][1]}`, body, n ? '<button data-act="clear">Clear</button>' : '');
 }
 
+// ---- what the server works out from a build: material and mass, pieces, the project's printer and material, the BOM
+const fact = ([text, level]) => (text ? `<div class="fact ${level}">${esc(text)}</div>` : '');
+/** The Part card's rows of what it is made of and weighs (report.material, .mass, .measure.mass_g) and its pieces. */
+function massRows(r, mats) {
+  const out = [];
+  if (r.material) out.push(row('material', `${esc(materialName(r.material.name, mats))} <span class="muted">(${esc(howWords(r.material.how))})</span>`), fact([materialWords(r.material, mats), '']));
+  if (r.mass) {      // an assembly: the whole, and by material; what is bought is the rest
+    const by = Object.entries(r.mass.by_material ?? {}), made = by.reduce((a, [, g]) => a + g, 0), bought = r.mass.mass_g - made;
+    out.push(row('mass', esc(grams(r.mass.mass_g))));
+    out.push(fact([[...by.map(([k, g]) => `${materialName(k, mats)} ${grams(g)}`), bought > 0.5 ? `bought ${grams(bought)}` : ''].filter(Boolean).join(' · '), '']));
+    if (r.mass.unknown?.length) out.push(fact([`no mass for ${r.mass.unknown.join(', ')}: give ${r.mass.unknown.length > 1 ? 'them' : 'it'} MASS`, 'warn']));
+  } else if (r.measure?.mass_g != null) out.push(row('mass', esc(grams(r.measure.mass_g))));
+  if (r.pieces?.length) {
+    out.push(row('printed in', `${r.pieces.length} pieces`));
+    for (const q of r.pieces) out.push(fact([`${q.name}: ${q.size.map((v) => Math.round(v * 10) / 10).join(' × ')} mm · ${Math.round(q.volume_cm3 * 10) / 10} cm³`, '']));
+  }
+  return out.join('');
+}
+
+/** The project's printer and the material its parts are made of unless a Note says otherwise. */
+function profileCard() {
+  const pr = S.proj?.profiles;
+  if (!pr) return '';
+  const mat = pr.materials?.[S.proj.material], printer = pr.printers?.[S.proj.printer];
+  const options = (all, cur) => (cur && all[cur] ? '' : '<option value="">(none)</option>') + Object.entries(all ?? {})
+    .map(([k, p]) => `<option value="${esc(k)}" ${k === cur ? 'selected' : ''}>${esc(p.name ?? k)}</option>`).join('');
+  return card('profile', 'Printer and material', `
+    ${row('printer', `<select id="projPrinter" title="the printer this project is made on: its bed and tolerance">${options(pr.printers, S.proj.printer)}</select>`)}
+    ${printer?.bed ? fact([`bed ${printer.bed.join(' × ')} mm${printer.tolerance != null ? ` · tolerance ${printer.tolerance} mm` : ''}`, '']) : ''}
+    ${row('material', `<select id="projMaterial" title="what the parts are made of, unless a Note says otherwise (MATERIAL, MATERIALS)">${options(pr.materials, S.proj.material)}</select>`)}
+    ${mat ? fact([materialWords({ name: S.proj.material }, pr.materials), '']) : ''}
+    <p class="muted">For the whole project: a Note says otherwise with MATERIAL, an assembly part by part with MATERIALS.</p>`,
+  `<span class="muted">${esc([printer?.name, mat?.name].filter(Boolean).join(' · '))}</span>`);
+}
+
+/** The bill of materials of an assembly whose Note has a BOM: fetched once a revision, drawn when it is here. */
+const bomNow = { key: '', data: null, error: '' };
+function bomCard() {
+  const key = `${S.project}/${S.note}/${S.rev}`;
+  if (bomNow.key !== key) {
+    Object.assign(bomNow, { key, data: null, error: '' });
+    api(`/p/${S.project}/n/${S.note}/bom`).then((b) => { bomNow.data = b; }, (e) => { bomNow.error = e.message; })
+      .finally(() => { if (bomNow.key === key) renderPanel(); });
+  }
+  const b = bomNow.data, csv = `<a href="${root}/p/${S.project}/n/${S.note}/bom.csv" download title="the whole list, as a spreadsheet"><button>CSV</button></a>`;
+  if (!b) return card('bom', 'BOM', bomNow.error ? `<p class="err">${esc(bomNow.error)}</p>` : '<p class="muted">counting…</p>', csv);
+  const L = bomLines(b, S.proj?.profiles?.materials), c = b.counts ?? {};
+  const list = (title, lines) => (lines.length ? `<h3>${title}</h3>${lines.map(fact).join('')}` : '');
+  return card('bom', `BOM · ${c.printed ?? 0} printed, ${c.stock ?? 0} cut, ${c.bought ?? 0} bought`, `
+    ${list('Print', L.print)}${list('Cut', L.cut)}${list('Buy', L.buy)}${L.unlisted.map(fact).join('')}
+    ${(b.problems ?? []).map((t) => fact([t, 'err'])).join('')}
+    ${b.mass_g != null ? row('mass, all of it', esc(grams(b.mass_g))) : ''}
+    <p class="muted">From the Note's BOM: what is printed (and how many), the cuts of stock, what is bought.</p>`, csv);
+}
+
 function sketchCards() {
   const sk = sketch.state;
   if (!sk.active) {
@@ -1915,7 +2033,7 @@ function renderPanel(force) {
   if (!d) { panel.innerHTML = S.project ? '<div class="card"><h2>No Note open</h2><p class="muted">Connect your agent and ask it for a part. It appears here as soon as it is written.</p></div>'
     : '<div class="card"><h2>No project open</h2><p class="muted">Start one, or upload an archive of one, under the name at the top left.</p></div>'; return; }
   if (d.error) { panel.innerHTML = `<div class="card"><h2>${esc(S.note)}</h2><p class="err">${esc(d.error)}</p></div>`; return; }
-  const r = d.report, cards = [];
+  const r = d.report, cards = [], mats = S.proj?.profiles?.materials;
   const pill = !d.is_note ? '<span class="pill muted">module</span>' : notBuilt(r) ? '<span class="pill warn">waiting for your agent</span>'
     : !r.built ? '<span class="pill err">does not build</span>' : r.green ? '<span class="pill ok">green</span>' : '<span class="pill err">red</span>';
   const why = notBuilt(r) ? `<p class="warn">${r.state === 'stale' ? 'This is its last build: the Note changed since.' : 'Not built yet.'} Your agent builds Notes on its own computer and uploads them: ask it to build ${esc(S.note)} (<code>monet.py build ${esc(S.project)} ${esc(S.note)}</code>).</p>`
@@ -1940,12 +2058,13 @@ function renderPanel(force) {
     cards.push(card('assembly', `Assembly · ${S.parts.length} parts`, `
       ${S.parts.map((q, i) => `<div class="check part ${S.sel.part.has(i) ? 'sel' : ''}" data-part="${i}"><div class="row">
         <span><span class="swatch" style="background:${PARTS[i % PARTS.length]}"></span><b class="${S.hidden.has(i) ? 'muted' : ''}">${esc(q.name)}</b></span>
-        <span class="v muted">${fmt(q.volume / 1000)} cm³</span>
+        <span class="v muted">${isKeepout(i) ? 'keep-out' : `${fmt(q.volume / 1000)} cm³`}</span>
         ${known.has(q.name) ? `<button class="x" data-act="opennote" data-name="${esc(q.name)}" title="open this part's Note">↗</button>` : ''}
         <button class="x" data-act="solo" data-i="${i}" title="show only this part">◎</button>
         <button class="x" data-act="eye" data-i="${i}" title="${S.hidden.has(i) ? 'show' : 'hide'}">${S.hidden.has(i) ? '○' : '●'}</button></div>
-        <div class="why mono">${[0, 1, 2].map((k) => fmt(q.bbox[k + 3] - q.bbox[k])).join(' × ')} mm</div></div>`).join('')}
+        <div class="why mono">${[0, 1, 2].map((k) => fmt(q.bbox[k + 3] - q.bbox[k])).join(' × ')} mm${partFact(q.name) ? ` · ${esc(partWords(partFact(q.name), mats))}` : ''}</div></div>`).join('')}
       <p class="muted">Click a part here or in the view. Explode (above the view) pulls them apart.</p>`, S.hidden.size ? '<button data-act="showall">Show all</button>' : ''));
+    if (r.bom && S.room === 'assembly') cards.push(bomCard());
   }
 
   if (d.is_note && r.built) {
@@ -1953,6 +2072,7 @@ function renderPanel(force) {
     if (!S.compare) cards.push(selectionCard());
     if (S.room !== 'motion') cards.push(card('part', S.room === 'assembly' ? 'Assembly, as a whole' : 'Part', `${row('size', `${fmt(m.size_x)} × ${fmt(m.size_y)} × ${fmt(m.size_z)} mm`)}
       ${row('volume', `${fmt(m.volume_cm3)} cm³`)}${row('surface', `${fmt(m.area_cm2)} cm²`)}${row('z', `${fmt(m.min_z)} … ${fmt(m.max_z)}`)}${row('solids', m.solids)}
+      ${massRows(r, mats)}
       ${Object.entries(d.params).map(([k, v]) => row(k, fmt(v))).join('')}`));
 
     const targets = S.parts.length > 1 ? [...S.sel.part].map((i) => S.parts[i].name) : [S.note];
@@ -1997,6 +2117,7 @@ function renderPanel(force) {
     `<span class="pill ${colour}">${esc(lc.status === 'new' ? 'never saved' : lc.status)}</span>`));
   }
 
+  cards.push(profileCard());
   const red = S.saveResult && !S.saveResult.saved ? Object.entries(S.saveResult.red ?? S.saveResult.waiting ?? {}).map(([k, v]) => `<div class="why err"><b>${esc(k)}</b>: ${esc(Array.isArray(v) ? v.join('; ') : v)}</div>`).join('') : '';
   cards.push(card('save', 'Save the project as a version', `
     <div class="line" style="margin-top:0"><input id="saveMsg" placeholder="what changed, and why" value="${esc(S.message)}"><button class="primary" data-act="save">Save</button></div>
@@ -2034,6 +2155,9 @@ async function setLook(change) {
 $('#panel').addEventListener('change', (e) => {
   if (e.target.id === 'lookMaterial') setLook({ material: e.target.value, color: null });
   if (e.target.id === 'lookColor') setLook({ color: e.target.value });
+  if ((e.target.id === 'projPrinter' || e.target.id === 'projMaterial') && e.target.value) {      // the masses and the looks follow
+    act(async () => { busy('changing the project…'); await api(`/p/${S.project}/profile`, 'PUT', { [e.target.id === 'projPrinter' ? 'printer' : 'material']: e.target.value }); });
+  }
   if (e.target.id === 'placeNote') { S.placeNote = e.target.value; $('#placeName').value = placeName(e.target.value); }
   if (e.target.id === 'groundSel' && e.target.value) act(async () => { building([S.note]); await api(`/p/${S.project}/n/${S.note}/ground`, 'PUT', { ground: e.target.value }); });
   if (e.target.dataset.posenum) setJoint(e.target.dataset.posenum, Number(e.target.value.replace(',', '.')));
@@ -2078,6 +2202,8 @@ $('#panel').addEventListener('click', (e) => {
   if (a === 'unplace') { act(async () => { await api(`/p/${S.project}/n/${S.note}/placed/${encodeURIComponent(b.dataset.name)}`, 'DELETE'); }); return; }
   if (a === 'clear') { select([], {}); return; }
   if (a === 'posehome') { goHome(); return; }
+  if (a === 'posego') { goPose(b.dataset.name); return; }
+  if (a === 'gif' || a === 'mp4') { exportAnimation(a); return; }
   if (a === 'tipgo') {
     const now = tipAt(model(), b.dataset.name, S.pose);
     const to = [...document.querySelectorAll(`[data-tipto="${b.dataset.name}"]`)].map((el) => { const v = el.value.trim().replace(',', '.'); return v === '' ? now[Number(el.dataset.k)] : Number(v); });

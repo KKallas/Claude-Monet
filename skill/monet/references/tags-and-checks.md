@@ -138,8 +138,20 @@ asks to drop it: it is theirs.
 | `joint.<name>.resolved` | the joint finds its parts and its axis |
 | `joint.<name>.stop_min`, `stop_max` | moving that joint alone, where it first hits something, each way (degrees or mm; past the range too) |
 | `joint.<name>.clash_mm3` | the worst new overlap anywhere inside the joint's range: max 1 says it moves its whole range freely |
+| `joint.<name>.torque_max_nmm` | what gravity asks of the joint at worst over its range, N·mm (a slider: `force_max_n`, N); with the masses of the materials |
+| `joint.<name>.torque_margin` | the joint's `DRIVES` torque over that: min 2 says the servo has twice what it needs |
+| `pose.<name>.interference_mm3` | at a named pose (`POSES`): how much the parts overlap there, all of it |
+| `pose.<name>.clash_mm3` | at a named pose: the worst new overlap over the as-built |
+| `pose.<name>.clear.<keepout>` | at a named pose: mm³ of that keep-out the parts take up (max 1: it is clear) |
+| `pose.<name>.resolved` | the pose names joints moved by hand, within their ranges |
+| `mass_g` | grams: volume times the density of each part's material, `MASS` for what is bought |
+| `part.<name>.mass_g` | one part of an assembly |
+| `bom.unlisted` | parts of the assembly its `BOM` does not name: equals 0 |
+| `pieces` | how many pieces a part is printed in (`pieces()`); then `fits_bed` and `solids` hold for each piece |
 
-Always present, without being asked for: every tag must resolve, and the solid must be valid.
+Always present, without being asked for: every tag must resolve, the solid must be valid, every
+joint and named pose must be found, and `MATERIAL`, `MATERIALS`, `MASS` and `BOM` must name what
+there is.
 
 Good checks come straight from the rules in the docstring:
 
@@ -150,10 +162,14 @@ Good checks come straight from the rules in the docstring:
 | "sits on the table" | `tag.base.at` min -0.01 max 0.01 |
 | "printable on a 256 x 256 bed" | `fits_bed` |
 | "one piece" | `solids` equals 1 |
-| "no more than 60 g of PLA" (1.24 g/cm³) | `volume_cm3` max 48 |
+| "no more than 60 g of PLA" | `mass_g` max 60 |
 | "the lid opens to 110° without hitting anything" | `joint.lid.clash_mm3` max 1 |
 | "the top slides 79 mm, then stops on the brackets" | `joint.slide.stop_min` min -79.05 max -78.95 |
 | "the parts do not overlap" | `interference_mm3` max 1 |
+| "with the leaves open, the beam passes clear" | `pose.projecting.clear.keepout_beam` max 1 |
+| "one person can lift it" | `mass_g` max 15000 |
+| "the servo holds the arm with room to spare" | `joint.arm.torque_margin` min 2 |
+| "every part is in the bill of materials" | `bom.unlisted` equals 0 |
 
 Rules that cannot be measured yet (maximum solid thickness, overhang angles, minimum wall): say
 so to the user rather than inventing a check that sounds like it covers them.

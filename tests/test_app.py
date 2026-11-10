@@ -591,3 +591,37 @@ def test_a_note_is_put_at_a_snap_point_from_the_canvas(client, reg):
     # the agent's door has no such route: the person places, the agent builds
     assert client.put(f"{w}/api/p/starter/n/tray/placed/peg_1", json={"note": "rod_foot", "at": "left"}).status_code == 404
     client.post(f"{w}/agent/write_note", json={"project": "starter", "note": "tray", "source": TRAY})
+
+
+def test_the_lamp_over_both_doors(client, reg):
+    """The new tools over HTTP: the profile from the canvas, an animation from the agent and its GIF, the BOM as a
+    spreadsheet; each file from the door it belongs to."""
+    from test_lamp import LAMP, LEAF, VERTEBRA
+    w, h = f"/w/{reg['id']}", f"/w/{reg['name']}"
+    assert client.post(f"{w}/agent/new_project", json={"name": "lamp_http", "material": "petg"}).json()["material"] == "petg"
+    for name, source in (("leaf", LEAF), ("vertebra", VERTEBRA), ("lamp", LAMP)):
+        client.post(f"{w}/agent/write_note", json={"project": "lamp_http", "note": name, "source": source})
+    for name in ("leaf", "vertebra", "lamp"):
+        assert agent_builds(client, reg, "lamp_http", name)["built"]
+    got = client.put(f"{h}/api/p/lamp_http/profile", json={"material": "asa"}).json()
+    assert got["material"] == "asa" and client.get(f"{h}/api/p/lamp_http").json()["profiles"]["materials"]["asa"]["max_temp_c"] == 90
+    assert client.put(f"{h}/api/p/lamp_http/profile", json={"material": "nope"}).status_code == 400
+    # the agent's timeline, as JSON in a query string's way too
+    anim = {"fps": 10, "length": 10, "tracks": {"leaf_left": [[0, 0], [10, 90]]}}
+    assert client.post(f"{w}/agent/animate", json={"project": "lamp_http", "note": "lamp", "animation": json.dumps(anim)}).json()["animation"]["length"] == 10
+    r = client.post(f"{w}/agent/render_animation", json={"project": "lamp_http", "note": "lamp", "fps": 5}).json()
+    assert r["frames"] == 6
+    gif = client.get(r["url"].split("testserver", 1)[1])
+    assert gif.headers["content-type"] == "image/gif" and gif.content[:6] == b"GIF89a"
+    assert client.get(f"{h}/api/p/lamp_http/n/lamp/animation.gif").content[:6] == b"GIF89a"
+    mp4 = client.get(f"{h}/api/p/lamp_http/n/lamp/animation.mp4")
+    assert mp4.headers["content-type"] == "video/mp4" and mp4.content[4:8] == b"ftyp"
+    assert client.get(f"{h}/api/p/lamp_http/n/lamp/animation.avi").status_code == 404
+    b = client.post(f"{w}/agent/bom", json={"project": "lamp_http", "note": "lamp"}).json()
+    assert b["printed"]["vertebra"]["qty"] == 3
+    csv = client.get(b["csv"].split("testserver", 1)[1])
+    assert csv.headers["content-type"].startswith("text/csv") and "print,leaf,2" in csv.text
+    assert client.get(f"{h}/api/p/lamp_http/n/lamp/bom").json()["unlisted"] == ["base"]
+    # a route belongs to one door: the person's BOM is not the agent's, the agent's file is not the person's
+    assert client.get(f"{w}/api/p/lamp_http/n/lamp/bom").status_code in (401, 403, 404)
+    assert client.get(f"/w/{reg['name']}/file/p/lamp_http/n/lamp/bom.csv").status_code == 404

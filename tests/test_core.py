@@ -105,6 +105,31 @@ def test_square_hole_that_moved_is_reported_where_it_went():
     assert not r["resolved"] and r["measure"]["moved"] == [-40.0, 0.0]
 
 
+def cylinder(i, diameter, z0, z1, concave, at=(0.0, 0.0)):
+    r = diameter / 2
+    return {"i": i, "type": "cylinder", "axis": [0, 0, 1], "origin": [at[0], at[1], z0], "radius": r, "concave": concave,
+            "center": [at[0], at[1], (z0 + z1) / 2], "bbox": [at[0] - r, at[1] - r, z0, at[0] + r, at[1] + r, z1], "area": 1.0, "tris": [0, 0]}
+
+
+def test_coaxial_cylinders_are_told_apart_by_their_diameter():
+    # a 390 mm shelf disc listed first, over a 50 mm stem on the same axis (the lamp's chassis)
+    faces = [cylinder(0, 390.0, 0, 10, False), cylinder(1, 50.0, -200, 0, False)]
+    box = [-195, -195, -200, 195, 195, 10]
+    r = tags.resolve({"stem": {"kind": "boss", "axis": "Z", "at": [0, 0], "diameter": 50.0}}, faces, box)["stem"]
+    assert r["resolved"] and r["faces"] == [1] and r["measure"]["diameter"] == 50.0
+    r = tags.resolve({"shelf": {"kind": "boss", "axis": "Z", "at": [0, 0], "diameter": 390.0}}, faces, box)["shelf"]
+    assert r["faces"] == [0] and r["measure"]["diameter"] == 390.0
+    # a counterbore: two coaxial bores
+    holes = [cylinder(0, 11.0, 6, 10, True), cylinder(1, 6.4, 0, 6, True)]
+    box = [-20, -20, 0, 20, 20, 10]
+    got = tags.resolve({"bore": {"kind": "round_hole", "axis": "Z", "at": [0, 0], "diameter": 6.4},
+                        "counterbore": {"kind": "round_hole", "axis": "Z", "at": [0, 0], "diameter": 11.0}}, holes, box)
+    assert got["bore"]["faces"] == [1] and got["counterbore"]["faces"] == [0]
+    # one hole alone on its line, made bigger: still found, and it says how big it is now
+    r = tags.resolve({"bore": {"kind": "round_hole", "axis": "Z", "at": [0, 0], "diameter": 16.0}}, [cylinder(0, 17.0, 0, 10, True)], box)["bore"]
+    assert r["resolved"] and r["measure"]["diameter"] == 17.0
+
+
 def test_bad_and_unknown_tags_do_not_crash():
     faces, box = tube()
     r = tags.resolve({"a": {"kind": "nonsense"}, "b": {"kind": "planar_face", "normal": "sideways"}, "c": {"kind": "round_hole", "axis": "Z", "at": [0, 0]}}, faces, box)
@@ -293,6 +318,18 @@ def test_the_keyframes_of_the_timeline():
     if not node:
         pytest.skip("no node on this machine")
     done = subprocess.run([node, "--test", str(Path(__file__).parent / "timeline.test.mjs")], capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stdout[-2000:]
+
+
+def test_the_facts_the_canvas_says():
+    """canvas/facts.js (mass, materials, torque, poses and the BOM in words) has its own tests, in node."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on this machine")
+    done = subprocess.run([node, "--test", str(Path(__file__).parent / "facts.test.mjs")], capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stdout[-2000:]
 
 
