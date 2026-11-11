@@ -103,9 +103,10 @@ def set_joints(source: str, joints: dict, ground=None) -> str:
 
 # what the canvas rewrites (and the server works out again from a build without running it), and the facts about a
 # part that are no shape: what it is made of, what it weighs, the poses to check, what it is in a bill of materials,
-# what drives its joints (FACTS: read here, used by the server when it reports; none of them needs a build)
-FACTS = ("MATERIAL", "MATERIALS", "MASS", "POSES", "BOM", "DRIVES", "KEEPOUT")
-LITERALS = ("TAGS", "JOINTS", "GROUND", "TIPS", "MATERIAL", "MATERIALS", "MASS", "POSES", "BOM", "DRIVES")
+# what drives its joints, the lights in it (FACTS: read here, used by the server when it reports; none of them needs a
+# build)
+FACTS = ("MATERIAL", "MATERIALS", "MASS", "POSES", "BOM", "DRIVES", "KEEPOUT", "LIGHTS")
+LITERALS = ("TAGS", "JOINTS", "GROUND", "TIPS", "MATERIAL", "MATERIALS", "MASS", "POSES", "BOM", "DRIVES", "LIGHTS")
 
 
 def geometry_key(source: str) -> str:

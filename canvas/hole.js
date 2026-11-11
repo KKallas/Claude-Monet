@@ -75,7 +75,10 @@ void main() {
     gl.vertexAttribPointer(at, 2, gl.FLOAT, false, 0, 0);
     const res = gl.getUniformLocation(prog, 'res'), time = gl.getUniformLocation(prog, 't');
     const t0 = performance.now();
+    let last = 0;
     function frame(now) {
+      if (!still && now - last < 1000 / 24) { requestAnimationFrame(frame); return; }      // the logo: 24 pictures a second is plenty
+      last = now;
       const dpr = Math.min(devicePixelRatio || 1, 2), w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
       if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
       gl.viewport(0, 0, w, h);

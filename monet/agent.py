@@ -257,7 +257,12 @@ def animate(c: Caller, project: str, note: str, animation: dict | None = None) -
     """Put keyframes on an assembly's timeline (Motion in the canvas), for the user to play there, or for
     render_animation. animation: {"fps": 30, "length": 120, "tracks": {joint: [[frame, value], …]}}: frames whole,
     from 0 to length; between two keys a joint moves evenly, before the first and after the last it holds; a joint
-    with `follows` moves along by itself. null takes the animation away. Nothing is built from it."""
+    with `follows` moves along by itself. "actions": [{"frame": 60, "do": "pause", "hold": 1.5}, {"frame": 110, "do":
+    "goto", "to": 20}], met while playing (never by a scrub), one to a frame from frame 1: a pause stops there (a video
+    ends there, held `hold` seconds), a goto plays on from `to` (a loop: a video shows it once). Those two are all the
+    verbs. "lights": {light, "room" or "haze": [[frame, level 0…1], …]}: the Note's LIGHTS, the room's own light and
+    the smoke in the air, keyed as joints are (the canvas plays them; render_animation draws the joints only). null
+    takes the animation away. Nothing is built from it."""
     p = c.ws.project(project)
     if not p.is_note(note):
         raise Problem(f"{note} is a helper module, not a Note")

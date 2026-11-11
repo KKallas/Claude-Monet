@@ -243,7 +243,8 @@ Assembly, opening one of its parts goes to Part, starting a drawing goes to Sket
   stops. Make a joint by selecting the moving part and the hole, boss or face to turn about or
   slide along (it is tagged for the joint), group parts that move as one, lock a joint, choose
   the ground: all of it written into the Note's `JOINTS`. A tip (a robot's nose) is a pink ring: drag it and the
-  joints follow it, or type where it should go.
+  joints follow it, or type where it should go. Along the bottom, a timeline: keys of the joints over frames,
+  and an action line above them (a pause, or a goto to another frame) that playing meets and a video follows.
 
 Candidate starting point: [yet-another-cad-viewer](https://github.com/yeicor-3d/yet-another-cad-viewer),
 which already shows build123d models in the browser with face, edge and vertex
@@ -305,6 +306,93 @@ What actually decides whether a jig works, kept as data the agent must respect:
 - stock: measured plywood thickness (12 mm sheet is often ~11.6 mm), rod diameters,
   fasteners
 
+### Showing it: lights, beams, a timeline and the finish
+
+*Status: the action line (0.9.x) and lights and beams in the canvas (0.10.0) are built; the lights' facts and checks (lux,
+blocked beams), lights in the server's videos, and the finish are the plan (Kaspar, 2026-11-11).*
+
+Monet is a design tool and a sales tool in one. Until now a lamp or a projector piece was drawn in
+Blender or made up by an image model (nano banana): a shell, with no inside and no mechanics. The
+client said yes to that, and only then did anyone find out whether it could be built, and what the
+look had to give up so it could be. With an agent designing real parts, the design is buildable from
+the start: electronics, LEDs, lights and projectors inside, joints that move, pieces that fit the
+bed. The client still needs a fancy photographic picture. So the pictures are made **from the
+buildable design**: it works in the canvas, and then a picture model makes it look like a photograph.
+What looks good in front of the client can be made.
+
+**The action line** (built). Above the joint lines of the timeline in Motion there is a line of
+actions, data and not code (the agent runs no code in the canvas): at a frame, a `pause` (▶ goes on
+from there) or a `goto` to another frame (back: a loop). Playing meets them; a scrub never does. A
+video follows the same path (`played` in `workspace.py`, the same steps as `advance` in
+`canvas/timeline.js`, held together by `tests/advance.json`): it ends at a pause, held `hold` seconds,
+and shows a loop once. New verbs come only when needed (`pose <name>`, `light`, `camera`, `wait`).
+
+**Lights and beams** (built in 0.10.0: `monet/lights.py` checks them, `canvas/lights.js` draws them). A Note's `LIGHTS`, a plain literal
+and no shape (`note.FACTS`):
+
+```python
+LIGHTS = {
+  "led":   {"kind": "spot", "on": "head", "at": [0, 0, -12], "aim": [0, 0, -1],
+            "angle": 60, "soft": 0.3, "lumens": 800, "color": "#ffd8a8", "glow": "diffuser"},
+  "proj":  {"kind": "projector", "on": "head", "at": [40, 0, -5], "aim": [0, 0.3, -1], "up": [0, 1, 0],
+            "throw": 1.2, "aspect": "16:9", "lumens": 300},
+  "laser": {"kind": "laser", "on": "turret", "at": [0, 0, 20], "aim": [1, 0, 0], "fan": 40, "mw": 50, "color": "#2a4bff"},
+}
+```
+
+- Kinds: `point`, `spot` (a cone: full beam angle, soft edge), `projector` (a rectangular beam from
+  its throw ratio and aspect, a test picture on what it lands on, later an image of the user's own),
+  `laser` (a line, or with `fan` a sheet). Strength in lumens, a laser's in mW. A light rides its
+  part (`on`) through every joint, as a keep-out does (`derive.riding`); `glow` lights a part with it.
+- The look is Blade Runner's searchlights and Alien's lasers in smoke: a beam is seen in the air (an
+  additive shader, bright at the source, fading along and to its edges, slow 3D noise for smoke,
+  specks of dust), with hard edges against a dark room; a laser a hot core in a halo, a fan a sheet
+  that sweeps as its joint moves; bloom, and a short anamorphic streak where you look into a source.
+  The beam is cut where it meets a part (a grid of rays from the source, again as the pose changes),
+  so a part in the way leaves a dark shaft in the smoke. Light lands with shadows (three.js
+  `SpotLight`, a projector's picture by `SpotLight.map`).
+- The timeline gets a line for each light (intensity 0–100 %), and for the **room** (how much it is
+  lit) and the **haze** (how much smoke is in the air): timing an animation by its light. Motion has
+  a slider for each. **Record** takes the canvas as a video in the browser, at the canvas's quality;
+  the server's GIF/MP4 stays the agent's quick look, with a plainer beam.
+- What the lights do, worked out on the server from the build, as torque is: how much of each beam
+  the parts cut off at each pose, lux on a surface the Note names (centre, least, evenness), a
+  projector's picture size at its throw and whether all of it lands; each one checkable
+  (`lux.table.min >= 300`, `beam.led.blocked <= 0.05`). A beam can be a keep-out (`"keepout": true`):
+  for a light or a projector, the beam *is* the room to keep clear.
+
+**The finish** (plan). From Adam Designer's Finish and Generate rooms (its `docs/06-finish.md`,
+`07-model-pass.md`, `12-generate.md`): a **shot** is a camera, a frame of the timeline (so a pose and
+the lights), and optionally a photograph of where it will stand (Adam Designer's Place). The canvas
+renders it as layers, each named in the text sent with them, so the model knows what is what:
+1. the rendered picture, lights and beams in it: *what it looks like and where everything is*;
+2. the parts alone on black, each in its own flat colour: *what must stay*: outlines, places, how many;
+3. the lights and beams alone: *where the light comes from*;
+4. depth and normals, for the models that take them; the background photo, untouched.
+
+The instruction says the result is picture 1 made real: the same framing, every part where it is,
+its outline and count kept, materials as the project says (`MATERIALS`, the canvas's Look), light only
+from the lights shown. The person adds what this picture needs ("evening, a wooden sideboard, the
+beam through a little haze"). As in Adam Designer's Generate it is a chat with the model, a turn at a
+time; what comes back is laid on the shot as a layer, and the next turn starts from the picture.
+**Videos** the same way, by a video model: a start and an end frame from the timeline's poses, or the
+canvas's recording as the motion to follow.
+
+- **The models are data**, as printers are: `profiles/models/<name>.json`: kind (image or video),
+  what pictures it takes, sizes, cost per call. nano banana (Gemini image) first, others beside it to
+  choose from; a fake model for the tests; each call's cost shown before it goes, and a budget.
+- **A finish stays honest.** It carries the version of the Notes it was made from and is marked
+  stale when the design changes. It is checked against layer 2: where a part's outline in the
+  picture strays from the built part's (overlap of the two masks), or a part is missing or added, it
+  says so, so a picture never shows a lamp that cannot be made. It is labelled an illustration of
+  version n.
+- **Decision open: who calls the models.** CLAUDE.md says there is no model in the server: the agent
+  is the person's own. A picture model is a tool, not an agent, and Adam Designer calls Gemini from
+  its server (a key, a cost, a budget). Either the server calls them, so the person can finish a
+  picture in the canvas without an agent, with the key kept beside the accounts and not in `storage/`;
+  or the agent calls them on the person's computer with the person's keys and uploads the result,
+  as it uploads builds. To be decided before this is built.
+
 ## Layout
 
 ```
@@ -320,6 +408,7 @@ monet/        note.py        read a Note without running it; rewrite its TAGS an
               tags.py        find tagged features on a build (planar faces, square and round holes)
               materials.py   what each part is made of and weighs (MATERIAL, MATERIALS, MASS), by the server
               bom.py         the bill of materials of an assembly (BOM): print counts, cut list, what to buy
+              lights.py      the lights of a Note (LIGHTS) checked against its parts, for the canvas to draw
               split.py       a part bigger than the bed cut into pieces with dowel holes (used in a Note's pieces())
               joints.py      an assembly's joints found on a build: where each part is at a pose,
                              what moving a joint hits (manifold3d), what overlaps as built
@@ -334,6 +423,8 @@ monet/        note.py        read a Note without running it; rewrite its TAGS an
               app.py         the web app (Starlette): logins, canvas API, agent door, /api for LLMs
 canvas/       the browser view (three.js), no build step:
               canvas.js      the page: the four areas, selection, panels, compare, Motion
+              lights.js      the Note's lights: where they land, beams in smoke, glow, bloom, the stage
+              timeline.js    Motion's timeline: keys of joints and lights, the action line, playing
               motion.js      where the parts are at a pose of the joints (tested in node, and
                              against joints.py)
               measure.js     shortest distances and angles (plain arrays; tested in node)
@@ -399,6 +490,11 @@ the saved version with a build of it again. Back up `storage/` if the work matte
   material's `max_temp_c` is not checked against anything (there is no thermal check).
 - Splitting a big part makes dowel joints only: no laps, dovetails or bolt tabs, and no cradle for a
   piece that will not stand on its cut face.
+- Lights: no facts or checks of what they do yet (lux on a surface, how much of a beam is cut off, a
+  projector's picture landing whole), no lights in the server's GIF/MP4, the stage (a floor, a wall
+  before the projector) is the canvas's own guess, a projector throws a test picture only. The finish
+  (photographic pictures and videos by picture and video models, checked against the build) is planned,
+  in "Showing it" above. The action line has two verbs, pause and goto.
 - The ten-edit experiment below has not been run.
 
 ## First milestone: the MG400 work table

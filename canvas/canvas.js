@@ -16,6 +16,7 @@ import { dials } from './dial.js';
 import { railWidth } from './rails.js';
 import { sideEdge } from './side.js';
 import { createTimeline } from './timeline.js';
+import { createLights } from './lights.js';
 import { remote } from './remote.js';
 import { bomLines, grams, howWords, materialName, materialWords, partWords, poseLines, poseValues, torqueWords } from './facts.js';
 
@@ -89,6 +90,29 @@ controls.screenSpacePanning = true;
 const loader = new GLTFLoader();
 const groups = { part: new THREE.Group(), a: new THREE.Group(), b: new THREE.Group() };
 Object.values(groups).forEach((g) => scene.add(g));
+// the Note's lights (LIGHTS), shown in Motion: the light where it lands, beams in smoke, what glows (canvas/lights.js).
+// The levels of the lights, the room and the haze are lines on the timeline too ("~name" there)
+let lightsWanted = true, recording = null;
+// when the view was last used: it is drawn while it is (the render loop, below), and rests when it is not
+let lastUse = performance.now(), lastDraw = 0, lastTick = performance.now(), smokeTime = 0, pictures = 0;
+function wake() { lastUse = performance.now(); }
+try { lightsWanted = localStorage.getItem('monet.lights') !== '0'; } catch { /* no storage */ }
+const lamps = createLights({ renderer, scene, look, hooks: { parts: lightParts, camera: () => camera } });
+function lightParts() {
+  return groups.part.children.map((one) => {
+    const i = one.userData.part;
+    return { name: S.parts.length > 1 ? S.parts[i]?.name : S.note, object: one, mesh: one.children.find((o) => o.isMesh && !o.userData.cap), keepout: isKeepout(i), hidden: S.hidden.has(i) };
+  });
+}
+function syncLights() {
+  const want = lightsWanted && S.room === 'motion' && !S.compare && !!S.data?.report?.built && lamps.lights.length > 0;
+  if (want !== lamps.on) { lamps.enable(want); spread(); }
+}
+function setLevel(name, value, hand) {
+  lamps.level(name, value); wake();
+  document.querySelectorAll(`[data-light="${name}"]`).forEach((el) => { if (document.activeElement !== el) el.value = lamps.levels[name]; });
+  if (hand) timeline.touched([`~${name}`]);
+}
 const cut = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
 // where the section cuts through material it glows red: the inside of the part, seen through the cut, is drawn flat
 // (pushed back further than the faces are, so it never shows at their silhouette)
@@ -236,6 +260,7 @@ function dress() {
       else if (o.userData.dots) o.material.color.set(edge.color);
     }
   }
+  lamps.restyled(); wake();
   $('#partColours').hidden = !(S.parts.length > 1 && !S.compare && look.style === 'shaded');
   styleAll(); paint();
 }
@@ -250,6 +275,7 @@ function resize() {
   Object.assign(ortho, { left: -half * aspect, right: half * aspect, top: half, bottom: -half, near: 0.01, far: radius * 40 });
   Object.assign(persp, { aspect, near: radius / 100, far: radius * 100 });
   ortho.updateProjectionMatrix(); persp.updateProjectionMatrix();
+  lamps.resize();
 }
 // how far the perspective camera stands for the part to fill the view as the orthographic one shows it at zoom 1
 const fitDistance = (fov = persp.fov) => radius * 1.2 / Math.tan(THREE.MathUtils.degToRad(fov) / 2);
@@ -395,10 +421,11 @@ function spread() {
       if (b) one.position.set((b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2).sub(home).multiplyScalar(at ? 0 : explode);
     }
     one.updateMatrix();
-    one.visible = !S.hidden.has(one.userData.part);
+    one.visible = !S.hidden.has(one.userData.part) && !(lamps.on && isKeepout(one.userData.part));      // lit, a keep-out is drawn as its beam
   }
   groups.part.updateMatrixWorld(true);
   neonDirty = true;
+  lamps.moved(); wake();
   showSelection(); showAxes(); showTips(); showSnaps();
 }
 
@@ -1045,6 +1072,7 @@ function roomBar() {
   canvas.style.cursor = S.room === 'sketch' ? 'crosshair' : S.boxTool ? 'crosshair' : '';
   remote.say();
   showPlanes();
+  syncLights();
 }
 function startSketch(what) {
   S.room = 'sketch';
@@ -1100,8 +1128,16 @@ $('#sketchSnap').onclick = () => { sketch.state.snap = !sketch.state.snap; roomB
 $('#sketchValue').oninput = (e) => sketch.setValue(Number(e.target.value.replace(',', '.')));
 $('#sketchUndo').onclick = () => sketch.undo();
 
+// the view is drawn while it is used (a pointer, a key, a timeline or a joint playing, a pose changing) and for two
+// seconds after; left alone, twice a second, and the smoke of the lights stands still: a laptop stays cool
+for (const e of ['pointerdown', 'pointermove', 'wheel', 'keydown']) window.addEventListener(e, wake, { passive: true });
+controls.addEventListener('change', wake);
 (function loop() {
   requestAnimationFrame(loop);
+  const now = performance.now(), awake = now - lastUse < 2000 || timeline.playing || !!playing || !!recording || !!drag || !!blink;
+  if (!awake && now - lastDraw < 500) return;
+  if (awake) smokeTime += Math.min(100, now - lastTick);
+  lastTick = now; lastDraw = now; pictures++;
   controls.update();
   if (sectionOn) {      // a slow glow; in 2077 a neon red, hatched
     const now = performance.now(), neon = cyber();
@@ -1112,8 +1148,8 @@ $('#sketchUndo').onclick = () => sketch.undo();
     capLight.uPitch.value = 12 * renderer.getPixelRatio();
   }
   if (neonDirty || neonOn !== (sectionOn && cyber())) traceCut();
-  renderer.render(scene, camera);
-  if (!(S.room === 'sketch' && sketch.state.active)) cube.draw(renderer, camera, controls.target, view.clientWidth, view.clientHeight);
+  if (lamps.on) { lamps.update(smokeTime / 1000); lamps.render(camera); } else renderer.render(scene, camera);
+  if (!(S.room === 'sketch' && sketch.state.active) && !recording) cube.draw(renderer, camera, controls.target, view.clientWidth, view.clientHeight);
   for (const el of $('#planeLabels').children) {      // the name of each plane, at a corner of its sheet
     spot.copy(shown[Number(el.dataset.i)].at).project(camera);
     el.style.transform = `translate(${(spot.x + 1) / 2 * view.clientWidth + 4}px, ${(1 - spot.y) / 2 * view.clientHeight + 2}px)`;
@@ -1281,6 +1317,36 @@ async function exportAnimation(fmt = 'gif') {
   } catch (e) { busy(); tell(`The ${what} was not made: ${e.message}`); }
 }
 
+/** The timeline played here once (a loop once round) and the view recorded as it plays: a video at the canvas's own
+ *  quality, lights, beams and all. MP4 where the browser records it, else WebM. */
+async function recordVideo() {
+  if (!window.MediaRecorder || !canvas.captureStream) { tell('This browser cannot record the view: try Chrome.'); return; }
+  const type = ['video/mp4;codecs=avc1.640028', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'].find((t) => MediaRecorder.isTypeSupported(t));
+  const rec = new MediaRecorder(canvas.captureStream(60), { mimeType: type, videoBitsPerSecond: 16_000_000 }), chunks = [];
+  rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  const stopped = new Promise((r) => { rec.onstop = r; });
+  recording = { met: new Set(), stop: false };
+  stopPlaying(); timeline.stop();
+  renderPanel(true);
+  lamps.quality(true);      // the video at the screen's own pixels; the view goes back to the lighter picture after
+  rec.start(250);
+  const t0 = performance.now();
+  await new Promise((r) => requestAnimationFrame(r));
+  timeline.play({ once: true });
+  busy('recording the view… (Record again stops it)');
+  while (timeline.playing && !recording.stop && performance.now() - t0 < 300_000) await new Promise((r) => requestAnimationFrame(r));
+  await new Promise((r) => setTimeout(r, 300));      // the last picture held a moment
+  rec.stop();
+  await stopped;
+  recording = null;
+  lamps.quality(false);
+  busy(); renderPanel(true);
+  const blob = new Blob(chunks, { type: type.split(';')[0] }), url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement('a'), { href: url, download: `${S.note}.${type.includes('mp4') ? 'mp4' : 'webm'}` });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 // a joint driven back and forth through its range, the whole way in four seconds
 let playing = 0;
 function stopPlaying() {
@@ -1307,8 +1373,15 @@ function play(name) {
 
 // the timeline along the bottom of the view in Motion (timeline.js): keys of the joints over frames, kept in the project
 const timeline = createTimeline($('#timeline'), {
-  pose: () => S.pose,
-  setPose(values) { poseTo(values); },
+  pose: () => ({ ...S.pose, ...Object.fromEntries(Object.entries(lamps.levels).map(([k, v]) => [`~${k}`, v])) }),
+  setPose(values) {
+    poseTo(values);
+    for (const [k, v] of Object.entries(values)) if (k.startsWith('~')) setLevel(k.slice(1), v, false);
+  },
+  action(a) {      // recording: a goto met a second time has shown its loop once
+    if (!recording || a.do !== 'goto') return;
+    if (recording.met.has(a.frame)) timeline.pause(); else recording.met.add(a.frame);
+  },
   async save(animation, key) {
     const [project, note] = key.split('/');
     try {
@@ -1316,7 +1389,8 @@ const timeline = createTimeline($('#timeline'), {
       if (S.project !== project) return;
       S.proj.animations = animations;
       S.rev = (await api(`/p/${project}/rev`)).rev;      // our own change: nothing to load again
-      if (!$('#panel [data-card="gif"]') !== !Object.values(animations[note]?.tracks ?? {}).some((k) => k.length)) renderPanel();      // Export GIF comes or goes
+      const keyed = [animations[note]?.tracks, animations[note]?.lights].some((t) => Object.values(t ?? {}).some((k) => k.length));
+      if (!$('#panel [data-card="gif"]') !== !keyed) renderPanel();      // the Animation card comes or goes
     } catch (e) { notice(`the keyframes were not kept: ${e.message}`); }
   },
   height(px) { view.style.setProperty('--tl-h', `${px}px`); view.classList.toggle('timed', px > 0); },
@@ -1324,7 +1398,10 @@ const timeline = createTimeline($('#timeline'), {
 function showTimeline() {
   const mo = moving() ? model() : null;
   if (!mo) { timeline.show(false); return; }
-  const joints = drivers(mo).map((n) => ({ name: n, ...mo.joints[n] }));
+  const lit = S.data?.report?.lights ?? [];
+  const joints = [...drivers(mo).map((n) => ({ name: n, ...mo.joints[n] })),
+    ...(lit.length ? [...lit.map((L) => ({ name: `~${L.name}`, label: L.name, kind: 'light', unit: '%', scale: 100 })),
+      { name: '~room', label: 'room', kind: 'room', unit: '%', scale: 100 }, { name: '~haze', label: 'haze', kind: 'haze', unit: '%', scale: 100 }] : [])];
   timeline.show(true, `${S.project}/${S.note}`, S.proj?.animations?.[S.note] ?? null, joints);
 }
 
@@ -1553,11 +1630,27 @@ function motionCards() {
     ${inter.pairs.map(([a, b, vol]) => `<div class="why warn"><b>${esc(a)}</b> and <b>${esc(b)}</b>: ${fmt(vol)} mm³</div>`).join('')}
     ${mo.unchecked?.length ? `<p class="muted">Not checked, their mesh is not closed: ${mo.unchecked.map(esc).join(', ')}</p>` : ''}
     <p class="muted">A clash is new overlap as parts move; what overlaps as built is listed apart. A check can hold joint.NAME.stop_min, stop_max and clash_mm3.</p>`));
+  const lit = S.data.report?.lights ?? [];
+  if (lit.length) {
+    const ICON = { spot: '◭', projector: '▣', laser: '⟋', point: '✦', glow: '◌', room: '⌂', haze: '≋' };
+    const slider = (name, kind, what) => `<div class="check light" data-lightrow="${esc(name)}"><div class="row"><span><span class="kind">${ICON[kind] ?? '✦'}</span><b>${esc(name)}</b> <span class="muted">${what}</span></span></div>
+      <div class="line"><input type="range" data-light="${esc(name)}" min="0" max="1" step="0.01" value="${lamps.levels[name] ?? 1}" data-icon="${ICON[kind] ?? '✦'}" data-label="${esc(name)}"
+        data-scale="100" data-unit="%" data-key="light:${kind}" data-default="${kind === 'room' ? 0.12 : kind === 'haze' ? 0.6 : 1}" title="how bright ${esc(name)} is"></div></div>`;
+    const about = (L) => L.kind === 'spot' ? `${fmt(L.angle)}° beam, ${fmt(L.lumens)} lm, ${fmt(Math.round(L.candela))} cd`
+      : L.kind === 'projector' ? `throw ${fmt(L.throw)}, ${fmt(L.picture.width_at_1m)} × ${fmt(L.picture.height_at_1m)} mm at 1 m, ${fmt(L.lumens)} lm`
+      : L.kind === 'laser' ? `${fmt(L.mw)} mW${L.fan ? `, a ${fmt(L.fan)}° fan` : ''}` : L.kind === 'glow' ? `${esc(L.glow)} glows` : `${fmt(L.lumens)} lm`;
+    cards.push(card('lights', `Lights · ${lit.length}`, `<div class="line"><button data-act="lights" class="${lamps.on ? 'on' : ''}" title="the lights, the beams in smoke, the room dimmed">${lamps.on ? '● Lights on' : '○ Lights off'}</button>
+      <span style="flex:1"></span><span class="muted">${lamps.on ? 'the floor and a wall to land on' : ''}</span></div>
+      ${lit.map((L) => slider(L.name, L.kind, `${L.kind}${L.on ? ` on ${esc(L.on)}` : ''} · ${about(L)}`)).join('')}
+      ${slider('room', 'room', 'the room\'s own light')}${slider('haze', 'haze', 'smoke in the air: how much the beams show')}
+      <p class="muted">The Note's LIGHTS. Their levels, the room's and the haze are lines on the timeline: key them to time an animation by its light.</p>`));
+  }
   const anim = S.proj?.animations?.[S.note];
-  if (Object.values(anim?.tracks ?? {}).some((k) => k.length)) {
-    cards.push(card('gif', 'Animation', `<p class="muted" style="margin-top:0">The timeline's keyframes, ${fmt(anim.length)} frames at ${fmt(anim.fps)} fps, drawn on the server as a GIF or an MP4 video: it takes a few seconds.</p>
-      <div class="line"><select id="gifView" title="where the camera stands">${['iso', 'front', 'right', 'top', 'iso_back'].map((k) => `<option value="${k}">${k.replace('_', ' ')}</option>`).join('')}</select>
-        <button class="primary" data-act="gif">GIF</button><button class="primary" data-act="mp4">MP4</button></div>`));
+  if (Object.values(anim?.tracks ?? {}).some((k) => k.length) || Object.values(anim?.lights ?? {}).some((k) => k.length)) {
+    cards.push(card('gif', 'Animation', `<p class="muted" style="margin-top:0">The timeline, ${fmt(anim.length)} frames at ${fmt(anim.fps)} fps. <b>Record</b> plays it here and saves the view as a video, lights and all; GIF and MP4 are drawn on the server, plainer, in a few seconds.</p>
+      <div class="line"><button class="primary" data-act="record" title="play the timeline and record the view">${recording ? '■ Stop' : '● Record'}</button><span style="flex:1"></span>
+        <select id="gifView" title="where the camera stands">${['iso', 'front', 'right', 'top', 'iso_back'].map((k) => `<option value="${k}">${k.replace('_', ' ')}</option>`).join('')}</select>
+        <button data-act="gif">GIF</button><button data-act="mp4">MP4</button></div>`));
   }
   return cards;
 }
@@ -1878,10 +1971,12 @@ async function open(project, note) {
     S.proj = await api(`/p/${project}`);
     if (S.room !== 'sketch') S.room = kindOf(S.note) === 'assembly' ? (S.room === 'motion' ? 'motion' : 'assembly') : 'part';      // now that it is built, it is known for what it is
     keepPose();
+    lamps.set(S.data.report?.built || last ? S.data.report?.lights ?? [] : []);
+    if (lamps.on) lamps.rebuilt();
     roomBar(); renderSide();
-  } catch (e) { S.data = { error: e.message }; }
+  } catch (e) { S.data = { error: e.message }; lamps.set([]); }
   busy();
-  styleAll(); paint(); showTag(); renderPanel(true); showLast(); assemblyBar(); showSnaps(); showGhosts();
+  styleAll(); paint(); showTag(); renderPanel(true); showLast(); assemblyBar(); showSnaps(); showGhosts(); syncLights(); showTimeline();
 }
 
 /** No project is open: the one that was is gone, or there is none yet. */
@@ -2166,6 +2261,7 @@ $('#panel').addEventListener('change', (e) => {
 // Motion: a joint's slider moves it as it is dragged; what is typed into the joint being made is kept as it is typed
 $('#panel').addEventListener('input', (e) => {
   if (e.target.dataset.pose) { stopPlaying(); setJoint(e.target.dataset.pose, Number(e.target.value)); }
+  if (e.target.dataset.light) setLevel(e.target.dataset.light, Number(e.target.value), true);
   const k = e.target.dataset.edit;
   if (k && S.edit) S.edit[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
 });
@@ -2204,6 +2300,12 @@ $('#panel').addEventListener('click', (e) => {
   if (a === 'posehome') { goHome(); return; }
   if (a === 'posego') { goPose(b.dataset.name); return; }
   if (a === 'gif' || a === 'mp4') { exportAnimation(a); return; }
+  if (a === 'record') { if (recording) { recording.stop = true; timeline.pause(); } else recordVideo(); return; }
+  if (a === 'lights') {
+    lightsWanted = !lamps.on;
+    try { localStorage.setItem('monet.lights', lightsWanted ? '1' : '0'); } catch { /* not kept */ }
+    syncLights(); renderPanel(true); return;
+  }
   if (a === 'tipgo') {
     const now = tipAt(model(), b.dataset.name, S.pose);
     const to = [...document.querySelectorAll(`[data-tipto="${b.dataset.name}"]`)].map((el) => { const v = el.value.trim().replace(',', '.'); return v === '' ? now[Number(el.dataset.k)] : Number(v); });
@@ -2591,7 +2693,7 @@ versionNow().then((v) => {
 document.addEventListener('visibilitychange', lookForNewer);
 
 window.monet = { S, groups, cube, lookAlong, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom,
-  axes, setJoint, goHome, play, stopPlaying, timeline, partPose, reach, tipAt: (name) => tipAt(model(), name, S.pose),
+  axes, setJoint, goHome, play, stopPlaying, timeline, partPose, lamps, setLevel, recordVideo, get pictures() { return pictures; }, reach, tipAt: (name) => tipAt(model(), name, S.pose),
   ghosts, snapAt, placeAt: (name) => { S.placeAt = name; showSnaps(); renderPanel(true); } };   // for looking in from the console, and from scripts/shot.mjs
 resize();
 start().catch((e) => { $('#panel').innerHTML = `<div class="card"><p class="err">${esc(e.message)}</p></div>`; });

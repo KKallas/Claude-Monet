@@ -2,6 +2,7 @@
 stops the agent, nothing is built on the server (the agent builds and uploads), and there are only so many
 workspaces."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -307,3 +308,40 @@ def test_an_animation_is_kept_in_the_project_and_checked(project):
     with pytest.raises(Problem):
         project.set_animation("../x", None)
     assert "rod_foot" not in project.set_animation("rod_foot", None)
+
+
+def test_the_action_line_is_checked_and_kept(project):
+    """Actions: pause or goto, one to a frame, from frame 1; a goto has somewhere else to go; a pause holds a video."""
+    got = project.set_animation("rod_foot", {"fps": 30, "length": 60, "tracks": {"j1": [[0, 0]]}, "actions": [
+        {"frame": 50, "do": "goto", "to": 10}, {"frame": 30, "do": "pause", "hold": 1}, {"frame": 40, "do": "pause", "hold": 0}]})
+    assert got["rod_foot"]["actions"] == [{"frame": 30, "do": "pause", "hold": 1.0}, {"frame": 40, "do": "pause"}, {"frame": 50, "do": "goto", "to": 10}]
+    assert "actions" not in project.set_animation("rod_foot", {"length": 60, "tracks": {"j1": [[0, 0]]}, "actions": []})["rod_foot"]
+    for bad in ([{"frame": 0, "do": "pause"}], [{"frame": 61, "do": "pause"}], [{"frame": 5, "do": "run", "code": "alert(1)"}],
+                [{"frame": 5, "do": "pause", "script": "x"}], [{"frame": 5, "do": "goto"}], [{"frame": 5, "do": "goto", "to": 5}],
+                [{"frame": 5, "do": "goto", "to": 99}], [{"frame": 5, "do": "pause"}, {"frame": 5, "do": "goto", "to": 0}],
+                [{"frame": 5, "do": "pause", "hold": 11}], [{"frame": 5.5, "do": "pause"}], [{"frame": True, "do": "pause"}], "pause"):
+        with pytest.raises(Problem):
+            project.set_animation("rod_foot", {"length": 60, "actions": bad})
+
+
+def test_advance_plays_as_the_canvas_does():
+    """The same steps as canvas/timeline.js advance (tests/advance.json, which tests/timeline.test.mjs reads too)."""
+    from monet.workspace import advance
+    fx = json.loads((Path(__file__).parent / "advance.json").read_text())
+    for s in fx["steps"]:
+        f, lo, stop, a = advance(fx["anims"][s["anim"]], s["frame"], s["lo"], s["d"], s["loop"])
+        assert [f, lo, stop, a and a["frame"]] == s["out"], s
+
+
+def test_a_video_follows_the_actions():
+    """To the end; to a pause and held there; a loop of gotos shown once."""
+    from monet.workspace import played
+    plain = {"fps": 30, "length": 60, "tracks": {}}
+    assert played(plain, 10) == [float(f) for f in range(0, 61, 3)]
+    held = {**plain, "actions": [{"frame": 30, "do": "pause", "hold": 1.0}]}
+    assert played(held, 10) == [float(f) for f in range(0, 31, 3)] + [30.0] * 10
+    assert played({**plain, "actions": [{"frame": 30, "do": "pause"}]}, 10)[-2:] == [27.0, 30.0]
+    loop = {"fps": 30, "length": 60, "tracks": {}, "actions": [{"frame": 50, "do": "goto", "to": 10}]}
+    assert played(loop, 3) == [0.0, 10.0, 20.0, 30.0, 40.0, 10.0, 20.0, 30.0, 40.0]
+    stuck = {**plain, "actions": [{"frame": 20, "do": "goto", "to": 40}, {"frame": 40, "do": "goto", "to": 20}]}
+    assert len(played(stuck, 30)) < 100          # two gotos sending playing to each other: shown once, it ends

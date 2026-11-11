@@ -36,12 +36,13 @@ import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import bom as boms, derive, feynman, joints, materials, note as notes, runner, semmelweis
+from . import bom as boms, derive, feynman, joints, lights as lamps, materials, note as notes, runner, semmelweis
 
 ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 EXPORTS = {"stl": "model/stl", "3mf": "model/3mf", "step": "model/step", "glb": "model/gltf-binary"}
 MATERIALS = ("pla", "pom", "aluminium", "pc")      # what the canvas can render a part as (canvas/look.js); pc: clear polycarbonate
+ACTIONS = {"pause": ("hold",), "goto": ("to",)}    # the verbs of the timeline's action line and what each may say more
 MAX_SOURCE = 200_000
 MAX_ARCHIVE = 100_000_000      # bytes of a project as an archive: of the zip, and of what it unpacks to
 MAX_ARCHIVE_FILES = 5000
@@ -67,6 +68,45 @@ def value_at(keys: list, f: float) -> float:
         i += 1
     (f0, v0), (f1, v1) = keys[i - 1], keys[i]
     return v1 if f1 == f0 else v0 + (v1 - v0) * (f - f0) / (f1 - f0)
+
+
+_EPS = 1e-9
+
+
+def advance(anim: dict, frame: float, lo: float, d: float, loop: bool = False) -> tuple:
+    """One step of playing, as advance in canvas/timeline.js (a test holds them together): from `frame`, the actions met
+    up to `lo`, on by d frames. Returns (frame, lo, stop, action): a pause stops at its frame, a goto goes on from just
+    before `to`, the end goes round or stops."""
+    nxt, length = frame + d, anim["length"]
+    hi = min(nxt, length)
+    a = next((x for x in anim.get("actions") or () if lo + _EPS < x["frame"] <= hi + _EPS), None)
+    if a and a["do"] == "pause":
+        return a["frame"], a["frame"], True, a
+    if a and a["do"] == "goto":
+        return a["to"], a["to"] - 0.5, False, a
+    if nxt >= length - _EPS:
+        return (length, length, True, None) if not loop else (nxt % length, 0.0, False, None)
+    return nxt, nxt, False, None
+
+
+def played(anim: dict, fps: float, most: int = 20_000) -> list:
+    """The frames of the timeline a video shows at `fps` pictures a second: played from 0 as the canvas plays it, its
+    actions met. It ends at the end, at a pause (held there `hold` seconds), or where a goto would go round again: a
+    loop is shown once (a GIF goes round by itself)."""
+    step, frame, lo, out, met = anim["fps"] / fps, 0.0, 0.0, [0.0], set()
+    while len(out) < most:
+        frame, lo, stop, a = advance(anim, frame, lo, step)
+        if a and a["do"] == "goto":
+            if a["frame"] in met:
+                break
+            met.add(a["frame"])
+        out.append(float(frame))
+        if stop:
+            if len(out) > 1 and out[-1] == out[-2]:
+                out.pop()
+            out += [out[-1]] * round(float((a or {}).get("hold", 0)) * fps)
+            break
+    return out
 
 
 class Problem(Exception):
@@ -414,7 +454,8 @@ class Project:
 
     def set_animation(self, note: str, animation: dict | None) -> dict:
         """The keyframes of an assembly's joints, from the canvas's timeline: {fps, length, tracks: {joint: [[frame,
-        value], …]}}, frames whole and within 0…length. None takes it away. Kept in monet.json beside the looks:
+        value], …]}, lights: {light, room or haze: [[frame, level 0…1], …]}, actions: [{frame, do: pause|goto, to, hold}]}, frames whole and within 0…length (an action from 1:
+        playing starts at 0). None takes it away. Kept in monet.json beside the looks:
         nothing is built from it, and an archive carries it."""
         if not re.match(rf"^{_NOTE}$", str(note)):
             raise Problem(f"{note!r} is not the name of a Note")
@@ -444,6 +485,49 @@ class Project:
                     kept[k[0]] = float(k[1])
                 if kept:
                     clean["tracks"][str(joint)] = [[f, kept[f]] for f in sorted(kept)]
+            lights = animation.get("lights") or {}
+            if not isinstance(lights, dict) or len(lights) > 40:
+                raise Problem("lights are {light: [[frame, level], …]}, levels from 0 to 1, at most 40 of them (room and haze among them)")
+            for light, keys in lights.items():
+                if not lamps.NAME.match(str(light)):
+                    raise Problem(f"{light!r} is not the name of a light (or room, or haze)")
+                if not isinstance(keys, list) or len(keys) > 5000:
+                    raise Problem(f"{light}: the keys are a list of [frame, level], at most 5000")
+                kept = {}
+                for k in keys:
+                    ok = isinstance(k, list) and len(k) == 2 and isinstance(k[0], int) and not isinstance(k[0], bool) \
+                        and isinstance(k[1], (int, float)) and not isinstance(k[1], bool) and 0 <= k[1] <= 1
+                    if not ok or not 0 <= k[0] <= length:
+                        raise Problem(f"{light}: a key is [frame, level], the frame whole from 0 to {length}, the level from 0 to 1")
+                    kept[k[0]] = float(k[1])
+                if kept:
+                    clean.setdefault("lights", {})[str(light)] = [[f, kept[f]] for f in sorted(kept)]
+            actions = animation.get("actions") or []
+            if not isinstance(actions, list) or len(actions) > 500:
+                raise Problem("actions are a list of {frame, do}, at most 500")
+            acts = {}
+            for a in actions:
+                whole = lambda v: isinstance(v, int) and not isinstance(v, bool)
+                if not isinstance(a, dict) or a.get("do") not in ACTIONS or not whole(a.get("frame")) or not 1 <= a["frame"] <= length:
+                    raise Problem(f"an action is {{frame, do}}: do is {' or '.join(ACTIONS)}, the frame whole and from 1 to {length}")
+                if set(a) - {"frame", "do", *ACTIONS[a["do"]]}:
+                    raise Problem(f"a {a['do']} has only {', '.join(['frame', 'do', *ACTIONS[a['do']]])}")
+                if a["frame"] in acts:
+                    raise Problem(f"two actions at frame {a['frame']}: one to a frame")
+                one = {"frame": a["frame"], "do": a["do"]}
+                if a["do"] == "goto":
+                    if not whole(a.get("to")) or not 0 <= a["to"] <= length or a["to"] == a["frame"]:
+                        raise Problem(f"a goto at {a['frame']} has `to`: a whole frame from 0 to {length}, not its own")
+                    one["to"] = a["to"]
+                if "hold" in a:
+                    h = a["hold"]
+                    if isinstance(h, bool) or not isinstance(h, (int, float)) or not 0 <= h <= 10:
+                        raise Problem("a pause holds a video from 0 to 10 seconds")
+                    if h:
+                        one["hold"] = float(h)
+                acts[a["frame"]] = one
+            if acts:
+                clean["actions"] = [acts[f] for f in sorted(acts)]
         with self.lock:
             settings = self.settings
             animations = settings.setdefault("animations", {})
@@ -480,14 +564,17 @@ class Project:
         if not 1 <= out_fps <= 60:
             raise Problem("fps is from 1 to 60")
         size = int(min(1024, max(160, size)))
-        count = int(anim["length"] / anim["fps"] * out_fps) + 1
-        if count > 240:          # at most 240 pictures: a long timeline is shown at fewer of them a second
-            out_fps, count = out_fps * 240 / count, 240
-        frames = [k * anim["fps"] / out_fps for k in range(count)]
+        frames = played(anim, out_fps)
+        for _ in range(4):       # at most 240 pictures: a long timeline is shown at fewer of them a second
+            if len(frames) <= 240:
+                break
+            out_fps *= 240 / len(frames)
+            frames = played(anim, out_fps)
+        frames, count = frames[:240], min(240, len(frames))
         out = self.out / name
         key = hashlib.sha256(json.dumps([used, frames, view, out_fps, size, (out / "model.glb").stat().st_mtime_ns], default=str).encode()).hexdigest()[:16]
         path = out / f"animation-{key}.{format}"
-        info = {"frames": count, "fps": round(out_fps, 3), "seconds": round(anim["length"] / anim["fps"], 3), "view": view,
+        info = {"frames": count, "fps": round(out_fps, 3), "seconds": round((count - 1) / out_fps, 3), "view": view,
                 "joints": sorted(used), "ignored": sorted(set(anim["tracks"]) - set(used))}
         if not path.exists():
             parts = json.loads((out / "faces.json").read_text())["parts"]
@@ -825,6 +912,15 @@ class Project:
             rows += [{"id": f"pose-{k}", "what": f"pose.{k}.resolved", "ok": False, "value": False, "expect": "= True",
                       "why": pose.get("why") or "a pose names joints that move, within their ranges", "by": "monet"}
                      for k, pose in (mo.get("poses") or {}).items() if not pose.get("resolved")]
+        try:
+            told = notes.parse(self.read(name)).get("lights")
+        except Problem:
+            told = None
+        lit, wrong = lamps.clean(told, [q["name"] for q in r.get("parts") or []] if len(r.get("parts") or []) > 1 else [])
+        if lit:
+            out["lights"] = lit      # the canvas draws them; they ride their parts as the joints move
+        if wrong:
+            rows.append({"id": "lights", "what": "LIGHTS", "ok": False, "value": False, "expect": "= True", "why": "; ".join(wrong), "by": "monet"})
         if mats.get("problems"):
             rows.append({"id": "facts", "what": "MATERIAL, MATERIALS, MASS, BOM", "ok": False, "value": False, "expect": "= True",
                          "why": "; ".join(mats["problems"]), "by": "monet"})

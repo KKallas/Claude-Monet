@@ -1,0 +1,19 @@
+{
+  "_": "One step of playing the timeline: canvas/timeline.js advance and monet/workspace.py advance both meet these (tests/timeline.test.mjs, tests/test_workspace.py).",
+  "anims": {
+    "acts": {"fps": 30, "length": 120, "tracks": {}, "actions": [{"frame": 20, "do": "pause"}, {"frame": 60, "do": "pause", "hold": 1.5}, {"frame": 100, "do": "goto", "to": 20}]},
+    "plain": {"fps": 30, "length": 120, "tracks": {}}
+  },
+  "steps": [
+    {"anim": "acts", "frame": 0, "lo": 0, "d": 10, "loop": false, "out": [10, 10, false, null]},
+    {"anim": "acts", "frame": 15, "lo": 15, "d": 10, "loop": false, "out": [20, 20, true, 20]},
+    {"anim": "acts", "frame": 20, "lo": 20, "d": 1, "loop": false, "out": [21, 21, false, null]},
+    {"anim": "acts", "frame": 55, "lo": 55, "d": 70, "loop": true, "out": [60, 60, true, 60]},
+    {"anim": "acts", "frame": 95, "lo": 95, "d": 10, "loop": false, "out": [20, 19.5, false, 100]},
+    {"anim": "acts", "frame": 20, "lo": 19.5, "d": 1, "loop": false, "out": [20, 20, true, 20]},
+    {"anim": "acts", "frame": 30, "lo": 19.5, "d": 1, "loop": false, "out": [20, 20, true, 20]},
+    {"anim": "plain", "frame": 115, "lo": 115, "d": 10, "loop": false, "out": [120, 120, true, null]},
+    {"anim": "plain", "frame": 115, "lo": 115, "d": 10, "loop": true, "out": [5, 0, false, null]},
+    {"anim": "plain", "frame": 0, "lo": 0, "d": 0.5, "loop": false, "out": [0.5, 0.5, false, null]}
+  ]
+}

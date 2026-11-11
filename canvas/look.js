@@ -94,6 +94,13 @@ export function createLook(renderer, scene, lights) {
       if (kind === 'pom') return new THREE.MeshPhysicalMaterial({ ...common, color, metalness: 0, roughness: 0.42, clearcoat: 0.2, clearcoatRoughness: 0.35 });
       return printed(new THREE.MeshPhysicalMaterial({ ...common, color, metalness: 0, roughness: 0.5 }));
     },
+    /** The room's own light, 0…1 of what it is (the lights of a Note shine in a dimmed room): environment, sun, lamps. */
+    dim(f = 1) {
+      scene.environmentIntensity = f;
+      sun.intensity = 2 * f;
+      lights.hemi.intensity = 1.1 * f;
+      lights.head.intensity = 1.6 * f;
+    },
     /** The colour and strength of the part's edges in this style. */
     edge() {
       return style === 'hidden' ? { color: 0xdfe4f0, opacity: 1 } : style === 'rendered' ? { color: 0x0b0d13, opacity: 0.5 } : { color: 0x10131b, opacity: 1 };

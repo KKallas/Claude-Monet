@@ -353,6 +353,46 @@ KEEPOUT = {"keepout_beam": {"on": "projector"}}                     # rides on t
 - Write the pose once, in `POSES`; never a second assembly with the parts turned by hand in
   `build()`. `pose(project, note, "projecting")` shows it; the canvas lists the poses in Motion.
 
+### Lights and beams
+
+A product that shines (a lamp's LEDs, a projector, spotlights, lasers) says so in `LIGHTS`, a plain
+literal like `POSES`: a fact, not a shape, so changing a light never needs a build. The canvas shows
+them in Motion as the client should see them: the light where it lands (with shadows; a projector
+throws a test picture), the beam in the air, in smoke, cut where a part is in the way, a part that
+glows with it, the room dimmed.
+
+```python
+LIGHTS = {
+    "lens":  {"kind": "projector", "on": "projector", "at": [-60, -134.5, 0], "aim": [0, -1, 0],
+              "throw": 1.48, "aspect": "4:3", "offset": 0.44, "lumens": 3600},
+    "spot":  {"kind": "spot", "on": "spot_1", "at": [12.3, 46, -199.9], "aim": [0.02, 0.08, -1],
+              "angle": 6, "soft": 0.25, "lumens": 900, "color": "#fff2e0"},
+    "sheet": {"kind": "laser", "on": "turret", "at": [0, 0, 20], "aim": [1, 0, 0], "fan": 40, "mw": 50,
+              "color": "#2a4bff"},
+    "grid":  {"kind": "glow", "glow": "inner_layer", "lumens": 1800, "color": "#ff9a4d"},
+}
+```
+
+- `kind`: `spot` (a cone: `angle` is the whole beam in degrees, `soft` how much of its edge fades),
+  `projector` (a rectangle from its throw ratio, `aspect` and `offset`: where the picture's middle is
+  above the lens axis, in picture heights; `up` is the picture's top, Z unless it looks straight up or
+  down), `laser` (a line; with `fan` in degrees a sheet, spread `across`), `point`, or `glow` (parts
+  that light up: `glow` names one, or many as MATERIALS does, `caps_*`: LED strips behind a diffuser,
+  pixels under caps). Any light can say `glow` too: the lens of a spot.
+- `at` and `aim` are as built, in the Note's frame; `on` is the part it rides as the joints move.
+  Work them out from the same numbers the geometry uses (run your helper module on your computer and
+  paste the result): a light 1 mm off the lens shines through the lens's own body or misses the slit.
+- Strength in `lumens` (a laser in `mw`); `color` #rrggbb; `reach`, how far the beam is drawn (mm).
+- The report lists the lights with what follows from them (a spot's candela, a projector's picture
+  size at 1 m); a light that names no part, or says something it cannot, is a red `lights` row.
+- Each light, the room's light and the haze are lines on the timeline: `animate(…, {…, "lights":
+  {"lens": [[60, 0], [90, 1]], "room": [[0, 0.3], [40, 0.08]], "haze": [[0, 0.3], [90, 0.75]]}})`,
+  levels 0 to 1. Time an animation by its light: the grid glows up, the doors open, the projector
+  fades in. The person records it in the canvas (Record, in Animation) at the canvas's quality;
+  `render_animation` draws the joints only, not the lights.
+- The beams are rays cast against the build: a beam that gets out where it should not (through a
+  slit between two doors, a hole at a pole) shows as a shaft of light with everything closed.
+
 ### Materials and mass
 
 `status(project)` gives the project's printer and material; `status()` lists the profiles there
@@ -434,6 +474,13 @@ puts keyframes on the timeline in Motion, for the user to play (`null` takes it 
 follows moves along by itself). `render_animation(project, note, view="iso", fps=15, format="gif")`
 renders it on the server as a GIF, or with `format="mp4"` as an H.264 video, and answers a link
 (`monet.py render-animation <project> <note> out.mp4`). Do not stitch `pose()` pictures together yourself.
+
+The timeline has an **action line**: `"actions": [{"frame": 60, "do": "pause", "hold": 1.5},
+{"frame": 110, "do": "goto", "to": 20}]` in the same animation. Playing meets them, a scrub never
+does: a `pause` stops at its frame (▶ goes on from there), a `goto` plays on from frame `to` (back:
+a loop). One action to a frame, from frame 1. Those are the only verbs, and they are data: nothing
+in the timeline runs code. A video follows the same path: it ends at a pause (held `hold` seconds,
+up to 10) and shows a loop once, so use a pause to end a GIF on the pose that matters.
 
 ## Tags and checks
 

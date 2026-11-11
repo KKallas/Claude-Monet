@@ -342,6 +342,24 @@ body.row-resizing, body.row-resizing * { cursor: row-resize !important; user-sel
 .tl-all .tl-d { width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; }
 .tl-d.now { background: var(--warn); }
 .tl-d.sel { background: var(--accent); box-shadow: 0 0 0 2px rgba(255, 255, 255, .6); }
+/* a light's line, the room's and the haze's: warm */
+.tl-lit .tl-k { color: var(--warn); }
+.tl-lit .tl-string { background: rgba(255, 196, 64, .35); }
+/* the action line: flags, not diamonds; the menu of the one pointed at above it */
+.tl-acts { border-bottom: 1px solid var(--border); }
+.tl-acts .tl-k { color: var(--warn); font-weight: 700; }
+.tl-d.tl-a { width: auto; height: 16px; margin: -8px 0 0 -1px; transform: none; padding: 0 4px; display: flex; align-items: center; border: 0; border-left: 2px solid var(--warn);
+  border-radius: 0 3px 3px 0; background: rgba(255, 196, 64, .16); color: var(--warn); font-size: 10px; white-space: nowrap; }
+.tl-d.tl-a b { font-weight: 700; }
+.tl-d.tl-a.goto { border-left-color: var(--accent); background: rgba(120, 170, 255, .16); color: var(--accent); }
+.tl-d.tl-a.now { background: rgba(255, 196, 64, .34); }
+.tl-d.tl-a.sel { background: var(--accent); color: #000; box-shadow: 0 0 0 1px rgba(255, 255, 255, .6); }
+.tl-menu { position: absolute; z-index: 6; display: flex; align-items: center; gap: 4px; padding: 4px 6px; background: rgba(22, 27, 39, .98); border: 1px solid var(--border-strong);
+  border-radius: 4px; box-shadow: 0 4px 16px rgba(0, 0, 0, .5); font-size: 11px; white-space: nowrap; }
+.tl-menu b { margin-right: 4px; }
+.tl-menu button { height: 22px; padding: 0 6px; font-size: 11px; }
+.tl-menu button.on { color: var(--accent); border-color: var(--accent); }
+.tl-menu input.num { width: 46px; height: 22px; }
 .timeline.playing .tl-joint.on .tl-string { animation: tl-twang .08s linear infinite alternate; }
 @keyframes tl-twang { from { transform: translateY(calc(-50% - .6px)); } to { transform: translateY(calc(-50% + .6px)); } }
 @media (prefers-reduced-motion: reduce) { .timeline.playing .tl-joint.on .tl-string { animation: none; } }

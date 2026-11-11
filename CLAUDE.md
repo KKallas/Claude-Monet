@@ -108,6 +108,17 @@ wrong:
   them out of the fingerprint and exports, `joints.analyse` out of interference and sweeps. A Note's optional
   `pieces()` (usually `monet.split.split`) is what is printed: exports and `fits_bed`/`solids` follow it, the
   assembly still uses `build()`. The agent may write a timeline (`animate`): it changes no geometry.
+- **The action line is data, never code** (Kaspar, 2026-11-11): the timeline's `actions` have two verbs, `pause` and
+  `goto` (`workspace.ACTIONS`); add a verb when one is needed, never a script, since the agent runs no code in the canvas.
+  Playing steps through `advance` in `canvas/timeline.js`, and a video through its Python copy in `workspace.py`
+  (`played`); `tests/advance.json` holds the two together. The finish by picture models is planned in the README
+  ("Showing it"); who calls the models is still open.
+- **Lights** (0.10.0): `LIGHTS` is a fact (`note.FACTS`, out of `geometry_key`), checked in `monet/lights.py` against
+  the build's part names when the report is made (nothing run); `canvas/lights.js` draws them in Motion: three.js
+  spot lights with shadows (their shadow camera's `far` must reach as far as the light, or a projector's picture and
+  the shadows stop at 500 mm), beams as instanced ribbons along rays cast with three-mesh-bvh against each part
+  (moved with its part), bloom by EffectComposer only while lights are on. Their levels, `room` and `haze` are the
+  animation's `lights`; on the timeline they are lines named `~name` (`kept`/`opened` in `timeline.js`).
 - **`skill/monet/` is the single source of the agent's instructions**: the skill zip and the
   `guide` tool both serve it. When behaviour changes, change it there.
 

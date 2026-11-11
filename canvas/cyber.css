@@ -252,6 +252,20 @@
 [data-skin="cyber"] .tl-d.now { background: var(--yellow); border-color: var(--yellow); box-shadow: 0 0 10px var(--yellow); }
 [data-skin="cyber"] .tl-d.sel { background: var(--cyan); border-color: #fff; box-shadow: 0 0 0 1px #000, 0 0 12px var(--cyan); }
 [data-skin="cyber"] .tl-all .tl-d.sel { background: var(--red); }
+[data-skin="cyber"] .tl-lit .tl-string { background: linear-gradient(90deg, rgba(252, 238, 10, .7), rgba(252, 238, 10, .15)); opacity: .6; }
+[data-skin="cyber"] .tl-lit.on .tl-string { box-shadow: 0 0 6px rgba(252, 238, 10, .55); opacity: 1; }
+[data-skin="cyber"] .tl-lit .tl-d { border-color: var(--yellow); box-shadow: 0 0 6px rgba(252, 238, 10, .6); }
+/* the action line: yellow flags (a goto cyan), their glyph kept readable under the playhead and when selected */
+[data-skin="cyber"] .tl-acts .tl-name b { color: var(--yellow); font-size: 11px; letter-spacing: .24em; text-transform: uppercase; text-shadow: 0 0 6px rgba(252, 238, 10, .5); }
+[data-skin="cyber"] .tl-acts .tl-string { background: linear-gradient(90deg, var(--yellow), rgba(252, 238, 10, .15)); opacity: .5; height: 1px; }
+[data-skin="cyber"] .tl-d.tl-a { background: #050709; border: 0; border-left: 2px solid var(--yellow); color: var(--yellow); box-shadow: 0 0 6px rgba(252, 238, 10, .45);
+  font-family: 'Share Tech Mono', ui-monospace, monospace; }
+[data-skin="cyber"] .tl-d.tl-a.goto { border-left-color: var(--cyan); color: var(--cyan); box-shadow: 0 0 6px rgba(94, 246, 255, .55); }
+[data-skin="cyber"] .tl-d.tl-a.now { background: var(--yellow); color: #000; }
+[data-skin="cyber"] .tl-d.tl-a.goto.now { background: var(--cyan); color: #000; }
+[data-skin="cyber"] .tl-d.tl-a.sel { background: var(--cyan); color: #000; box-shadow: 0 0 0 1px #fff, 0 0 12px var(--cyan); }
+[data-skin="cyber"] .tl-menu { border-radius: 0; background: var(--glass), var(--bg-elevated); border-color: var(--border-strong); font-family: 'Share Tech Mono', ui-monospace, monospace;
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px)); }
 
 /* dialogs and the note that a newer build is online */
 [data-skin="cyber"] dialog { border-radius: 0; background: var(--glass), var(--bg-elevated); border: 1px solid var(--border-strong); box-shadow: var(--inner), 0 0 40px rgba(94, 246, 255, .12);

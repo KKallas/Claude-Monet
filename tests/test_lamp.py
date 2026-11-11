@@ -344,6 +344,11 @@ def test_the_agent_animates_and_the_server_renders_it(lamp, ws):
     assert data[4:8] == b"ftyp"                                          # an MP4, its index at the front
     with pytest.raises(Problem, match="gif or mp4"):
         agent.call("render_animation", caller(ws), {"project": "lamp", "note": "lamp", "format": "avi"})
+    # the action line: the video ends at the pause, held a second there
+    agent.call("animate", caller(ws), {"project": "lamp", "note": "lamp", "animation": {**anim, "actions": [{"frame": 30, "do": "pause", "hold": 1}]}})
+    out = agent.call("render_animation", caller(ws), {"project": "lamp", "note": "lamp", "fps": 10})[0]
+    assert out["frames"] == 11 + 10 and out["seconds"] == 2.0
+    assert Image.open(lamp.render_animation("lamp", "iso", 10)[0]).n_frames == 21
     agent.call("animate", caller(ws), {"project": "lamp", "note": "lamp", "animation": None})
     assert "lamp" not in lamp.status()["animations"]
 
@@ -369,3 +374,80 @@ def test_a_bom_names_notes_never_paths(lamp):
         assert lamp.cached("../lamp") is None
     finally:
         lamp.write("lamp", source, agent=True)
+
+
+# ---- lights and beams (0.10) ---------------------------------------------------------------------------------
+
+LIGHTS = '''
+LIGHTS = {
+    "beam": {"kind": "projector", "on": "projector", "at": [0, 50, 30], "aim": [0, 1, 0], "throw": 1.5, "aspect": "16:9", "offset": 0.25, "lumens": 3000},
+    "down": {"kind": "spot", "on": "arm", "at": [0, 190, 295], "aim": [0, 0, -1], "angle": 24, "lumens": 600},
+    "line": {"kind": "laser", "on": "leaf_left", "at": [-100, 150, 20], "aim": [0, 1, 0], "fan": 40, "mw": 50},
+    "glow": {"kind": "glow", "glow": "leaf_right", "color": "#ff9a4d"},
+}
+'''
+
+
+def test_lights_are_checked_against_the_parts():
+    from monet import lights
+    got, wrong = lights.clean({"a": {"kind": "spot", "at": [0, 0, 0], "aim": [0, 0, -2], "angle": 60, "lumens": 800}}, ["head"])
+    assert wrong == [] and got[0]["aim"] == [0, 0, -1] and got[0]["soft"] == 0.2 and got[0]["reach"] == 3000
+    assert got[0]["candela"] == pytest.approx(800 / (2 * 3.141592653589793 * (1 - 0.8660254)), rel=1e-4)     # lumens over the beam's solid angle
+    p, _ = lights.clean({"p": {"kind": "projector", "at": [0, 0, 0], "aim": [0, 1, 0], "throw": 2, "aspect": "4:3"}}, [])
+    assert p[0]["picture"] == {"width_at_1m": 500.0, "height_at_1m": 375.0} and p[0]["up"] == [0, 0, 1] and p[0]["reach"] == 6000
+    straight, _ = lights.clean({"p": {"kind": "projector", "at": [0, 0, 0], "aim": [0, 0, -1]}}, [])
+    assert straight[0]["up"] == [0, 1, 0]           # looking straight down, its picture's top is +Y
+    fan, _ = lights.clean({"l": {"kind": "laser", "at": [0, 0, 0], "aim": [1, 0, 0], "fan": 30}}, [])
+    assert fan[0]["across"] == [0, 0, 1] and fan[0]["mw"] == 50
+    bad = {
+        "room": {"kind": "spot", "at": [0, 0, 0], "aim": [0, 0, 1]},
+        "a": {"kind": "torch", "at": [0, 0, 0]},
+        "b": {"kind": "spot", "at": [0, 0], "aim": [0, 0, 1]},
+        "c": {"kind": "spot", "at": [0, 0, 0], "aim": [0, 0, 0]},
+        "d": {"kind": "spot", "on": "tail", "at": [0, 0, 0], "aim": [0, 0, 1]},
+        "e": {"kind": "glow"},
+        "f": {"kind": "spot", "at": [0, 0, 0], "aim": [0, 0, 1], "angle": 200},
+        "g": {"kind": "spot", "at": [0, 0, 0], "aim": [0, 0, 1], "script": "alert(1)"},
+        "h": {"kind": "projector", "at": [0, 0, 0], "aim": [0, 0, 1], "aspect": "wide"},
+        "i": {"kind": "spot", "at": [0, 0, 0], "aim": [0, 0, 1], "color": "red"},
+    }
+    got, wrong = lights.clean(bad, ["head"])
+    assert got == [] and len(wrong) == len(bad)
+    assert lights.clean("lamp", []) == ([], ["LIGHTS is {name: {kind, at, …}}"])
+    glows, wrong = lights.clean({"px": {"kind": "glow", "glow": "caps_*|lens"}, "no": {"kind": "glow", "glow": "tiles_*"}}, ["caps_top", "lens", "frame"])
+    assert [L["glow"] for L in glows] == ["caps_*|lens"] and wrong == ["light no: glow: no part is 'tiles_*'"]
+    assert lights.clean(None, []) == ([], [])
+
+
+def test_the_lamp_has_lights_that_need_no_build(lamp):
+    """LIGHTS is a fact: written into the Note, its build stays current; the report hands the lights to the canvas."""
+    from monet import note
+    source = lamp.read("lamp")
+    with_lights = source.replace("\n\ndef tube(", LIGHTS + "\n\ndef tube(", 1)
+    assert note.geometry_key(with_lights) == note.geometry_key(source)
+    lamp.write("lamp", with_lights, agent=True)
+    try:
+        r = lamp.report("lamp")
+        assert r["state"] == "built" and r["green"], [c for c in r["checks"] if not c["ok"]]
+        by = {L["name"]: L for L in r["lights"]}
+        assert set(by) == {"beam", "down", "line", "glow"}
+        assert by["beam"]["on"] == "projector" and by["beam"]["aspect"] == pytest.approx(16 / 9) and by["glow"]["glow"] == "leaf_right"
+        lamp.write("lamp", with_lights.replace('"on": "arm"', '"on": "boom"'), agent=True)
+        r = lamp.report("lamp")
+        row = next(c for c in r["checks"] if c["id"] == "lights")
+        assert not r["green"] and "there is no part 'boom'" in row["why"] and len(r["lights"]) == 3
+    finally:
+        lamp.write("lamp", source, agent=True)
+    assert "lights" not in lamp.report("lamp")
+
+
+def test_the_timeline_keys_lights_the_room_and_the_haze(lamp):
+    anim = {"fps": 30, "length": 60, "tracks": {"leaf_left": [[0, 0], [60, 90]]},
+            "lights": {"beam": [[0, 0], [30, 1]], "room": [[0, 0.3], [60, 0.05]], "haze": [[10, 0.8]]},
+            "actions": [{"frame": 50, "do": "pause"}]}
+    got = lamp.set_animation("lamp", anim)["lamp"]
+    assert got["lights"] == {"beam": [[0, 0.0], [30, 1.0]], "room": [[0, 0.3], [60, 0.05]], "haze": [[10, 0.8]]}
+    for bad in ({"beam": [[0, 1.5]]}, {"beam": [[61, 1]]}, {"Beam!": [[0, 1]]}, {"beam": "on"}, ["beam"]):
+        with pytest.raises(Problem):
+            lamp.set_animation("lamp", {**anim, "lights": bad})
+    lamp.set_animation("lamp", None)
