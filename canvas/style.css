@@ -364,3 +364,19 @@ body.row-resizing, body.row-resizing * { cursor: row-resize !important; user-sel
 @keyframes tl-twang { from { transform: translateY(calc(-50% - .6px)); } to { transform: translateY(calc(-50% + .6px)); } }
 @media (prefers-reduced-motion: reduce) { .timeline.playing .tl-joint.on .tl-string { animation: none; } }
 .tl-tick.end { transform: translateX(-100%); padding: 0 3px 0 0; border-left: 0; border-right: 1px solid var(--border-strong); }
+
+/* the Notes as a tree: the main assembly first, then the other designs, then the shared modules */
+.item.twig { gap: 6px; }
+.twist { flex: none; width: 14px; color: var(--text); font-size: 13px; text-align: center; cursor: pointer; }
+.twist[data-twig]:hover { color: var(--text-bright); }
+.item small.main { color: var(--accent); }
+.twig-head { padding: 10px 14px 3px; color: var(--text-muted); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+.item.guess, .item.shared { white-space: normal; font-size: 11px; cursor: default; }
+
+/* the video rendered in the background, played over the view */
+.film-player { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; background: rgba(5, 7, 12, .92); }
+.film-player video { flex: 1; min-height: 0; width: 100%; object-fit: contain; background: #000; }
+.film-bar { display: flex; gap: 12px; align-items: center; padding: 8px 14px; color: var(--text-muted); font-size: 12px; }
+.film-bar span { flex: 1; }
+.film-bar a { color: var(--accent); }
+.film-bar button { padding: 2px 9px; }

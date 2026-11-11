@@ -145,6 +145,7 @@ asks to drop it: it is theirs.
 | `pose.<name>.clear.<keepout>` | at a named pose: mm³ of that keep-out the parts take up (max 1: it is clear) |
 | `pose.<name>.resolved` | the pose names joints moved by hand, within their ranges |
 | `lights` (a row of the report) | every light in `LIGHTS` names parts that are there and says only what a light can (red otherwise) |
+| `pixels.NAME.density_ratio`, `.current_a`, `.unlit`, `.count`, `.leds_total` | a `pixels` light's pixels and the LEDs under them, as the build found them: densest over sparsest LEDs per dm², amps at full white (60 mA an LED), pixels with no LED |
 | `mass_g` | grams: volume times the density of each part's material, `MASS` for what is bought |
 | `part.<name>.mass_g` | one part of an assembly |
 | `bom.unlisted` | parts of the assembly its `BOM` does not name: equals 0 |

@@ -7,6 +7,7 @@ draws them (canvas/lights.js): the light where it lands, the beam in the air, a 
       "proj":  {"kind": "projector", "on": "head", "at": [40, 0, -5], "aim": [0, 0.3, -1], "throw": 1.2, "aspect": "16:9"},
       "laser": {"kind": "laser", "on": "turret", "at": [0, 0, 20], "aim": [1, 0, 0], "fan": 40, "mw": 50},
       "strip": {"kind": "glow", "glow": "inner_layer", "lumens": 2000, "color": "#9fd8ff"},
+      "pixels": {"kind": "pixels", "glow": "caps_*|trim_*", "leds": "leds", "color": "#2f6bff"},
     }
 
 `at` and `aim` are as built (the Note's frame, joints at 0); a light moves with the part it is `on` as the joints
@@ -15,7 +16,14 @@ fades; a projector's beam from its throw ratio (distance / picture width), aspec
 middle is above the lens axis, in picture heights: 0.5 puts its lower edge on the axis); a laser is a line, or with
 `fan` (degrees) a sheet spread `across`. `glow` names a part that glows with the light, or parts as MATERIALS
 names them (`caps_*`, `lens|diffuser`). `reach`: how far the beam is
-drawn, mm."""
+drawn, mm.
+
+`pixels` (issue #10): every solid of the parts `glow` names is a pixel of its own colour, lit from the LEDs under it.
+`leds` names a function of the Note the build calls (as it calls build()): the LEDs, each (x, y, z) or ((x, y, z),
+normal, depth under the shell), as built. The build finds each LED's pixel (the smallest whose box holds it) and
+reports the count, the LEDs to a pixel, their density and the current at full white (monet/runner.py). The canvas
+shades each pixel from its LEDs, lights the surfaces between the pixels (`spill_mm`: how far that light reaches) and
+plays the patterns of the animation's `patterns` (PATTERNS) on them."""
 from __future__ import annotations
 
 import math
@@ -23,12 +31,15 @@ import re
 
 from .materials import matches
 
-KINDS = ("point", "spot", "projector", "laser", "glow")
+KINDS = ("point", "spot", "projector", "laser", "glow", "pixels")
+# what a pixels light can play over time (the animation's `patterns`), and what each may say
+PATTERNS = {"solid": {"color"}, "chase": {"color", "core", "pulses", "speed", "trail"}, "wave": {"color", "core", "speed"},
+            "scan": {"color", "speed", "axis"}, "rainbow": {"speed"}, "sparkle": {"color", "core", "rate"}, "off": set()}
 NAME = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
 SCENE = ("room", "haze")      # the timeline's lines for the room's light and the smoke in the air: no light is called so
-COLOUR = {"point": "#fff1e0", "spot": "#fff1e0", "projector": "#ffffff", "laser": "#2a4bff", "glow": "#ffffff"}
+COLOUR = {"point": "#fff1e0", "spot": "#fff1e0", "projector": "#ffffff", "laser": "#2a4bff", "glow": "#ffffff", "pixels": "#2f6bff"}
 KEYS = {"kind", "on", "at", "aim", "up", "across", "color", "lumens", "mw", "angle", "soft", "throw", "aspect", "offset",
-        "fan", "glow", "reach"}
+        "fan", "glow", "reach", "leds", "lumens_per_led", "spill_mm"}
 
 
 def _vec(v, what: str) -> list:
@@ -102,6 +113,16 @@ def one(name: str, d: dict, parts: set) -> dict:
     if not (isinstance(color, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", color)):
         raise ValueError("color is #rrggbb")
     out["color"] = color.lower()
+    if kind == "pixels":
+        if "glow" not in out:
+            raise ValueError("pixels name the parts whose solids are the pixels (glow)")
+        if d.get("leds") is not None:
+            if not (isinstance(d["leds"], str) and NAME.match(d["leds"])):
+                raise ValueError("leds names a function of the Note that gives the LEDs")
+            out["leds"] = d["leds"]
+        out["lumens_per_led"] = _num(d, "lumens_per_led", 0.1, 200, 6)
+        out["spill_mm"] = _num(d, "spill_mm", 0, 200, 8)
+        return out
     if kind == "glow":
         if "glow" not in out:
             raise ValueError("a glow names the part that glows (glow)")
@@ -158,3 +179,29 @@ def clean(lights, parts) -> tuple[list, list]:
     if len(lights) > 32:
         problems.append("at most 32 lights")
     return out, problems
+
+
+def pattern(d) -> dict:
+    """A pattern of a pixels light checked: {kind, …} (PATTERNS), or ValueError saying what is wrong."""
+    if not isinstance(d, dict) or d.get("kind") not in PATTERNS:
+        raise ValueError(f"a pattern is {{kind, …}}: kind is one of {', '.join(PATTERNS)}")
+    extra = set(d) - {"kind"} - PATTERNS[d["kind"]]
+    if extra:
+        raise ValueError(f"a {d['kind']} has only {', '.join(sorted(PATTERNS[d['kind']])) or 'its kind'}")
+    out = {"kind": d["kind"]}
+    for k in ("color", "core"):
+        if k in d:
+            if not (isinstance(d[k], str) and re.fullmatch(r"#[0-9a-fA-F]{6}", d[k])):
+                raise ValueError(f"{k} is #rrggbb")
+            out[k] = d[k].lower()
+    for k, lo, hi in (("pulses", 1, 40), ("speed", 0, 100), ("trail", 0, 60), ("rate", 0, 1)):
+        if k in d:
+            v = d[k]
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not lo <= v <= hi:
+                raise ValueError(f"{k} is a number from {lo} to {hi}")
+            out[k] = v
+    if "axis" in d:
+        if d["axis"] not in ("x", "y", "z", "-x", "-y", "-z"):
+            raise ValueError("axis is x, y or z (or -z: falling)")
+        out["axis"] = d["axis"]
+    return out

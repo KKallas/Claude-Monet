@@ -183,7 +183,7 @@ def png(glb: Path, views=("iso", "top", "front", "right"), size=560, faces=None,
 
 
 def animation(glb: Path, parts: list, poses: list, view: str = "iso", size: int = 480, fps: float = 15, hide=(), title: str = "",
-              format: str = "gif") -> bytes:
+              format: str = "gif", progress=None) -> bytes:
     """A GIF or an MP4 of an assembly moving: one picture per pose (poses: [{part: 4x4}]), all from one camera that
     holds the whole motion. hide: parts left out of the picture (keep-outs). Every part in its own colour, as look()
     paints an assembly. An MP4 is H.264, made by ffmpeg."""
@@ -212,11 +212,39 @@ def animation(glb: Path, parts: list, poses: list, view: str = "iso", size: int 
         pic = Image.fromarray(img)
         ImageDraw.Draw(pic).text((8, 6), f"{title}  {n + 1}/{len(moved)}".strip(), fill=(70, 74, 90))
         images.append(pic if format == "mp4" else pic.convert("P", palette=Image.Palette.ADAPTIVE, colors=128))
+        if progress:
+            progress(n + 1, len(moved))
     if format == "mp4":
         return mp4(images, fps)
     out = io.BytesIO()
     images[0].save(out, format="GIF", save_all=True, append_images=images[1:], duration=max(20, round(1000 / fps)), loop=0, optimize=False)
     return out.getvalue()
+
+
+def animation_job(out: str, mo: dict, used: dict, frames: list, view: str, size: int, fps: float, hide: list, title: str,
+                  format: str, path: str, progress_path: str) -> str:
+    """A job (monet/jobs.py), in a process of its own: the animation of the build in `out` written to `path`, its
+    progress to `progress_path` ({done, frames}) as it goes. Every part posed at every frame here, not in the request."""
+    import json
+    from . import joints
+    from .workspace import value_at
+    out, path, prog = Path(out), Path(path), Path(progress_path)
+
+    def told(done, total):
+        tmp = prog.with_suffix(".new")
+        tmp.write_text(json.dumps({"done": done, "frames": total}))
+        tmp.replace(prog)
+    told(0, len(frames))
+    parts = json.loads((out / "faces.json").read_text())["parts"]
+    poses = [joints.part_frames(mo, {j: value_at(k, f) for j, k in used.items()}) for f in frames]
+    data = animation(out / "model.glb", parts, poses, view, size, fps, hide=set(hide), title=title, format=format, progress=told)
+    for old in out.glob(f"animation-*.{format}"):
+        old.unlink(missing_ok=True)
+    tmp = out / f".{path.name}.new"
+    tmp.write_bytes(data)
+    tmp.replace(path)
+    prog.unlink(missing_ok=True)
+    return str(path)
 
 
 def mp4(images: list, fps: float) -> bytes:

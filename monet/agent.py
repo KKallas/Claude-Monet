@@ -261,7 +261,8 @@ def animate(c: Caller, project: str, note: str, animation: dict | None = None) -
     "goto", "to": 20}], met while playing (never by a scrub), one to a frame from frame 1: a pause stops there (a video
     ends there, held `hold` seconds), a goto plays on from `to` (a loop: a video shows it once). Those two are all the
     verbs. "lights": {light, "room" or "haze": [[frame, level 0…1], …]}: the Note's LIGHTS, the room's own light and
-    the smoke in the air, keyed as joints are (the canvas plays them; render_animation draws the joints only). null
+    the smoke in the air, keyed as joints are; patterns: {pixels light: [[frame, {kind: chase|wave|scan|rainbow|sparkle|solid|off, …}], …]}
+    what its pixels play (see the guide, Lights and beams), (the canvas plays them; render_animation draws the joints only). null
     takes the animation away. Nothing is built from it."""
     p = c.ws.project(project)
     if not p.is_note(note):
@@ -277,17 +278,25 @@ def animate(c: Caller, project: str, note: str, animation: dict | None = None) -
             **({"warning": f"not joints of {note} moved by hand, so they do nothing: {', '.join(unknown)}"} if unknown else {})}
 
 
+WAIT_RENDER = 40.0      # seconds a call waits for a render before it answers its progress: under the proxy's 60 s
+
+
 def render_animation(c: Caller, project: str, note: str, view: str = "iso", fps: float = 0, format: str = "gif") -> dict:
     """The assembly's animation (its timeline: animate, or Motion in the canvas) as a GIF or an MP4 (format "gif" or
     "mp4": H.264, plays anywhere), rendered on the server frame by frame from the last build, with every joint that
     follows moving along, from one camera that holds the whole motion. view: iso, front, top … as in look. fps:
-    pictures a second (at most the timeline's own, default 15). Returns `url`, a link to fetch (it carries your
-    agent key: do not pass it on)."""
+    pictures a second (at most the timeline's own, default 15). A big assembly takes minutes: the render runs
+    apart, one at a time on the server, and this answers within about 40 s. Done: `state` "done" and `url`, a link
+    to fetch (it carries your agent key: do not pass it on). Still running: `state` "rendering" (or "waiting" behind
+    another), `done` of `frames`; call again with the same arguments until it is done. The same call twice starts
+    one render; monet.py render-animation waits for you."""
     if format not in ("gif", "mp4"):
         raise Problem("format is gif or mp4")
     p = c.ws.project(project)
     fps = float(fps or 0)
-    path, info = p.render_animation(note, view, fps or None, format=format)
+    path, info = p.render_animation(note, view, fps or None, format=format, wait=WAIT_RENDER)
+    if path is None:
+        return {"note": note, **info, "format": format, "next": "call render_animation again with the same arguments in a few seconds"}
     query = urllib.parse.urlencode({"view": view, "fps": fps, "r": p.rev[-8:]})
     return {"note": note, **info, "bytes": path.stat().st_size, "format": format,
             "url": f"{c.base}/file/p/{project}/n/{note}/animation.{format}?{query}"}

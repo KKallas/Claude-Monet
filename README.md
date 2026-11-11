@@ -137,6 +137,15 @@ An **assembly** is just another Python file that imports Notes and places them. 
 its parts still move from there, with `JOINTS` and `GROUND`: plain literals beside `TAGS`, read
 and rewritten without running the Note.
 
+**One design, one project.** Its main assembly is the Note named as the project is (`orb` in the
+project `orb`). The project opens on it, and the canvas lists every Note as a tree under it: what
+each imports and what its `PLACED` puts in it (read with `ast`, nothing run), the helper modules
+apart. What nothing uses sits below as *Other designs*; until there is a Note of the project's
+name, the server guesses the design with the most under it (`workspace.main_of`) and the canvas
+says it is a guess. The person makes a project of another design with one click (⇱,
+`Workspace.project_of`): it takes that Note, everything it uses, their checks, current builds and
+animations, and leaves the old project as it was.
+
 ```python
 GROUND = "rails"
 JOINTS = {
@@ -353,8 +362,20 @@ LIGHTS = {
   `SpotLight`, a projector's picture by `SpotLight.map`).
 - The timeline gets a line for each light (intensity 0–100 %), and for the **room** (how much it is
   lit) and the **haze** (how much smoke is in the air): timing an animation by its light. Motion has
-  a slider for each. **Record** takes the canvas as a video in the browser, at the canvas's quality;
-  the server's GIF/MP4 stays the agent's quick look, with a plainer beam.
+  a slider for each. **Render video** draws every frame of the timeline in the browser, at the
+  canvas's quality, lights and all, as an H.264 MP4 (WebCodecs and mp4-muxer: `canvas/video.js`):
+  a few frames between each picture of the view, from the camera as it stood when it began, so the
+  person works on meanwhile. Playing keeps time on a slow computer by skipping frames; when it runs
+  under 25 fps the video is rendered by itself, and when it is done it plays over the view, smooth.
+  The frames are the server's (`played()`, in both, held by `tests/advance.json`). The server's
+  GIF/MP4 stays the agent's quick look, with a plainer beam: a job of its own (`monet/jobs.py`,
+  issue #9), one at a time in a process apart, answered with its progress until the file is there.
+- **Pixels** (0.11.0, issue #10): `kind: "pixels"` makes every solid of the parts it names a pixel,
+  lit from the LEDs the Note's `leds()` gives (the build finds each LED's pixel: `runner.pixels_of`,
+  and reports the count, density, densest over sparsest and the current at full white, which checks
+  hold). `canvas/pixels.js` shades each pixel from its LEDs in the parts' own materials, lights the
+  white between them from a grid of the nearest pixels, and plays the animation's `patterns` (chase,
+  wave, scan, rainbow, sparkle) on them: the look of the lamp agent's offline renderer, live.
 - What the lights do, worked out on the server from the build, as torque is: how much of each beam
   the parts cut off at each pose, lux on a surface the Note names (centre, least, evenness), a
   projector's picture size at its throw and whether all of it lands; each one checkable
@@ -425,6 +446,7 @@ canvas/       the browser view (three.js), no build step:
               canvas.js      the page: the four areas, selection, panels, compare, Motion
               lights.js      the Note's lights: where they land, beams in smoke, glow, bloom, the stage
               timeline.js    Motion's timeline: keys of joints and lights, the action line, playing
+              tree.js        the Notes as a tree: the main assembly, the other designs, the modules
               motion.js      where the parts are at a pose of the joints (tested in node, and
                              against joints.py)
               measure.js     shortest distances and angles (plain arrays; tested in node)

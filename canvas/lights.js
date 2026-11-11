@@ -11,6 +11,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { createPixels } from './pixels.js';
 
 export const SCENE_LEVELS = { room: 0.12, haze: 0.6 };      // the room dimmed, smoke in the air: where lights show
 const CD = 1e6 * 4e-4;      // candela to three.js: millimetres (inverse square in mm), and an exposure that keeps a room readable
@@ -209,6 +210,9 @@ export function createLights({ renderer, scene, look, hooks }) {
   const levels = { room: SCENE_LEVELS.room, haze: SCENE_LEVELS.haze };
   const caster = new THREE.Raycaster();
   caster.firstHitOnly = true;
+  const pix = createPixels();      // a pixels light: every pixel its own colour, lit from its LEDs (canvas/pixels.js)
+  let described = null;      // the build's faces.json: where its pixels and LEDs are
+  let toned = false;      // the tone mapping changed for the pixels (restyle)
 
   // what a ray can meet: every part shown but the keep-outs, each with a tree of its own triangles, moved with it
   function makeBlockers() {
@@ -274,7 +278,7 @@ export function createLights({ renderer, scene, look, hooks }) {
       rig.light = new THREE.PointLight(L.color, 0, 0, 2);
       root.add(rig.light);
     }
-    if (L.kind !== 'glow') {
+    if (L.kind !== 'glow' && L.kind !== 'pixels') {
       rig.flare = new THREE.Sprite(new THREE.SpriteMaterial({ map: streak, color: new THREE.Color(L.color), blending: THREE.AdditiveBlending,
         depthTest: false, depthWrite: false, transparent: true, toneMapped: false, sizeAttenuation: false }));
       rig.flare.renderOrder = 9;
@@ -294,6 +298,7 @@ export function createLights({ renderer, scene, look, hooks }) {
     for (const L of lights) if (levels[L.name] == null) levels[L.name] = 1;
     blockers = [];
     dirty = true;
+    pix.set(lights, described, hooks.parts());
     restyle();
   }
 
@@ -342,6 +347,12 @@ export function createLights({ renderer, scene, look, hooks }) {
       if (p.keepout) p.object.visible = !on && !p.hidden;      // the beam is drawn now: its keep-out would be drawn twice
     }
     if (!on) for (const p of hooks.parts()) if (p.mesh?.material?.emissive) p.mesh.material.emissive.setRGB(0, 0, 0);
+    if (on && pix.active) for (const p of hooks.parts()) pix.patch(p.mesh?.material);      // its materials are new after a restyle
+    pix.show(on);
+    // lit pixels keep their hue: AgX (the rendered look's) washes a saturated blue out to slate; Khronos Neutral does not
+    const want = on && pix.active && renderer.toneMapping === THREE.AgXToneMapping;
+    if (want) { renderer.toneMapping = THREE.NeutralToneMapping; toned = true; }
+    else if (toned && !(on && pix.active)) { if (renderer.toneMapping === THREE.NeutralToneMapping) renderer.toneMapping = THREE.AgXToneMapping; toned = false; }
     look.dim?.(on ? levels.room : 1);
     scene.background = on ? new THREE.Color(0x020306).lerp(new THREE.Color(0x1a1f2a), levels.room) : null;
   }
@@ -439,10 +450,10 @@ export function createLights({ renderer, scene, look, hooks }) {
     s.material.opacity = Math.min(1, k);
   }
 
-  function update(time) {
+  function update(time, camera = null) {      // camera: the one the picture is drawn from (a video's own), else the view's
     if (!on) return;
     if (dirty || !parts) { const list = hooks.parts(); parts = Object.assign(new Map(list.map((p) => [p.name, p])), { list }); }
-    const cam = hooks.camera(), list = parts.list;
+    const cam = camera ?? hooks.camera(), list = parts.list;
     if (dirty) renderer.shadowMap.needsUpdate = true;
     for (const b of blockers) { b.matrixWorld.copy(b.userData.part.object.matrixWorld); }
     look.dim?.(levels.room);
@@ -477,7 +488,7 @@ export function createLights({ renderer, scene, look, hooks }) {
         rig.beam.visible = rig.dust.visible = level > 0.001 && levels.haze > 0.001;
         if (rig.marks) { rig.marks.visible = level > 0.001; rig.marks.material.opacity = Math.min(1, level * 1.5); }
       }
-      if (L.glow) {      // the parts that glow with it
+      if (L.glow && L.kind !== 'pixels') {      // the parts that glow with it (pixels: below, each its own)
         const strength = level * Math.min(2, 0.2 + (L.lumens ?? 1000) / 1500);      // a whole skin glowing: gently, or bloom eats it
         if (rig.glowList !== list) {      // the meshes that glow, found once for these parts
           const m = nameMatcher(L.glow), out = [];
@@ -488,6 +499,7 @@ export function createLights({ renderer, scene, look, hooks }) {
       }
       if (rig.flare) flare(rig, cam);
     }
+    if (pix.active) pix.update((name) => levels[name] ?? 1, hooks.pattern);
     dirty = false;
     if (scene.background) scene.background.setRGB(0.008, 0.012, 0.022).lerp(new THREE.Color(0x1a1f2a), levels.room);
   }
@@ -504,6 +516,8 @@ export function createLights({ renderer, scene, look, hooks }) {
       resize();
     }
     pass.camera = camera;
+    // pixels are many small sources: a gentler, wider bloom over them than over a beam (the room's haze round the lamp)
+    if (pix.active) { bloom.strength = 0.24; bloom.radius = 0.45; bloom.threshold = 0.32; } else { bloom.strength = 0.85; bloom.radius = 0.55; bloom.threshold = 0.82; }
     composer.render();
   }
   function resize() {
@@ -531,6 +545,15 @@ export function createLights({ renderer, scene, look, hooks }) {
         return { name: r.L.name, rays: n, at: r.pos?.toArray().map(Math.round), shortest: Math.min(...lens), longest: Math.max(...lens) };
       }) };
     },
+    /** The build's faces.json (its pixels, faces and LEDs): before set(), when a build is opened. */
+    described(geo) { described = geo; },
+    get pixels() { return pix; },
     level(name, value) { levels[name] = Math.max(0, Math.min(1, value)); if (name === 'room') restyle(); },
+    /** Levels for one picture (a video's frame, then back): set without what restyle() does to every material; the
+     *  room's light and the background follow. */
+    lightly(values) {
+      for (const [k, v] of Object.entries(values)) if (k in levels || lights.some((L) => L.name === k)) levels[k] = Math.max(0, Math.min(1, v));
+      look.dim?.(on ? levels.room : 1);
+    },
   };
 }

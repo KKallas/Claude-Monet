@@ -241,7 +241,13 @@ def build(p=PARAMS):
 - **Name every child** (`.label`): that name is what the user sees in the canvas's parts list and
   what you get back. Do not fuse the parts (`+`): fused, they are one solid and no assembly.
 - The canvas shows an assembly with each part in its own colour, a parts list (hide, show only
-  one) and an Explode slider. A project opens on its assembly.
+  one) and an Explode slider.
+- **One design, one project; its main assembly is the Note named as the project** (`orb.py` in the
+  project `orb`; a dash in a project's name is an underscore in the Note's). The project opens on
+  it, and the canvas lists the Notes as a tree under it: the parts and sub-assemblies it uses (by
+  import, and by `PLACED`), helper modules apart. A new design (another lamp, not a change to this
+  one) is a new project (`new_project`), not a second top assembly beside the first. What nothing
+  uses shows below as "Other designs"; the person can make a project of one with a click.
 - For you: the report of an assembly has `parts` (name, volume, size, where it is); `look`
   paints the parts in their own colours with a legend; every item of `selection` says which
   `part` it belongs to, and whole parts can be selected as objects.
@@ -388,10 +394,37 @@ LIGHTS = {
 - Each light, the room's light and the haze are lines on the timeline: `animate(…, {…, "lights":
   {"lens": [[60, 0], [90, 1]], "room": [[0, 0.3], [40, 0.08]], "haze": [[0, 0.3], [90, 0.75]]}})`,
   levels 0 to 1. Time an animation by its light: the grid glows up, the doors open, the projector
-  fades in. The person records it in the canvas (Record, in Animation) at the canvas's quality;
-  `render_animation` draws the joints only, not the lights.
+  fades in. The person renders it in the canvas (Render video, in Animation) at the canvas's
+  quality, lights and all; `render_animation` draws the joints only, not the lights.
 - The beams are rays cast against the build: a beam that gets out where it should not (through a
   slit between two doors, a hole at a pole) shows as a shaft of light with everything closed.
+
+**Pixels: LEDs under white shells, each its own colour.** For a lamp of many small diffusers (caps,
+voxels, blocks), say `kind: "pixels"`: every solid of the parts `glow` names is a pixel, and `leds`
+names a function of the Note that gives the LEDs under them, as built:
+
+```python
+LIGHTS = {"pixels": {"kind": "pixels", "glow": "caps_*|trim_*", "leds": "leds", "color": "#2f6bff",
+                     "spill_mm": 8}}
+
+def leds(p=PARAMS):      # each LED: (x, y, z), or ((x, y, z), normal, depth under the shell)
+    return [(helper.world(face, u, v, H + 0.6), normal, cap_height) for ...]
+```
+
+- The build calls `leds()` (as it calls `build()`) and gives each LED to the smallest pixel whose box
+  holds it. Changing a light needs no build; adding a pixels light, or moving an LED, does.
+- The report's `pixels` has, per light: `count`, `leds_total`, `leds` per pixel (min, median, max),
+  `density_dm2` (LEDs per dm² of a pixel's outside), `density_ratio` (densest over sparsest),
+  `current_a` (60 mA an LED at full white), `unlit` (pixels with none), `stray` (LEDs in no pixel).
+  Checks hold them: `pixels.NAME.density_ratio` max 1.5, `pixels.NAME.current_a` max what the
+  supplies give, `pixels.NAME.unlit` equals 0.
+- The canvas lights each pixel from its LEDs (brightest over them, its walls dimmer, white where
+  driven hard) and the surfaces between the pixels from under their rims (`spill_mm`).
+- **Patterns** play on the pixels over time, in the animation: `"patterns": {"pixels": [[0, {"kind":
+  "chase", "color": "#2f6bff", "core": "#ffffff", "pulses": 6, "speed": 9, "trail": 8}], [120, {"kind":
+  "wave"}]]}` (a key holds until the next). Kinds: `solid`, `chase` (white-cored pulses walking from
+  pixel to pixel), `wave`, `scan` (`axis`: `-z` falls), `rainbow`, `sparkle` (`rate`), `off`. The
+  light's level line still fades the whole light. The person can preview each kind in the Lights card.
 
 ### Materials and mass
 
@@ -472,8 +505,12 @@ def pieces(p=PARAMS):
 `animate(project, note, {"fps": 30, "length": 120, "tracks": {"leaf_left": [[0, 0], [60, 36], [120, 0]]}})`
 puts keyframes on the timeline in Motion, for the user to play (`null` takes it away; a joint that
 follows moves along by itself). `render_animation(project, note, view="iso", fps=15, format="gif")`
-renders it on the server as a GIF, or with `format="mp4"` as an H.264 video, and answers a link
-(`monet.py render-animation <project> <note> out.mp4`). Do not stitch `pose()` pictures together yourself.
+renders it on the server as a GIF, or with `format="mp4"` as an H.264 video. A big assembly takes
+minutes, so the render runs apart, one at a time on the server, and the call answers within about
+40 s: done, with a `url`; or still running, `state` "rendering" (or "waiting"), `done` of `frames`,
+and you call it again with the same arguments until `state` is "done" and there is a `url`. `monet.py render-animation <project> <note>
+out.mp4` does that waiting for you, with the progress on one line. Do not stitch `pose()` pictures
+together yourself, and do not start the same render again while it runs.
 
 The timeline has an **action line**: `"actions": [{"frame": 60, "do": "pause", "hold": 1.5},
 {"frame": 110, "do": "goto", "to": 20}]` in the same animation. Playing meets them, a scrub never

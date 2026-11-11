@@ -333,6 +333,14 @@ def test_advance_plays_as_the_canvas_does():
         assert [f, lo, stop, a and a["frame"]] == s["out"], s
 
 
+def test_a_video_shows_what_the_canvas_renders():
+    """played(), as canvas/timeline.js has it too (tests/advance.json): the canvas's own video and the server's agree."""
+    from monet.workspace import played
+    fx = json.loads((Path(__file__).parent / "advance.json").read_text())
+    for p in fx["played"]:
+        assert played(fx["anims"][p["anim"]], p["fps"]) == p["out"], p
+
+
 def test_a_video_follows_the_actions():
     """To the end; to a pause and held there; a loop of gotos shown once."""
     from monet.workspace import played
@@ -345,3 +353,36 @@ def test_a_video_follows_the_actions():
     assert played(loop, 3) == [0.0, 10.0, 20.0, 30.0, 40.0, 10.0, 20.0, 30.0, 40.0]
     stuck = {**plain, "actions": [{"frame": 20, "do": "goto", "to": 40}, {"frame": 40, "do": "goto", "to": 20}]}
     assert len(played(stuck, 30)) < 100          # two gotos sending playing to each other: shown once, it ends
+
+
+def test_the_main_is_the_note_named_as_the_project_or_the_biggest_design(ws):
+    """status says what each Note uses (imports and PLACED) and which is the main: the canvas draws the tree from it."""
+    from monet.workspace import main_of
+    p = ws.create_project("tree", "mg400_rakis")
+    st = p.status()
+    rows = {n["name"]: n for n in st["notes"]}
+    assert {"grid_neg_0", "nest_front", "rakis_common"} <= set(rows["rakis"]["uses"])
+    assert st["main"] == {"note": "rakis", "named": False}      # no Note named tree: the design with the most under it
+    assert main_of(st["notes"], "rakis") == {"note": "rakis", "named": True}
+    assert main_of(st["notes"], "mg400-blocks") == {"note": "mg400_blocks", "named": True}
+    assert main_of([{"name": "util", "kind": "module", "uses": []}], "x") is None
+
+
+def test_a_design_made_a_project_of_its_own(ws):
+    """The person makes a project of one design: the Note, all it uses, their checks and builds (still current)."""
+    src = ws.create_project("both", "mg400_rakis")
+    src.add_check("rakis", {"what": "size_x", "max": 2000, "why": "fits the room"}, by="user")
+    p = ws.project_of("both", "rakis")
+    assert p.name == "rakis"
+    st = p.status()
+    names = {n["name"] for n in st["notes"]}
+    assert names >= {"rakis", "nest_front", "nest_back", "grid_pos_0", "l_bracket", "rakis_common"}
+    assert not names & {"mg400", "mg400_blocks", "placing"}      # what it does not use stays behind
+    assert st["main"] == {"note": "rakis", "named": True}
+    assert {n["state"] for n in st["notes"] if n["kind"] != "module"} == {"built"}      # its builds came with it
+    assert [c["why"] for c in p.checks("rakis")] == [c["why"] for c in src.checks("rakis")] and "fits the room" in [c["why"] for c in p.checks("rakis")]
+    assert "rakis" in ws.project("both").files()      # the old one is as it was
+    with pytest.raises(Problem):
+        ws.project_of("both", "rakis")      # there is one already
+    with pytest.raises(Problem):
+        ws.project_of("both", "nothing")

@@ -63,11 +63,13 @@ def parts_of(shape, note="part"):
     return out
 
 
-def describe(shape, groups):
+def describe(shape, groups, glowing=frozenset(), solids=None):
     """Faces as plain data, and one mesh whose triangles are grouped face by face, the faces part by part.
 
     Straight from the kernel's own mesh (one meshing of the whole shape, then each face's triangles read out):
-    asking build123d face by face is several times slower, and this is most of what a build spends its time on."""
+    asking build123d face by face is several times slower, and this is most of what a build spends its time on.
+    glowing: names of parts whose solids are pixels (a LIGHTS pixels light): `solids` gets, for each, the solid each of
+    its faces (as listed here) belongs to."""
     from OCP.BRep import BRep_Tool
     from OCP.BRepAdaptor import BRepAdaptor_Surface
     from OCP.BRepGProp import BRepGProp
@@ -86,6 +88,12 @@ def describe(shape, groups):
     BRepMesh_IncrementalMesh(shape.wrapped, LINEAR, False, ANGULAR, True)
     for (name, sub), (volume, bbox) in zip(groups, sized):
         part = {"name": name, "faces": [len(faces), 0], "tris": [len(tris), 0], "volume": volume, "bbox": bbox}
+        owner = {}
+        if name in glowing and solids is not None:
+            for si, sol in enumerate(sub.solids()):
+                for f in sol.faces():
+                    owner[f] = si
+            solids[name] = []
         for f in sub.faces():
             w = f.wrapped
             loc = TopLoc_Location()
@@ -131,6 +139,8 @@ def describe(shape, groups):
                     d.update(type="cylinder", axis=[r6(way.X()), r6(way.Y()), r6(way.Z())], origin=[r6(o.X()), r6(o.Y()), r6(o.Z())],
                              radius=round(cyl.Radius(), 5), concave=bool(nx * to_axis[0] + ny * to_axis[1] + nz * to_axis[2] > 0))
             faces.append(d)
+            if owner:
+                solids[name].append(owner.get(f, -1))
             base = len(verts)
             verts.extend(pts)
             tris.extend((i + base, j + base, l + base) for i, j, l in local)
@@ -342,6 +352,102 @@ def printed_pieces(got) -> list:
     return out
 
 
+def pixel_lights(mod) -> list:
+    """The Note's `pixels` lights: [(name, the glow pattern, the name of its leds function or None)]."""
+    lights = getattr(mod, "LIGHTS", None)
+    if not isinstance(lights, dict):
+        return []
+    return [(n, d["glow"], d.get("leds")) for n, d in lights.items()
+            if isinstance(d, dict) and d.get("kind") == "pixels" and isinstance(d.get("glow"), str)]
+
+
+def _xyz(v):
+    if hasattr(v, "X"):
+        return (float(v.X), float(v.Y), float(v.Z))
+    x = tuple(float(a) for a in v)
+    if len(x) != 3:
+        raise ValueError("an LED is (x, y, z), or ((x, y, z), normal, depth)")
+    return x
+
+
+def led_rows(got, most=50_000) -> list:
+    """The LEDs a Note's leds() gave, each as [x, y, z, nx, ny, nz, depth] (no normal: 0, 0, 0). A dict's values are
+    taken as lists of LEDs."""
+    items = [x for v in got.values() for x in v] if isinstance(got, dict) else list(got)
+    out = []
+    for it in items[:most]:
+        if hasattr(it, "X") or (len(it) == 3 and all(isinstance(a, (int, float)) for a in it)):
+            p, n, h = _xyz(it), (0.0, 0.0, 0.0), 1.2
+        else:
+            p = _xyz(it[0])
+            n = _xyz(it[1]) if len(it) > 1 and it[1] is not None else (0.0, 0.0, 0.0)
+            h = float(it[2]) if len(it) > 2 else 1.2
+        size = sum(a * a for a in n) ** 0.5
+        n = tuple(a / size for a in n) if size > 1e-9 else (0.0, 0.0, 0.0)
+        out.append([round(a, 3) for a in (*p, *n)] + [round(h, 3)])
+    return out
+
+
+def pixels_of(mod, groups, faces, parts, solids) -> tuple[dict, dict]:
+    """(the numbers of each pixels light, for result.json; its pixels for faces.json): every solid of a part the light
+    names is a pixel, with its faces and box; each LED of the Note's leds() goes to the smallest pixel whose box holds
+    it. The numbers: how many pixels, LEDs to a pixel, LEDs to a square decimetre of a pixel's shell (its area over
+    two: the outside), the densest over the sparsest, the current at full white (60 mA an LED), pixels with none."""
+    import statistics
+    from .materials import matches
+    sizes, described = {}, {}
+    by_name = {name: sub for name, sub in groups}
+    first = {q["name"]: q["faces"][0] for q in parts}
+    for light, glow, fn in pixel_lights(mod):
+        pix = []
+        for name, owners in solids.items():
+            if not matches(glow, name):
+                continue
+            sol = by_name[name].solids()
+            runs = {}
+            for k, si in enumerate(owners):
+                if si >= 0:
+                    runs.setdefault(si, []).append(first[name] + k)
+            for si, idx in sorted(runs.items()):
+                bb = sol[si].bounding_box()
+                ranges = []
+                for i in idx:       # the faces as runs [start, count]
+                    if ranges and ranges[-1][0] + ranges[-1][1] == i:
+                        ranges[-1][1] += 1
+                    else:
+                        ranges.append([i, 1])
+                pix.append({"part": name, "solid": si, "faces": ranges, "area": round(sol[si].area, 1),
+                            "bbox": [round(x, 3) for x in (bb.min.X, bb.min.Y, bb.min.Z, bb.max.X, bb.max.Y, bb.max.Z)], "leds": []})
+        stray = 0
+        if fn:
+            f = getattr(mod, fn, None)
+            if not callable(f):
+                raise TypeError(f"LIGHTS {light}: leds names {fn}(), and the Note has no such function")
+            for led in led_rows(f()):
+                x, y, z = led[:3]
+                best, size = None, None
+                for q in pix:
+                    b = q["bbox"]
+                    if b[0] - 1 <= x <= b[3] + 1 and b[1] - 1 <= y <= b[4] + 1 and b[2] - 1 <= z <= b[5] + 1:
+                        v = (b[3] - b[0] + 1) * (b[4] - b[1] + 1) * (b[5] - b[2] + 1)
+                        if size is None or v < size:
+                            best, size = q, v
+                if best is None:
+                    stray += 1
+                else:
+                    best["leds"].append(led)
+        counts = [len(q["leds"]) for q in pix]
+        dens = [len(q["leds"]) / max(1e-6, q["area"] / 2 / 1e4) for q in pix if q["leds"]]
+        stat = lambda xs: {"min": round(min(xs), 2), "median": round(statistics.median(xs), 2), "max": round(max(xs), 2)} if xs else None
+        sizes[light] = {"count": len(pix), "leds_total": sum(counts), "leds": stat(counts) if fn else None,
+                        "density_dm2": stat(dens) if fn else None,
+                        "density_ratio": round(max(dens) / min(dens), 3) if fn and dens else None,
+                        "current_a": round(sum(counts) * 0.06, 2) if fn else None,
+                        "unlit": sum(1 for c in counts if not c) if fn else None, "stray": stray if fn else None}
+        described[light] = pix
+    return sizes, described
+
+
 def laid_out(pieces, gap=10.0):
     """The pieces side by side along X, each as it lies (no turning), for one file of them all."""
     from build123d import Compound, Pos
@@ -398,7 +504,10 @@ def run(project_dir: Path, note: str, out_dir: Path, exports=()) -> dict:
         if callable(getattr(mod, "pieces", None)):
             pieces = printed_pieces(mod.pieces())
             result["pieces"] = [{"name": n, **semmelweis.fingerprint(q)} for n, q in pieces]
-        faces, verts, tris, parts = describe(shape, groups)
+        from .materials import matches
+        glowing = {name for name, _ in groups for _, glow, _ in pixel_lights(mod) if matches(glow, name)}
+        solids = {}
+        faces, verts, tris, parts = describe(shape, groups, glowing, solids)
         result["params"] = getattr(mod, "PARAMS", {})
         result["doc"] = (mod.__doc__ or "").strip()
         result["triangles"] = len(tris)
@@ -407,8 +516,12 @@ def run(project_dir: Path, note: str, out_dir: Path, exports=()) -> dict:
         result["snaps"] = derive.clean_snaps(getattr(mod, "SNAPS", None))      # where other Notes may be put
         geo = {"faces": faces, "parts": parts, "edges": edges, "points": points}
         result["tags"], result["motion"] = derive.found(literals, result["fingerprint"]["bbox"], geo, verts, tris, result["snaps"])
+        pixels = {}
+        if glowing:     # LIGHTS pixels: each solid of a glowing part a pixel, with the LEDs under it
+            result["pixels"], pixels = pixels_of(mod, groups, faces, parts, solids)
         write_glb(out_dir / "model.glb", verts, tris, segs)
-        (out_dir / "faces.json").write_text(json.dumps({"faces": faces, "parts": parts, "edges": edges, "points": points}, separators=(",", ":")))
+        (out_dir / "faces.json").write_text(json.dumps({"faces": faces, "parts": parts, "edges": edges, "points": points,
+                                                        **({"pixels": pixels} if pixels else {})}, separators=(",", ":")))
         result["parts"] = [{k: part[k] for k in ("name", "volume", "bbox", "faces")} for part in parts]
         export(out_dir, solid if pieces is None else laid_out(pieces), exports, [q for _, q in pieces] if pieces else None)
         result["ok"] = True

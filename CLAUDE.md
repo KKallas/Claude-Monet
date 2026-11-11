@@ -113,12 +113,26 @@ wrong:
   Playing steps through `advance` in `canvas/timeline.js`, and a video through its Python copy in `workspace.py`
   (`played`); `tests/advance.json` holds the two together. The finish by picture models is planned in the README
   ("Showing it"); who calls the models is still open.
+- **Slow work is a job** (issue #9): `render_animation` runs in `monet/jobs.py` (a process pool of one, a fresh process
+  each, at most 4 waiting) and answers its progress (202 on the file route) until the file is there; never render in
+  a request. The canvas renders its own video in the background (`canvas/video.js`, `startFilm`/`shoot` in canvas.js:
+  frames between the view's pictures, from a frozen camera, poses by `placeParts`, levels by `lamps.lightly`, never
+  `poseTo`/`setLevel`, which check clashes and restyle); it starts by itself when playing runs under 25 fps.
+- **Pixels** (0.11.0, issue #10): a `pixels` light's pixels are solids of the parts it names, found by the build
+  (`runner.pixels_of`, with the LEDs of the Note's `leds()`), in faces.json `pixels` and the report's `pixels`.
+  `canvas/pixels.js` patches the parts' materials (onBeforeCompile, chained); colours are kept as shown (sRGB) and made
+  light in the shader, as the offline renderer did. While pixels are lit the view tone-maps with Neutral, not AgX
+  (AgX washes saturated blue out). Patterns are data (`lights.PATTERNS`), never code.
 - **Lights** (0.10.0): `LIGHTS` is a fact (`note.FACTS`, out of `geometry_key`), checked in `monet/lights.py` against
   the build's part names when the report is made (nothing run); `canvas/lights.js` draws them in Motion: three.js
   spot lights with shadows (their shadow camera's `far` must reach as far as the light, or a projector's picture and
   the shadows stop at 500 mm), beams as instanced ribbons along rays cast with three-mesh-bvh against each part
   (moved with its part), bloom by EffectComposer only while lights are on. Their levels, `room` and `haze` are the
   animation's `lights`; on the timeline they are lines named `~name` (`kept`/`opened` in `timeline.js`).
+- **One design, one project; its main is the Note named as the project** (Kaspar, 2026-11-11): no setting and no star.
+  `status()` gives each row's `uses` (imports and `PLACED`) and the project's `main` (`workspace.main_of`: that Note, else a
+  guess, `named: False`); `canvas/tree.js` makes the side panel's tree from them, the same in every room. Making a project
+  of another design (`Workspace.project_of`) carries checks, so it is a route of the canvas API only.
 - **`skill/monet/` is the single source of the agent's instructions**: the skill zip and the
   `guide` tool both serve it. When behaviour changes, change it there.
 

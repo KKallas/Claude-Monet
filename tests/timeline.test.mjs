@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { actionBetween, advance, kept, opened, deleteActions, deleteKeys, expand, keyFrames, moveActions, moveKeys, poseAt, setAction, setKey, tickStep, valueAt } from '../canvas/timeline.js';
+import { actionBetween, advance, kept, opened, deleteActions, deleteKeys, expand, keyFrames, moveActions, moveKeys, poseAt, setAction, setKey, tickStep, valueAt, played } from '../canvas/timeline.js';
 
 test('between two keys a joint moves evenly; before the first and after the last it holds', () => {
   const keys = [[10, 0], [20, 90], [40, -90]];
@@ -47,6 +47,11 @@ test('playing meets the actions as the server plays them for a video (tests/adva
     const r = advance(fx.anims[s.anim], { frame: s.frame, lo: s.lo }, s.d, s.loop);
     assert.deepEqual([r.frame, r.lo, r.stop, r.action?.frame ?? null], s.out, JSON.stringify(s));
   }
+});
+
+test('a video shows the frames the server shows (played, tests/advance.json)', () => {
+  const fx = JSON.parse(readFileSync(new URL('./advance.json', import.meta.url)));
+  for (const p of fx.played) assert.deepEqual(played(fx.anims[p.anim], p.fps), p.out, `${p.anim} at ${p.fps}`);
 });
 
 test('an action is met once, going past it, never where playing starts', () => {

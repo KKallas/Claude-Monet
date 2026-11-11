@@ -15,8 +15,10 @@ import { createNavCube } from './navcube.js';
 import { dials } from './dial.js';
 import { railWidth } from './rails.js';
 import { sideEdge } from './side.js';
-import { createTimeline } from './timeline.js';
+import { createTimeline, played, poseAt } from './timeline.js';
+import { videoWriter, canWrite } from './video.js';
 import { createLights } from './lights.js';
+import { noteTree, pathsTo } from './tree.js';
 import { remote } from './remote.js';
 import { bomLines, grams, howWords, materialName, materialWords, partWords, poseLines, poseValues, torqueWords } from './facts.js';
 
@@ -92,16 +94,30 @@ const groups = { part: new THREE.Group(), a: new THREE.Group(), b: new THREE.Gro
 Object.values(groups).forEach((g) => scene.add(g));
 // the Note's lights (LIGHTS), shown in Motion: the light where it lands, beams in smoke, what glows (canvas/lights.js).
 // The levels of the lights, the room and the haze are lines on the timeline too ("~name" there)
-let lightsWanted = true, recording = null;
+let lightsWanted = true;
+// the view as a video rendered in the background (below, at startFilm): playing under 25 fps starts one by itself
+const SMOOTH = 25;
+let film = null, filmSeen = new Set(), slow = { from: 0, count: 0 }, ready = false;      // ready: the page is set up (the loop starts before)
 // when the view was last used: it is drawn while it is (the render loop, below), and rests when it is not
 let lastUse = performance.now(), lastDraw = 0, lastTick = performance.now(), smokeTime = 0, pictures = 0;
 function wake() { lastUse = performance.now(); }
 try { lightsWanted = localStorage.getItem('monet.lights') !== '0'; } catch { /* no storage */ }
-const lamps = createLights({ renderer, scene, look, hooks: { parts: lightParts, camera: () => camera } });
+const lamps = createLights({ renderer, scene, look, hooks: { parts: lightParts, camera: () => camera, pattern: patternOf } });
+// what a pixels light plays (canvas/pixels.js): the animation's pattern at the timeline's frame (a video's frame while one
+// is rendered), else what the Lights card previews, on the view's own clock
+const previews = {};
+let filmClock = null;      // {anim, frame} while a frame of a video is drawn
+function patternOf(light) {
+  const anim = filmClock?.anim ?? timeline.anim, frame = filmClock?.frame ?? timeline.frame;
+  const keys = anim?.patterns?.[light];
+  if (keys?.length) { let k = keys[0]; for (const x of keys) if (x[0] <= frame) k = x; return { spec: k[1], t: frame / (anim.fps || 30) }; }
+  return previews[light] ? { spec: previews[light], t: (filmClock ? frame / (anim.fps || 30) : smokeTime / 1000) } : null;
+}
 function lightParts() {
   return groups.part.children.map((one) => {
     const i = one.userData.part;
-    return { name: S.parts.length > 1 ? S.parts[i]?.name : S.note, object: one, mesh: one.children.find((o) => o.isMesh && !o.userData.cap), keepout: isKeepout(i), hidden: S.hidden.has(i) };
+    return { name: S.parts.length > 1 ? S.parts[i]?.name : S.note, object: one, mesh: one.children.find((o) => o.isMesh && !o.userData.cap), keepout: isKeepout(i), hidden: S.hidden.has(i),
+      tris: one.userData.tris, bbox: S.parts[i]?.bbox };
   });
 }
 function syncLights() {
@@ -1108,7 +1124,8 @@ async function goRoom(room) {
       if (room === 'motion') checkPose();
       return;
     }
-    const a = S.proj.notes.find((n) => n.kind === 'assembly' && n.name === S.lastAssembly) ?? S.proj.notes.find((n) => n.kind === 'assembly');
+    const a = S.proj.notes.find((n) => n.kind === 'assembly' && n.name === S.lastAssembly) ?? S.proj.notes.find((n) => n.kind === 'assembly' && n.name === S.proj.main?.note)
+      ?? S.proj.notes.find((n) => n.kind === 'assembly');
     if (!a) { S.room = kindOf(S.note) === 'assembly' ? 'assembly' : 'part'; roomBar(); renderPanel(true); return notice('no assembly in this project yet: ask your agent to put the parts together in a Note'); }
     S.room = room;      // open() keeps an assembly in Motion when it is asked for there
     return open(S.project, a.name);
@@ -1134,10 +1151,13 @@ for (const e of ['pointerdown', 'pointermove', 'wheel', 'keydown']) window.addEv
 controls.addEventListener('change', wake);
 (function loop() {
   requestAnimationFrame(loop);
-  const now = performance.now(), awake = now - lastUse < 2000 || timeline.playing || !!playing || !!recording || !!drag || !!blink;
+  const now = performance.now(), shooting = !!film && !film.done, awake = now - lastUse < 2000 || timeline.playing || !!playing || shooting || !!drag || !!blink
+    || (lamps.on && Object.values(previews).some((p) => p.kind !== 'solid' && p.kind !== 'off'));      // pixels playing a pattern
   if (!awake && now - lastDraw < 500) return;
   if (awake) smokeTime += Math.min(100, now - lastTick);
   lastTick = now; lastDraw = now; pictures++;
+  if (ready) slowness(now);
+  if (shooting) shoot();      // frames of the video, drawn between the pictures of the view: never seen here
   controls.update();
   if (sectionOn) {      // a slow glow; in 2077 a neon red, hatched
     const now = performance.now(), neon = cyber();
@@ -1149,7 +1169,7 @@ controls.addEventListener('change', wake);
   }
   if (neonDirty || neonOn !== (sectionOn && cyber())) traceCut();
   if (lamps.on) { lamps.update(smokeTime / 1000); lamps.render(camera); } else renderer.render(scene, camera);
-  if (!(S.room === 'sketch' && sketch.state.active) && !recording) cube.draw(renderer, camera, controls.target, view.clientWidth, view.clientHeight);
+  if (!(S.room === 'sketch' && sketch.state.active)) cube.draw(renderer, camera, controls.target, view.clientWidth, view.clientHeight);
   for (const el of $('#planeLabels').children) {      // the name of each plane, at a corner of its sheet
     spot.copy(shown[Number(el.dataset.i)].at).project(camera);
     el.style.transform = `translate(${(spot.x + 1) / 2 * view.clientWidth + 4}px, ${(1 - spot.y) / 2 * view.clientHeight + 2}px)`;
@@ -1308,7 +1328,14 @@ async function exportAnimation(fmt = 'gif') {
   const view = $('#gifView')?.value || 'iso', note = S.note, what = fmt === 'mp4' ? 'video' : 'GIF';
   busy(`drawing the ${what}…`, {});
   try {
-    const r = await fetch(`${root}/p/${S.project}/n/${note}/animation.${fmt}?view=${encodeURIComponent(view)}&fps=${fmt === 'mp4' ? 30 : 15}`);
+    const url0 = `${root}/p/${S.project}/n/${note}/animation.${fmt}?view=${encodeURIComponent(view)}&fps=${fmt === 'mp4' ? 30 : 15}`;
+    let r = await fetch(url0);
+    while (r.status === 202) {      // rendered apart on the server, one at a time: its progress, then the file
+      const p = await r.json().catch(() => ({}));
+      busy(`drawing the ${what} on the server… ${p.done ?? 0}/${p.frames ?? '?'} frames${p.state === 'waiting' ? ' (waiting for another render)' : ''}`, {});
+      await new Promise((ok) => setTimeout(ok, 2000));
+      r = await fetch(url0);
+    }
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `error ${r.status}`);
     const url = URL.createObjectURL(await r.blob()), a = Object.assign(document.createElement('a'), { href: url, download: `${note}.${fmt}` });
     document.body.append(a); a.click(); a.remove();
@@ -1317,35 +1344,111 @@ async function exportAnimation(fmt = 'gif') {
   } catch (e) { busy(); tell(`The ${what} was not made: ${e.message}`); }
 }
 
-/** The timeline played here once (a loop once round) and the view recorded as it plays: a video at the canvas's own
- *  quality, lights, beams and all. MP4 where the browser records it, else WebM. */
-async function recordVideo() {
-  if (!window.MediaRecorder || !canvas.captureStream) { tell('This browser cannot record the view: try Chrome.'); return; }
-  const type = ['video/mp4;codecs=avc1.640028', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'].find((t) => MediaRecorder.isTypeSupported(t));
-  const rec = new MediaRecorder(canvas.captureStream(60), { mimeType: type, videoBitsPerSecond: 16_000_000 }), chunks = [];
-  rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
-  const stopped = new Promise((r) => { rec.onstop = r; });
-  recording = { met: new Set(), stop: false };
-  stopPlaying(); timeline.stop();
-  renderPanel(true);
-  lamps.quality(true);      // the video at the screen's own pixels; the view goes back to the lighter picture after
-  rec.start(250);
-  const t0 = performance.now();
-  await new Promise((r) => requestAnimationFrame(r));
-  timeline.play({ once: true });
-  busy('recording the view… (Record again stops it)');
-  while (timeline.playing && !recording.stop && performance.now() - t0 < 300_000) await new Promise((r) => requestAnimationFrame(r));
-  await new Promise((r) => setTimeout(r, 300));      // the last picture held a moment
-  rec.stop();
-  await stopped;
-  recording = null;
-  lamps.quality(false);
-  busy(); renderPanel(true);
-  const blob = new Blob(chunks, { type: type.split(';')[0] }), url = URL.createObjectURL(blob);
-  const a = Object.assign(document.createElement('a'), { href: url, download: `${S.note}.${type.includes('mp4') ? 'mp4' : 'webm'}` });
-  document.body.append(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+// ---- the view as a video, rendered in the background --------------------------------------------------------------
+// Playing keeps time: a slow computer skips frames (the timeline moves by the clock). Render video draws every frame
+// of the timeline (as the server's video has them: played()) from the camera as it stood when it began, a few between
+// each picture of the view, so the person goes on working and never sees them; H.264 (canvas/video.js). Done, the video
+// plays over the view, smooth however slow this computer is. It starts by itself when playing runs under 25 fps.
+const filmKey = () => JSON.stringify([S.project, S.note, S.rev, timeline.anim.fps, timeline.anim.tracks, timeline.anim.actions, lamps.on]);
+const filmed = () => film?.key === filmKey() ? film : null;
+function slowness(now) {      // how many pictures a second playing gets here: under 25, the video is rendered
+  if (!timeline.playing || film) { slow = { from: 0, count: 0 }; return; }
+  if (!slow.from) { slow = { from: now, count: 0 }; return; }
+  slow.count++;
+  if (now - slow.from < 2500) return;
+  const fps = slow.count / ((now - slow.from) / 1000);
+  slow = { from: 0, count: 0 };
+  const key = filmKey();
+  if (fps < SMOOTH && !filmSeen.has(key) && canWrite()) {
+    filmSeen.add(key);
+    startFilm(`This computer plays it at ${Math.round(fps)} fps, so frames are skipped: the smooth video is being rendered in the background`);
+  }
 }
+async function startFilm(why = '') {
+  if (!moving()) return notice('a video is rendered in Motion');
+  if (film && !film.done) return;
+  const anim = timeline.anim, frames = played(anim, anim.fps).slice(0, 7200);      // at most four minutes at 30 fps
+  let w = canvas.width, h = canvas.height;
+  const k = Math.min(1, 1920 / w, 1920 / h);
+  w = Math.max(2, Math.round(w * k / 2) * 2); h = Math.max(2, Math.round(h * k / 2) * 2);
+  const writer = await videoWriter({ width: w, height: h, fps: anim.fps });
+  if (!writer) { tell('This browser cannot write H.264 video: try Chrome.'); return; }
+  if (film?.url) URL.revokeObjectURL(film.url);
+  const pad = Object.assign(document.createElement('canvas'), { width: w, height: h });
+  film = { key: filmKey(), note: S.note, frames, fps: anim.fps, i: 0, writer, w, h, pad, ctx: pad.getContext('2d'),
+    cam: camera.clone(), cw: canvas.width, ch: canvas.height, anim: structuredClone(anim), done: false, why };
+  busy(`${why ? why + ': ' : ''}rendering the video… 0/${frames.length}`);
+  renderPanel(true);
+}
+function stopFilm(why) {
+  if (!film || film.done) return;
+  film.writer.cancel();
+  film = null;
+  busy(); renderPanel(true);
+  if (why) notice(why);
+}
+// a few frames of the video: each posed and lit as the timeline has it there, drawn from the film's camera, then the
+// view put back as it was before the picture the person sees is drawn
+function shoot() {
+  const f = film;
+  if (!moving() || S.note !== f.note) return stopFilm('the video stopped: the view left the animation');
+  if (canvas.width !== f.cw || canvas.height !== f.ch) return stopFilm('the video stopped: the view changed size (render it again)');
+  const budget = timeline.playing ? 12 : 40, t0 = performance.now(), mo = model();
+  const pose = S.pose, levels = { ...lamps.levels };
+  let n = 0;
+  try {
+    while (f.i < f.frames.length && f.writer.backlog < 8 && (n === 0 || performance.now() - t0 < budget)) {
+      const at = poseAt(f.anim, f.frames[f.i]), joints = {}, lit = {};
+      for (const [k, v] of Object.entries(at)) {
+        if (k.startsWith('~')) lit[k.slice(1)] = v;
+        else if (mo.joints[k] && !mo.joints[k].follows) { const [lo, hi] = span(mo.joints[k]); joints[k] = Math.min(hi, Math.max(lo, v)); }
+      }
+      S.pose = { ...pose, ...joints };
+      filmClock = { anim: f.anim, frame: f.frames[f.i] };
+      lamps.lightly(lit);
+      placeParts();
+      if (lamps.on) { lamps.update(f.i / f.fps, f.cam); lamps.render(f.cam); } else renderer.render(scene, f.cam);
+      f.ctx.drawImage(canvas, 0, 0, f.w, f.h);
+      f.writer.add(f.pad, f.i);
+      f.i++; n++;
+    }
+  } catch (e) { S.pose = pose; filmClock = null; lamps.lightly(levels); placeParts(); return stopFilm(`the video failed: ${e.message}`); }
+  S.pose = pose; filmClock = null; lamps.lightly(levels); placeParts();
+  if (n) busy(`${f.why ? f.why + ': ' : ''}rendering the video… ${f.i}/${f.frames.length}`);
+  if (f.i >= f.frames.length && !f.finishing) {
+    f.finishing = true;
+    f.writer.finish().then((blob) => {
+      f.done = true; f.url = URL.createObjectURL(blob); f.bytes = blob.size;
+      busy(); renderPanel(true);
+      notice('the video is ready: Watch it under Animation');
+      if (f.why) watchFilm();      // started because playing was slow: shown at once
+    }).catch((e) => { film = null; busy(); tell(`The video was not made: ${e.message}`); });
+  }
+}
+// the parts where S.pose puts them, and nothing else (no selection, axes or clash check): for a picture of a video
+function placeParts() {
+  const at = partPose();
+  for (const one of groups.part.children) {
+    const q = S.parts[one.userData.part];
+    if (!at[q?.name]) continue;
+    posed.set(...at[q.name]).decompose(one.position, one.quaternion, one.scale);
+    one.updateMatrix();
+  }
+  groups.part.updateMatrixWorld(true);
+  lamps.moved();
+}
+function watchFilm() {
+  const f = film;
+  if (!f?.url) return;
+  $('#filmPlayer')?.remove();
+  const box = Object.assign(document.createElement('div'), { id: 'filmPlayer', className: 'film-player' });
+  box.innerHTML = `<video src="${f.url}" autoplay loop controls playsinline></video>
+    <div class="film-bar"><span>${S.note} · ${f.frames.length} frames at ${fmt(f.fps)} fps · ${(f.bytes / 1e6).toFixed(1)} MB${filmed() ? '' : ' · <b>older than the timeline</b>'}</span>
+    <a download="${S.note}.mp4" href="${f.url}">Download MP4</a><button data-film="close" title="back to the view (Esc)">✕</button></div>`;
+  box.onclick = (e) => { if (e.target.closest('[data-film="close"]')) box.remove(); };
+  view.append(box);
+}
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('#filmPlayer')?.remove(); });
 
 // a joint driven back and forth through its range, the whole way in four seconds
 let playing = 0;
@@ -1377,10 +1480,6 @@ const timeline = createTimeline($('#timeline'), {
   setPose(values) {
     poseTo(values);
     for (const [k, v] of Object.entries(values)) if (k.startsWith('~')) setLevel(k.slice(1), v, false);
-  },
-  action(a) {      // recording: a goto met a second time has shown its loop once
-    if (!recording || a.do !== 'goto') return;
-    if (recording.met.has(a.frame)) timeline.pause(); else recording.met.add(a.frame);
   },
   async save(animation, key) {
     const [project, note] = key.split('/');
@@ -1631,6 +1730,11 @@ function motionCards() {
     ${mo.unchecked?.length ? `<p class="muted">Not checked, their mesh is not closed: ${mo.unchecked.map(esc).join(', ')}</p>` : ''}
     <p class="muted">A clash is new overlap as parts move; what overlaps as built is listed apart. A check can hold joint.NAME.stop_min, stop_max and clash_mm3.</p>`));
   const lit = S.data.report?.lights ?? [];
+  const pixelWords = (L) => {      // what the build found of a pixels light: how many, their LEDs, the current at full white
+    const p = S.data.report?.pixels?.[L.name];
+    if (!p || p.waiting) return `${esc(L.glow)} as pixels · ${p?.waiting ? 'build again to find them' : ''}`;
+    return `${p.count} pixels${p.leds ? ` · ${p.leds_total} LEDs, ${fmt(p.leds.min)}–${fmt(p.leds.max)} a pixel · densest/sparsest ${fmt(p.density_ratio)} · ${fmt(p.current_a)} A at full white${p.unlit ? ` · ${p.unlit} unlit` : ''}` : ' · no LEDs given (leds)'}`;
+  };
   if (lit.length) {
     const ICON = { spot: '◭', projector: '▣', laser: '⟋', point: '✦', glow: '◌', room: '⌂', haze: '≋' };
     const slider = (name, kind, what) => `<div class="check light" data-lightrow="${esc(name)}"><div class="row"><span><span class="kind">${ICON[kind] ?? '✦'}</span><b>${esc(name)}</b> <span class="muted">${what}</span></span></div>
@@ -1638,17 +1742,22 @@ function motionCards() {
         data-scale="100" data-unit="%" data-key="light:${kind}" data-default="${kind === 'room' ? 0.12 : kind === 'haze' ? 0.6 : 1}" title="how bright ${esc(name)} is"></div></div>`;
     const about = (L) => L.kind === 'spot' ? `${fmt(L.angle)}° beam, ${fmt(L.lumens)} lm, ${fmt(Math.round(L.candela))} cd`
       : L.kind === 'projector' ? `throw ${fmt(L.throw)}, ${fmt(L.picture.width_at_1m)} × ${fmt(L.picture.height_at_1m)} mm at 1 m, ${fmt(L.lumens)} lm`
-      : L.kind === 'laser' ? `${fmt(L.mw)} mW${L.fan ? `, a ${fmt(L.fan)}° fan` : ''}` : L.kind === 'glow' ? `${esc(L.glow)} glows` : `${fmt(L.lumens)} lm`;
+      : L.kind === 'laser' ? `${fmt(L.mw)} mW${L.fan ? `, a ${fmt(L.fan)}° fan` : ''}` : L.kind === 'glow' ? `${esc(L.glow)} glows`
+      : L.kind === 'pixels' ? pixelWords(L) : `${fmt(L.lumens)} lm`;
+    const timed = (name) => !!S.proj?.animations?.[S.note]?.patterns?.[name]?.length;
+    const picker = (L) => L.kind !== 'pixels' ? '' : `<div class="line"><span class="muted">pattern</span><select data-pattern="${esc(L.name)}" title="${timed(L.name) ? 'the timeline sets it: this shows one while it is not playing a pattern' : 'what the pixels play here (the agent puts patterns on the timeline: animate)'}">
+      ${['solid', 'chase', 'wave', 'scan', 'rainbow', 'sparkle', 'off'].map((k) => `<option ${(previews[L.name]?.kind ?? 'solid') === k ? 'selected' : ''}>${k}</option>`).join('')}</select>${timed(L.name) ? '<span class="muted">· on the timeline</span>' : ''}</div>`;
     cards.push(card('lights', `Lights · ${lit.length}`, `<div class="line"><button data-act="lights" class="${lamps.on ? 'on' : ''}" title="the lights, the beams in smoke, the room dimmed">${lamps.on ? '● Lights on' : '○ Lights off'}</button>
       <span style="flex:1"></span><span class="muted">${lamps.on ? 'the floor and a wall to land on' : ''}</span></div>
-      ${lit.map((L) => slider(L.name, L.kind, `${L.kind}${L.on ? ` on ${esc(L.on)}` : ''} · ${about(L)}`)).join('')}
+      ${lit.map((L) => slider(L.name, L.kind, `${L.kind}${L.on ? ` on ${esc(L.on)}` : ''} · ${about(L)}`) + picker(L)).join('')}
       ${slider('room', 'room', 'the room\'s own light')}${slider('haze', 'haze', 'smoke in the air: how much the beams show')}
       <p class="muted">The Note's LIGHTS. Their levels, the room's and the haze are lines on the timeline: key them to time an animation by its light.</p>`));
   }
   const anim = S.proj?.animations?.[S.note];
   if (Object.values(anim?.tracks ?? {}).some((k) => k.length) || Object.values(anim?.lights ?? {}).some((k) => k.length)) {
-    cards.push(card('gif', 'Animation', `<p class="muted" style="margin-top:0">The timeline, ${fmt(anim.length)} frames at ${fmt(anim.fps)} fps. <b>Record</b> plays it here and saves the view as a video, lights and all; GIF and MP4 are drawn on the server, plainer, in a few seconds.</p>
-      <div class="line"><button class="primary" data-act="record" title="play the timeline and record the view">${recording ? '■ Stop' : '● Record'}</button><span style="flex:1"></span>
+    const f = film?.note === S.note ? film : null, rendering = f && !f.done;
+    cards.push(card('gif', 'Animation', `<p class="muted" style="margin-top:0">The timeline, ${fmt(anim.length)} frames at ${fmt(anim.fps)} fps. <b>Render video</b> draws every frame from this view, lights and all, in the background while you work: smooth however slow this computer is (it starts by itself when playing runs under ${SMOOTH} fps). GIF and MP4 are drawn on the server, plainer.</p>
+      <div class="line"><button class="primary" data-act="film" title="${rendering ? 'stop rendering the video' : 'draw every frame of the timeline from this view, in the background, as an H.264 video'}">${rendering ? '■ Stop' : '● Render video'}</button>${f?.done ? `<button data-act="watch" title="the video over the view${filmed() ? '' : ' (made before the timeline changed)'}">▶ Watch</button>` : ''}<span style="flex:1"></span>
         <select id="gifView" title="where the camera stands">${['iso', 'front', 'right', 'top', 'iso_back'].map((k) => `<option value="${k}">${k.replace('_', ' ')}</option>`).join('')}</select>
         <button data-act="gif">GIF</button><button data-act="mp4">MP4</button></div>`));
   }
@@ -1875,22 +1984,60 @@ function renderSketchSide() {
       <button class="x" data-act="untag" data-name="${esc(name)}" title="remove this sketch">×</button></div>`).join('') || '<div class="item muted">none yet</div>';
 }
 
+// which branches of the Notes' tree are open, per project (the main's own is, to begin with)
+let twigs = new Set(), twigsOf = null, twigNote = null;
+function keepTwigs() { try { localStorage.setItem(`monet.tree.${S.project}`, JSON.stringify([...twigs])); } catch { /* not remembered */ } }
+function loadTwigs() {
+  if (twigsOf === S.project) return;
+  twigsOf = S.project;
+  let got = null;
+  try { got = JSON.parse(localStorage.getItem(`monet.tree.${S.project}`) || 'null'); } catch { /* no storage */ }
+  twigs = new Set(got ?? (S.proj?.main?.note ? [S.proj.main.note] : []));
+}
+
 function renderSide() {
+  loadTwigs();
   renderSketchSide();
-  // Assembly shows the assemblies; Part and Sketch show the parts (and the modules they share)
-  const asm = S.room === 'assembly' || S.room === 'motion';
-  const mine = (S.proj?.notes ?? []).filter((n) => (asm ? n.kind === 'assembly' : n.kind !== 'assembly'));
-  const sorted = [...mine].sort((a, b) => order[a.kind] - order[b.kind] || a.name.localeCompare(b.name));
-  $('#notes').innerHTML = sorted.map((n) => `<div class="item ${n.name === S.note ? 'sel' : ''}" data-note="${esc(n.name)}" title="${n.kind === 'module' ? 'a helper module, imported by Notes' : n.state === 'stale' || n.state === 'unbuilt' ? 'waiting for your agent to build it' : n.kind === 'assembly' ? 'an assembly: Notes put together' : n.state === 'error' ? 'does not build' : n.changed ? 'changed since the last save' : 'saved'}">
-    <span class="dot ${state(n)}"></span>${esc(n.name)}${n.kind === 'note' ? '' : ` <small>${n.kind}</small>`}</div>`).join('')
-    || `<div class="item muted">${!S.proj ? 'no project open' : asm ? 'no assembly yet' : 'no parts yet: ask your agent for one'}</div>`;
+  // the project as a tree, the same in every room: its main assembly open, the other top designs below, the modules apart
+  const tree = noteTree(S.proj?.notes, S.proj?.main);
+  if (twigNote !== `${S.project}/${S.note}`) { twigNote = `${S.project}/${S.note}`; for (const p of pathsTo(tree, S.note)) twigs.add(p); }      // a Note opened: its branch opens
+  const row = (t, depth) => {
+    const n = t.row, kids = t.children.length, open = twigs.has(t.path);
+    const tip = n.state === 'stale' || n.state === 'unbuilt' ? 'waiting for your agent to build it' : n.state === 'error' ? 'does not build'
+      : n.kind === 'assembly' ? 'an assembly: Notes put together' : n.changed ? 'changed since the last save' : 'saved';
+    const apart = depth === 0 && t !== tree.main && tree.main;      // another design: it can be a project of its own
+    return `<div class="item twig ${n.name === S.note ? 'sel' : ''}" data-note="${esc(n.name)}" style="padding-left:${8 + depth * 14}px" title="${tip}">
+      <span class="twist" ${kids ? `data-twig="${esc(t.path)}"` : ''}>${kids ? (open ? '▾' : '▸') : ''}</span><span class="dot ${state(n)}"></span><span class="grow">${esc(n.name)}${n.kind === 'assembly' ? ' <small>assembly</small>' : ''}${depth === 0 && t === tree.main ? ` <small class="main">${tree.named ? 'main' : 'main?'}</small>` : ''}</span>${apart ? `<button class="x" data-apart="${esc(n.name)}" title="make a project of ${esc(n.name)}: it, what it uses, their checks and builds (this project stays as it is)">⇱</button>` : ''}</div>`
+      + (open ? t.children.map((c) => row(c, depth + 1)).join('') : '');
+  };
+  const parts = [];
+  if (tree.main) {
+    parts.push(row(tree.main, 0));
+    if (!tree.named) parts.push(`<div class="item muted guess"><span>no Note named <b>${esc(S.project.replace(/-/g, '_'))}</b>, as the project is: this is the biggest design. Make each design a project of its own (⇱)</span></div>`);
+  }
+  if (tree.others.length) parts.push(`<div class="twig-head">${tree.main ? 'Other designs' : 'Notes'}</div>`, ...tree.others.map((t) => row(t, 0)));
+  if (tree.shared.length) parts.push('<div class="twig-head">Shared</div>', `<div class="item muted shared" title="helper modules: imported by Notes, never built on their own">${tree.shared.map(esc).join(' · ')}</div>`);
+  $('#notes').innerHTML = parts.join('') || `<div class="item muted">${!S.proj ? 'no project open' : 'no parts yet: ask your agent for one'}</div>`;
   $('#versions').innerHTML = [...(S.proj?.versions ?? [])].reverse().map((v) => {
     const mine = v.notes[S.note]?.v === v.n;
     return `<div class="item" data-version="${v.n}" title="${esc(v.message)}\n${new Date(v.at).toLocaleString()}${v.commit ? '\ngit ' + esc(v.commit) : ''}\nclick: compare with the draft">
       <span class="dot ${mine ? 'green' : ''}"></span>v${v.n} <small>${esc(v.message || '')}</small></div>`;
   }).join('') || '<div class="item muted">nothing saved yet</div>';
 }
-$('#notes').onclick = (e) => { const el = e.target.closest('[data-note]'); if (el) open(S.project, el.dataset.note); };
+$('#notes').onclick = async (e) => {
+  const ap = e.target.closest('[data-apart]');
+  if (ap) {
+    const note = ap.dataset.apart;
+    if (!(await ask(`Make a project of ${note}? It takes ${note} as its main, with every Note and module it uses, their checks and builds. ${S.project} stays as it is.`, { yes: 'Make the project' }))) return;
+    try { const r = await api(`/p/${S.project}/project-of`, 'POST', { note }); location.hash = `${r.project}/${note}`; }
+    catch (err) { tell(err.message); }
+    return;
+  }
+  const tw = e.target.closest('[data-twig]');
+  if (tw) { const p = tw.dataset.twig; if (twigs.has(p)) twigs.delete(p); else twigs.add(p); keepTwigs(); renderSide(); return; }
+  const el = e.target.closest('[data-note]');
+  if (el) open(S.project, el.dataset.note);
+};
 const tagsUrl = () => `/p/${S.project}/n/${S.note}`;
 async function redo(fn) { try { building([S.note]); await fn(); await open(S.project, S.note); } catch (e) { tell(e.message); busy(); } }
 $('aside').addEventListener('click', (e) => {
@@ -1927,8 +2074,8 @@ async function open(project, note) {
   S.proj = await api(`/p/${project}`);
   S.rev = S.proj.rev;
   const names = S.proj.notes.map((n) => n.name);
-  // a project opens on its assembly, where there is one: the parts put together
-  S.note = names.includes(note) ? note : (S.proj.notes.find((n) => n.kind === 'assembly')?.name ?? S.proj.notes.find((n) => n.kind === 'note')?.name ?? names[0] ?? null);
+  // a project opens on its main (the Note named as the project, or the biggest design), where there is one
+  S.note = names.includes(note) ? note : (S.proj.main?.note ?? S.proj.notes.find((n) => n.kind === 'assembly')?.name ?? S.proj.notes.find((n) => n.kind === 'note')?.name ?? names[0] ?? null);
   history.replaceState(null, '', `#${project}${S.note ? '/' + S.note : ''}`);
   $('#projectName').textContent = project;
   if (changedNote) {
@@ -1963,6 +2110,7 @@ async function open(project, note) {
       if (!same) { S.sel = nothing(); S.inspect = null; }
       for (const id of [...S.sel.curve]) if (!curveOf(id)) S.sel.curve.delete(id);
       S.faces = described.faces; S.parts = described.parts ?? []; S.edges = described.edges ?? []; S.points = described.points ?? [];
+      lamps.described(described);      // a pixels light's pixels and LEDs, as the build found them
       assemble(loaded);
       frame(groups.part, !changedNote);
       spread();
@@ -2262,6 +2410,7 @@ $('#panel').addEventListener('change', (e) => {
 $('#panel').addEventListener('input', (e) => {
   if (e.target.dataset.pose) { stopPlaying(); setJoint(e.target.dataset.pose, Number(e.target.value)); }
   if (e.target.dataset.light) setLevel(e.target.dataset.light, Number(e.target.value), true);
+  if (e.target.dataset.pattern) { previews[e.target.dataset.pattern] = { kind: e.target.value }; wake(); }
   const k = e.target.dataset.edit;
   if (k && S.edit) S.edit[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
 });
@@ -2300,7 +2449,8 @@ $('#panel').addEventListener('click', (e) => {
   if (a === 'posehome') { goHome(); return; }
   if (a === 'posego') { goPose(b.dataset.name); return; }
   if (a === 'gif' || a === 'mp4') { exportAnimation(a); return; }
-  if (a === 'record') { if (recording) { recording.stop = true; timeline.pause(); } else recordVideo(); return; }
+  if (a === 'film') { if (film && !film.done) stopFilm('the video stopped'); else startFilm(); return; }
+  if (a === 'watch') { watchFilm(); return; }
   if (a === 'lights') {
     lightsWanted = !lamps.on;
     try { localStorage.setItem('monet.lights', lightsWanted ? '1' : '0'); } catch { /* not kept */ }
@@ -2692,8 +2842,9 @@ versionNow().then((v) => {
 });
 document.addEventListener('visibilitychange', lookForNewer);
 
-window.monet = { S, groups, cube, lookAlong, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom,
-  axes, setJoint, goHome, play, stopPlaying, timeline, partPose, lamps, setLevel, recordVideo, get pictures() { return pictures; }, reach, tipAt: (name) => tipAt(model(), name, S.pose),
+window.monet = { S, groups, cube, lookAlong, controls, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom,
+  axes, setJoint, goHome, play, stopPlaying, timeline, partPose, lamps, setLevel, startFilm, watchFilm, get film() { return film; }, get pictures() { return pictures; }, reach, tipAt: (name) => tipAt(model(), name, S.pose),
   ghosts, snapAt, placeAt: (name) => { S.placeAt = name; showSnaps(); renderPanel(true); } };   // for looking in from the console, and from scripts/shot.mjs
 resize();
+ready = true;
 start().catch((e) => { $('#panel').innerHTML = `<div class="card"><p class="err">${esc(e.message)}</p></div>`; });

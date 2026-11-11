@@ -45,12 +45,32 @@ export const deleteActions = (actions = [], ids) => actions.filter((a) => !ids.h
 export function kept(anim) {
   const tracks = {}, lights = {};
   for (const [k, keys] of Object.entries(anim.tracks)) { if (!keys.length) continue; if (k.startsWith('~')) lights[k.slice(1)] = keys; else tracks[k] = keys; }
-  return { fps: anim.fps, length: anim.length, tracks, ...(Object.keys(lights).length ? { lights } : {}), actions: anim.actions ?? [] };
+  return { fps: anim.fps, length: anim.length, tracks, ...(Object.keys(lights).length ? { lights } : {}), actions: anim.actions ?? [],
+    ...(Object.keys(anim.patterns ?? {}).length ? { patterns: anim.patterns } : {}) };      // what pixels play: kept as it came
 }
 export function opened(a) {
   const out = { ...EMPTY(), ...a, tracks: { ...(a?.tracks ?? {}) } };
   for (const [k, keys] of Object.entries(a?.lights ?? {})) out.tracks[`~${k}`] = keys;
   delete out.lights;
+  return out;
+}
+/** The frames of the timeline a video shows at `fps` pictures a second, as monet/workspace.py played() has them (the
+ *  two held together by tests/advance.json): from 0, its actions met; it ends at the end, at a pause (held `hold`
+ *  seconds), or where a goto would go round again (a loop is shown once). */
+export function played(anim, fps, most = 20000) {
+  const step = anim.fps / fps, out = [0], met = new Set();
+  let frame = 0, lo = 0;
+  while (out.length < most) {
+    const s = advance(anim, { frame, lo }, step, false), a = s.action;
+    frame = s.frame; lo = s.lo;
+    if (a?.do === 'goto') { if (met.has(a.frame)) break; met.add(a.frame); }
+    out.push(frame);
+    if (s.stop) {
+      if (out.length > 1 && out.at(-1) === out.at(-2)) out.pop();
+      for (let k = Math.round((a?.hold ?? 0) * fps); k > 0; k--) out.push(out.at(-1));
+      break;
+    }
+  }
   return out;
 }
 /** What an action says, short. */

@@ -609,12 +609,25 @@ def test_the_lamp_over_both_doors(client, reg):
     # the agent's timeline, as JSON in a query string's way too
     anim = {"fps": 10, "length": 10, "tracks": {"leaf_left": [[0, 0], [10, 90]]}}
     assert client.post(f"{w}/agent/animate", json={"project": "lamp_http", "note": "lamp", "animation": json.dumps(anim)}).json()["animation"]["length"] == 10
-    r = client.post(f"{w}/agent/render_animation", json={"project": "lamp_http", "note": "lamp", "fps": 5}).json()
+    for _ in range(600):      # rendered apart (issue #9): asked again until the file is there
+        r = client.post(f"{w}/agent/render_animation", json={"project": "lamp_http", "note": "lamp", "fps": 5}).json()
+        if r.get("url"):
+            break
+        time.sleep(0.1)
     assert r["frames"] == 6
     gif = client.get(r["url"].split("testserver", 1)[1])
     assert gif.headers["content-type"] == "image/gif" and gif.content[:6] == b"GIF89a"
-    assert client.get(f"{h}/api/p/lamp_http/n/lamp/animation.gif").content[:6] == b"GIF89a"
-    mp4 = client.get(f"{h}/api/p/lamp_http/n/lamp/animation.mp4")
+    def fetched(url):      # the canvas asks again until it is there (202 and the progress meanwhile)
+        first = got = client.get(url)
+        for _ in range(600):
+            if got.status_code != 202:
+                break
+            time.sleep(0.1)
+            got = client.get(url)
+        return first, got
+    first, gif = fetched(f"{h}/api/p/lamp_http/n/lamp/animation.gif")
+    assert first.status_code == 202 and first.json()["frames"] == 11 and gif.content[:6] == b"GIF89a"
+    _, mp4 = fetched(f"{h}/api/p/lamp_http/n/lamp/animation.mp4")
     assert mp4.headers["content-type"] == "video/mp4" and mp4.content[4:8] == b"ftyp"
     assert client.get(f"{h}/api/p/lamp_http/n/lamp/animation.avi").status_code == 404
     b = client.post(f"{w}/agent/bom", json={"project": "lamp_http", "note": "lamp"}).json()

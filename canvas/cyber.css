@@ -323,3 +323,7 @@
 @media (prefers-reduced-motion: reduce) {
   [data-skin="cyber"] .tl-auto.on, [data-skin="cyber"] .dial-pop, [data-skin="cyber"] body::after, [data-skin="cyber"] header b, [data-skin="cyber"] header b span::before, [data-skin="cyber"] header b span::after, [data-skin="cyber"] .view canvas { animation: none; }
 }
+[data-skin="cyber"] .twig-head { color: var(--red); letter-spacing: .22em; }
+[data-skin="cyber"] .item small.main { color: var(--cyan); }
+[data-skin="cyber"] .twist[data-twig]:hover { color: var(--cyan); }
+[data-skin="cyber"] .twist { color: var(--red); }

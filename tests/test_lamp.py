@@ -326,6 +326,18 @@ def test_dowel_holes_line_up_across_the_cut():
 
 # ---- #3 animation ----------------------------------------------------------------------------------------------
 
+def rendered(ws, args: dict) -> dict:
+    """render_animation as the agent calls it: again with the same arguments until the file is there (issue #9)."""
+    import time
+    for _ in range(600):
+        out = agent.call("render_animation", caller(ws), args)[0]
+        if out.get("url"):
+            return out
+        assert out["state"] in ("rendering", "waiting") and out["frames"] > 0
+        time.sleep(0.1)
+    raise AssertionError("the render never finished")
+
+
 def test_the_agent_animates_and_the_server_renders_it(lamp, ws):
     anim = {"fps": 30, "length": 60, "tracks": {"leaf_left": [[0, 0], [30, 90], [60, 0]], "leaf_right": [[0, 0], [30, -90], [60, 0]]}}
     got = agent.call("animate", caller(ws), {"project": "lamp", "note": "lamp", "animation": anim})[0]
@@ -333,12 +345,12 @@ def test_the_agent_animates_and_the_server_renders_it(lamp, ws):
     assert lamp.status()["animations"]["lamp"]["length"] == 60           # the canvas's timeline has it
     with pytest.raises(Problem, match="a key is \\[frame, value\\]"):
         agent.call("animate", caller(ws), {"project": "lamp", "note": "lamp", "animation": {"tracks": {"leaf_left": [[0.5, 1]]}}})
-    out = agent.call("render_animation", caller(ws), {"project": "lamp", "note": "lamp", "fps": 10})[0]
+    out = rendered(ws, {"project": "lamp", "note": "lamp", "fps": 10})
     assert out["frames"] == 21 and out["joints"] == ["leaf_left", "leaf_right"]
     from PIL import Image
     gif = Image.open(lamp.render_animation("lamp", "iso", 10)[0])
     assert gif.n_frames == 21
-    video = agent.call("render_animation", caller(ws), {"project": "lamp", "note": "lamp", "format": "mp4", "fps": 30})[0]
+    video = rendered(ws, {"project": "lamp", "note": "lamp", "format": "mp4", "fps": 30})
     assert video["url"].split("?")[0].endswith("/animation.mp4") and video["frames"] == 61
     data = lamp.render_animation("lamp", "iso", 30, format="mp4")[0].read_bytes()
     assert data[4:8] == b"ftyp"                                          # an MP4, its index at the front
@@ -346,11 +358,33 @@ def test_the_agent_animates_and_the_server_renders_it(lamp, ws):
         agent.call("render_animation", caller(ws), {"project": "lamp", "note": "lamp", "format": "avi"})
     # the action line: the video ends at the pause, held a second there
     agent.call("animate", caller(ws), {"project": "lamp", "note": "lamp", "animation": {**anim, "actions": [{"frame": 30, "do": "pause", "hold": 1}]}})
-    out = agent.call("render_animation", caller(ws), {"project": "lamp", "note": "lamp", "fps": 10})[0]
+    out = rendered(ws, {"project": "lamp", "note": "lamp", "fps": 10})
     assert out["frames"] == 11 + 10 and out["seconds"] == 2.0
     assert Image.open(lamp.render_animation("lamp", "iso", 10)[0]).n_frames == 21
     agent.call("animate", caller(ws), {"project": "lamp", "note": "lamp", "animation": None})
     assert "lamp" not in lamp.status()["animations"]
+
+
+def test_a_render_runs_apart_once_and_the_rest_still_answers(lamp, ws, monkeypatch):
+    """Issue #9: the render is a job; the call answers (here at once), the same call twice is one render, others answer."""
+    from monet import jobs
+    monkeypatch.setattr(agent, "WAIT_RENDER", 0)
+    anim = {"fps": 30, "length": 60, "tracks": {"leaf_left": [[0, 0], [60, 90]]}}
+    agent.call("animate", caller(ws), {"project": "lamp", "note": "lamp", "animation": anim})
+    args = {"project": "lamp", "note": "lamp", "fps": 29, "format": "gif"}
+    before = set(jobs._jobs)
+    first = agent.call("render_animation", caller(ws), args)[0]
+    assert first["state"] in ("rendering", "waiting") and "url" not in first and first["frames"] == 59
+    mine = [k for k in jobs._jobs if k not in before]      # this render's job (another test's may still be running)
+    assert len(mine) == 1
+    job = jobs._jobs[mine[0]]["future"]
+    second = agent.call("render_animation", caller(ws), args)[0]
+    assert second["state"] in ("rendering", "waiting", "done")
+    assert jobs._jobs.get(mine[0], {"future": job})["future"] is job      # one render, not two
+    assert lamp.status()["notes"]                                                      # the rest answers meanwhile
+    done = rendered(ws, args)
+    assert done["state"] == "done" and done["bytes"] > 0
+    agent.call("animate", caller(ws), {"project": "lamp", "note": "lamp", "animation": None})
 
 
 def test_an_upload_with_pieces_that_are_not_pieces_is_refused(lamp):
@@ -451,3 +485,67 @@ def test_the_timeline_keys_lights_the_room_and_the_haze(lamp):
         with pytest.raises(Problem):
             lamp.set_animation("lamp", {**anim, "lights": bad})
     lamp.set_animation("lamp", None)
+
+
+# ---- #10 pixels ------------------------------------------------------------------------------------------------
+
+PIXELS = '''"""Two caps over a tile: each cap a pixel, lit from the LEDs under it."""
+from build123d import *
+
+PARAMS = {}
+TAGS = {}
+LIGHTS = {"px": {"kind": "pixels", "glow": "caps", "leds": "leds", "color": "#2f6bff"}}
+
+
+def leds(p=PARAMS):
+    return [((0, 0, 1), (0, 0, 1), 9), ((2, 0, 1), (0, 0, 1), 9), (30, 0, 1), (300, 300, 300)]
+
+
+def build(p=PARAMS):
+    tile = Box(80, 30, 1, align=(Align.CENTER, Align.CENTER, Align.MAX))
+    tile.label = "tile"
+    caps = Pos(0, 0, 0) * Box(20, 20, 10, align=(Align.CENTER, Align.CENTER, Align.MIN)) + Pos(30, 0, 0) * Box(20, 20, 10, align=(Align.CENTER, Align.CENTER, Align.MIN))
+    caps.label = "caps"
+    return Compound(children=[tile, caps])
+'''
+
+
+def test_pixels_are_found_by_the_build_with_their_leds(ws):
+    """Every solid of a part a pixels light names is a pixel; each LED goes to the pixel whose box holds it."""
+    p = ws.create_project("pixels")
+    p.write("px", PIXELS, agent=True)
+    r = agent_builds(p, "px")
+    assert r["built"] and r["green"], r.get("error")
+    px = r["pixels"]["px"]
+    assert px["count"] == 2 and px["leds_total"] == 3 and px["stray"] == 1 and px["unlit"] == 0
+    assert px["leds"] == {"min": 1, "median": 1.5, "max": 2} and px["density_ratio"] == 2.0 and px["current_a"] == 0.18
+    geo = json.loads((p.out / "px" / "faces.json").read_text())
+    cells = geo["pixels"]["px"]
+    assert sorted(len(q["leds"]) for q in cells) == [1, 2] and all(q["part"] == "caps" and q["faces"] for q in cells)
+    assert [len(q["leds"][0]) for q in cells] == [7, 7]      # x, y, z, normal, depth
+    # a check holds them: no pixel much dimmer than the rest
+    p.add_check("px", {"what": "pixels.px.density_ratio", "max": 1.5, "why": "no pixel noticeably dimmer"}, by="user")
+    row = [c for c in p.report("px")["checks"] if c["what"] == "pixels.px.density_ratio"][0]
+    assert row["value"] == 2.0 and not row["ok"]
+
+
+def test_a_pixels_light_and_its_patterns_are_checked():
+    from monet import lights as lamps
+    ok, bad = lamps.clean({"px": {"kind": "pixels", "glow": "caps_*", "leds": "leds", "spill_mm": 6}}, ["caps_a", "tile"])
+    assert not bad and ok[0]["spill_mm"] == 6 and ok[0]["lumens_per_led"] == 6
+    _, bad = lamps.clean({"px": {"kind": "pixels"}}, ["caps_a"])
+    assert "glow" in bad[0]
+    assert lamps.pattern({"kind": "chase", "color": "#2F6BFF", "pulses": 4}) == {"kind": "chase", "color": "#2f6bff", "pulses": 4}
+    for wrong in ({"kind": "strobe"}, {"kind": "chase", "axis": "z"}, {"kind": "scan", "axis": "w"}, {"kind": "wave", "speed": -1}):
+        with pytest.raises(ValueError):
+            lamps.pattern(wrong)
+
+
+def test_patterns_are_kept_on_the_timeline(lamp, ws):
+    anim = {"fps": 30, "length": 60, "tracks": {"leaf_left": [[0, 0], [60, 90]]},
+            "patterns": {"strip": [[0, {"kind": "chase", "color": "#2f6bff"}], [30, {"kind": "rainbow"}]]}}
+    got = agent.call("animate", caller(ws), {"project": "lamp", "note": "lamp", "animation": anim})[0]
+    assert got["animation"]["patterns"]["strip"][1] == [30, {"kind": "rainbow"}]
+    with pytest.raises(Problem, match="kind is one of"):
+        agent.call("animate", caller(ws), {"project": "lamp", "note": "lamp", "animation": {**anim, "patterns": {"strip": [[0, {"kind": "strobe"}]]}}})
+    agent.call("animate", caller(ws), {"project": "lamp", "note": "lamp", "animation": None})

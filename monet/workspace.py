@@ -36,7 +36,7 @@ import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import bom as boms, derive, feynman, joints, lights as lamps, materials, note as notes, runner, semmelweis
+from . import bom as boms, derive, feynman, jobs, joints, lights as lamps, materials, note as notes, runner, semmelweis
 
 ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
@@ -325,6 +325,59 @@ class Workspace:
             p.dir.rename(gone)      # from here on it is no project; then its files go
             shutil.rmtree(gone, ignore_errors=True)
 
+    def project_of(self, source: str, top: str, name: str = "") -> "Project":
+        """A design of a project made a project of its own (the user's door only: checks go with it): the Note `top`,
+        which becomes its main (the new project is named as it is), and every file it uses, by imports, PLACED and
+        what its builds read, with their checks, their current builds, their animations and the looks. The source
+        project is left as it was; saved versions stay there (the new one starts with none)."""
+        src = self.project(source)
+        name = name or top
+        if not notes.NAME_RE.match(top or "") or top not in src.files():
+            raise Problem(f"no Note {top!r} in {source}", 404)
+        if not PROJECT_RE.match(name):
+            raise Problem("a project name is lowercase letters, digits, dashes or underscores")
+        if name.replace("-", "_") != top:
+            raise Problem(f"the project is named as its main Note: {top}")
+        target = self.dir / name
+        if target.exists():
+            raise Problem(f"there is already a project {name!r}", 409)
+        with src.lock:
+            uses = {r["name"]: r.get("uses", []) for r in src.status()["notes"]}
+            take, todo = set(), [top]
+            while todo:      # what it uses, and what that uses; and every file a build of one of them read
+                n = todo.pop()
+                if n in take or n not in uses:
+                    continue
+                take.add(n)
+                todo.extend(uses[n])
+                todo.extend(f[:-3] for f in ((src.cached(n) or {}).get("deps") or {}) if f.endswith(".py") and DEP.match(f))
+            coming = self.dir / f".incoming-{name}-{time.time_ns()}"
+            try:
+                (coming / "out").mkdir(parents=True)
+                for n in sorted(take):
+                    for f in (f"{n}.py", f"{n}.checks.json"):
+                        if (src.dir / f).is_file():
+                            shutil.copy2(src.dir / f, coming / f)
+                    if (src.out / n).is_dir():
+                        shutil.copytree(src.out / n, coming / "out" / n)
+                times = {n: t for n, t in src.took().items() if n in take}
+                (coming / "out" / ".times.json").write_text(json.dumps(times, indent=1))
+                settings = src.settings
+                kept = {k: settings[k] for k in ("printer", "material", "looks") if k in settings}
+                anims = {n: a for n, a in (settings.get("animations") or {}).items() if n in take}
+                if anims:
+                    kept["animations"] = anims
+                (coming / "monet.json").write_text(json.dumps(kept, indent=1) + "\n")
+                try:
+                    coming.rename(target)      # there whole, or not at all
+                except OSError:
+                    raise Problem(f"there is already a project {name!r}", 409)
+            finally:
+                shutil.rmtree(coming, ignore_errors=True)
+        p = Project(self, name)
+        p.touch()
+        return p
+
     def import_project(self, name: str, data: bytes) -> tuple["Project", int]:
         """A project from an archive, as Project.archive() makes them: (the project, how many files of the zip were
         left out). Only what an archive holds is taken, by its name, and written here under that name: nothing in a
@@ -385,6 +438,32 @@ class Workspace:
         finally:
             shutil.rmtree(coming, ignore_errors=True)
         return Project(self, name), len(files) - len(take)
+
+
+def main_of(rows: list, project: str = "") -> dict | None:
+    """The project's main assembly, from status rows (with their `uses`): the Note named as the project is (`orb` in
+    the project orb; a dash in the project's name is an underscore in the Note's), or until there is one, the top
+    Note (nothing uses it) with the most under it, assemblies first. {"note", "named"}: named is False for a guess."""
+    kind = {r["name"]: r["kind"] for r in rows}
+    own = project.replace("-", "_")
+    if kind.get(own) in ("note", "assembly"):
+        return {"note": own, "named": True}
+    uses = {r["name"]: r.get("uses", []) for r in rows}
+    used = {u for us in uses.values() for u in us}
+
+    def under(name: str) -> int:
+        seen, todo = set(), list(uses.get(name, []))
+        while todo:
+            n = todo.pop()
+            if n not in seen and kind.get(n) != "module":
+                seen.add(n)
+                todo.extend(uses.get(n, []))
+        return len(seen)
+    tops = [r["name"] for r in rows if r["kind"] != "module" and r["name"] not in used]
+    if not tops:
+        return None
+    best = max(tops, key=lambda n: (kind[n] == "assembly", under(n)))      # a tie: the first by name
+    return {"note": best, "named": False}
 
 
 class Project:
@@ -528,6 +607,26 @@ class Project:
                 acts[a["frame"]] = one
             if acts:
                 clean["actions"] = [acts[f] for f in sorted(acts)]
+            # what the pixels of a light play over time (lights.PATTERNS): a key holds until the next one
+            patterns = animation.get("patterns") or {}
+            if not isinstance(patterns, dict) or len(patterns) > 16:
+                raise Problem("patterns are {light: [[frame, {kind, …}], …]}, at most 16 lights")
+            for light, keys in patterns.items():
+                if not lamps.NAME.match(str(light)) or light in lamps.SCENE:
+                    raise Problem(f"{light!r} is not the name of a pixels light")
+                if not isinstance(keys, list) or len(keys) > 2000:
+                    raise Problem(f"{light}: the patterns are a list of [frame, {{kind, …}}], at most 2000")
+                got = {}
+                for k in keys:
+                    if not (isinstance(k, (list, tuple)) and len(k) == 2 and isinstance(k[0], int) and not isinstance(k[0], bool)
+                            and 0 <= k[0] <= length):
+                        raise Problem(f"{light}: a pattern key is [frame, {{kind, …}}], the frame whole from 0 to {length}")
+                    try:
+                        got[k[0]] = lamps.pattern(k[1])
+                    except ValueError as e:
+                        raise Problem(f"{light} at frame {k[0]}: {e}") from None
+                if got:
+                    clean.setdefault("patterns", {})[str(light)] = [[f, got[f]] for f in sorted(got)]
         with self.lock:
             settings = self.settings
             animations = settings.setdefault("animations", {})
@@ -539,10 +638,13 @@ class Project:
             self.touch()
             return animations
 
-    def render_animation(self, name: str, view: str = "iso", fps: float | None = None, size: int = 480, format: str = "gif") -> tuple:
+    def render_animation(self, name: str, view: str = "iso", fps: float | None = None, size: int = 480, format: str = "gif",
+                         wait: bool | float = True) -> tuple:
         """(the GIF or MP4, what is in it) of the Note's timeline, rendered here frame by frame from its build (as
         pose() draws it, followers moved along): one camera for the whole motion. Kept until the build or the keys
-        change."""
+        change. It is rendered as a job (monet/jobs.py), apart from the requests: with wait False (or a number of
+        seconds, waited first), a call answers (None, {…, "state": "rendering", "done", "frames"}) until the file is
+        there."""
         from . import render
         if format not in ("gif", "mp4"):
             raise Problem("format is gif or mp4")
@@ -576,20 +678,31 @@ class Project:
         path = out / f"animation-{key}.{format}"
         info = {"frames": count, "fps": round(out_fps, 3), "seconds": round((count - 1) / out_fps, 3), "view": view,
                 "joints": sorted(used), "ignored": sorted(set(anim["tracks"]) - set(used))}
-        if not path.exists():
-            parts = json.loads((out / "faces.json").read_text())["parts"]
-            poses = [joints.part_frames(mo, {j: value_at(k, f) for j, k in used.items()}) for f in frames]
+        if path.exists():
+            return path, {**info, "state": "done"}
+        job = str(path)
+        got = jobs.state(job)
+        if got and got["state"] == "failed":          # no ffmpeg here, or it failed: said, not a crash
+            raise Problem(got["error"], 503)
+        if not got:
             try:
-                data = render.animation(out / "model.glb", parts, poses, view, size, out_fps, hide=set(r.get("keepouts") or []),
-                                        title=f"{self.name}/{name}", format=format)
-            except RuntimeError as e:          # no ffmpeg here, or it failed: said, not a crash
+                got = jobs.submit(job, render.animation_job, str(out), mo, used, frames, view, size, out_fps,
+                                  sorted(r.get("keepouts") or []), f"{self.name}/{name}", format, str(path),
+                                  str(out / f".animation-{key}.progress"), progress_path=out / f".animation-{key}.progress",
+                                  label=f"{self.name}/{name}", frames=count)
+            except jobs.Busy as e:
                 raise Problem(str(e), 503) from None
-            for old in out.glob(f"animation-*.{format}"):
-                old.unlink(missing_ok=True)
-            tmp = out / f".{path.name}.new"
-            tmp.write_bytes(data)
-            tmp.replace(path)
-        return path, info
+        if wait is not False:
+            try:
+                done = jobs.wait(job, None if wait is True else float(wait))
+            except Exception as e:
+                jobs.state(job)      # forgotten, so it can be asked for again
+                raise Problem(str(e), 503) from None
+            if done:
+                jobs.state(job)
+                return path, {**info, "state": "done"}
+            got = jobs.state(job) or got
+        return None, {**info, **got}
 
     @property
     def tolerance(self) -> float:
@@ -919,6 +1032,10 @@ class Project:
         lit, wrong = lamps.clean(told, [q["name"] for q in r.get("parts") or []] if len(r.get("parts") or []) > 1 else [])
         if lit:
             out["lights"] = lit      # the canvas draws them; they ride their parts as the joints move
+        for L in lit:      # a pixels light: its pixels and LEDs, as the build found them (a light added since: a build finds them)
+            if L["kind"] == "pixels":
+                out.setdefault("pixels", {})[L["name"]] = (r.get("pixels") or {}).get(L["name"]) or {
+                    "waiting": "build the Note again: a build finds the pixels and the LEDs under them"}
         if wrong:
             rows.append({"id": "lights", "what": "LIGHTS", "ok": False, "value": False, "expect": "= True", "why": "; ".join(wrong), "by": "monet"})
         if mats.get("problems"):
@@ -1247,7 +1364,13 @@ class Project:
                 "changed": not (saved_src and saved_src.exists() and saved_src.read_text() == src),
                 "seconds": (times.get(name) or {}).get("seconds"),      # of its last good build, on the agent's computer
             })
+        # what each one uses: the files it imports, and the Notes its PLACED puts at its snap points (read, never run)
+        for row in rows:
+            name = row["name"]
+            placed = parsed[name].get("placed") or {} if name in note_names else {}
+            got = notes.imports(sources[name]) | {p.get("note") for p in placed.values() if isinstance(p, dict)}
+            row["uses"] = sorted(got & (set(sources) - {name}))
         return {"project": self.name, "rev": self.rev, "printer": self.settings.get("printer"), "material": self.settings.get("material"),
                 "looks": self.settings.get("looks", {}),
                 "animations": self.settings.get("animations", {}),
-                "version": head["n"] if head else None, "notes": rows}
+                "version": head["n"] if head else None, "notes": rows, "main": main_of(rows, self.name)}

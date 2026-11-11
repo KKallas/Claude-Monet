@@ -301,8 +301,14 @@ def main(argv):
         show(call("animate", project=a[0], note=a[1], animation=keys))
     elif cmd == "render-animation":
         out = Path(a[2] if len(a) > 2 else f"{a[1]}.gif")
-        r = call("render_animation", project=a[0], note=a[1], format="mp4" if out.suffix.lower() == ".mp4" else "gif",
-                 **({"view": a[3]} if len(a) > 3 else {}), **({"fps": float(a[4])} if len(a) > 4 else {}))
+        args = dict(project=a[0], note=a[1], format="mp4" if out.suffix.lower() == ".mp4" else "gif",
+                    **({"view": a[3]} if len(a) > 3 else {}), **({"fps": float(a[4])} if len(a) > 4 else {}))
+        r = call("render_animation", **args)
+        while not r.get("url"):      # a big assembly renders apart, for minutes: its progress on one line
+            print(f"\r  {r.get('state', 'rendering')} {a[1]}: {r.get('done', 0)}/{r.get('frames', '?')} frames ", end="", file=sys.stderr, flush=True)
+            time.sleep(3)
+            r = call("render_animation", **args)
+        print(file=sys.stderr)
         get(r.pop("url"), out, "fetching the animation")
         show(r)
         print(out)

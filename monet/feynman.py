@@ -55,6 +55,10 @@ def measurements(result: dict) -> dict:
                 m[f"part.{name}.mass_g"] = row["mass_g"]
     if result.get("bom"):
         m["bom.unlisted"] = len(result["bom"]["unlisted"])
+    for light, px in (result.get("pixels") or {}).items():      # the pixels of a light, from the LEDs under them
+        for k in ("count", "unlit", "density_ratio", "current_a", "leds_total"):
+            if px.get(k) is not None:
+                m[f"pixels.{light}.{k}"] = px[k]
     pieces = result.get("pieces")
     if pieces:     # what is printed is the pieces: one solid each, and each on the bed
         m["pieces"] = len(pieces)

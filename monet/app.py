@@ -656,6 +656,13 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         store.log(type="project-delete", user=request.state.owner["username"], project=name, who=request.state.me["username"])
         return {"deleted": name, "projects": ws.projects()}
 
+    def project_of(request, ws, body):
+        """A design of this project made a project of its own, named as its Note (it carries checks: the user's door)."""
+        source, top = request.path_params["project"], str(body.get("note") or "")
+        p = ws.project_of(source, top)
+        store.log(type="project-of", user=request.state.owner["username"], project=p.name, source=source, who=request.state.me["username"])
+        return {"project": p.name, "notes": p.files()}
+
     def archive(request, ws, _body):
         p = ws.project(request.path_params["project"])
         return Response(p.archive(), media_type="application/zip", headers={**NO_STORE, "Content-Disposition": f'attachment; filename="{p.name}.zip"'})
@@ -913,7 +920,9 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
             fps = float(q.get("fps") or 0) or None
         except ValueError:
             raise Problem("fps is a number")
-        path, _ = p.render_animation(name, q.get("view", "iso"), fps, format=fmt)
+        path, info = p.render_animation(name, q.get("view", "iso"), fps, format=fmt, wait=False)
+        if path is None:      # rendering apart (monet/jobs.py): ask again for the file
+            return JSONResponse(info, status_code=202, headers=NO_STORE)
         return FileResponse(path, media_type="image/gif" if fmt == "gif" else "video/mp4", filename=f"{name}.{fmt}", headers=NO_STORE)
 
     def bom_of(request, ws, _body):
@@ -1002,6 +1011,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route("/w/{wid}/api/p/{project}", api(project)),
         Route("/w/{wid}/api/p/{project}", api(delete_project), methods=["DELETE"]),
         Route("/w/{wid}/api/p/{project}/archive.zip", api(archive)),
+        Route("/w/{wid}/api/p/{project}/project-of", api(project_of), methods=["POST"]),
         Route("/w/{wid}/api/p/{project}/rev", api(rev)),
         Route("/w/{wid}/api/p/{project}/looks", api(looks), methods=["PUT"]),
         Route("/w/{wid}/api/p/{project}/profile", api(put_profile), methods=["PUT"]),
