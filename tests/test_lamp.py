@@ -329,7 +329,8 @@ def test_dowel_holes_line_up_across_the_cut():
 def rendered(ws, args: dict) -> dict:
     """render_animation as the agent calls it: again with the same arguments until the file is there (issue #9)."""
     import time
-    for _ in range(600):
+    until = time.time() + 300      # a minute was not enough on GitHub's runner for the 59 frames below (0.11.0's run)
+    while time.time() < until:
         out = agent.call("render_animation", caller(ws), args)[0]
         if out.get("url"):
             return out

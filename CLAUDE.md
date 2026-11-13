@@ -89,6 +89,15 @@ wrong:
   agent call start them again; a page's heartbeat does not), at logout and at a new password. MCP
   answers `initialize` and `tools/list` while it is off, so a connector is not dropped. Only the
   person's own pages dial `/w/<username>/api/remote/tab`, never an admin's looking in.
+- **Monet local and the terminal** (Kaspar, 2026-11-13; the plan is docs/REWIRE.md): `skill/monet/scripts/local.py`,
+  started by `monet.py local <project> [folder]`, runs on the person's computer: it sends, builds and uploads the
+  folder's Notes as they change, writes what the canvas changed into the folder, and leaves a file changed on both
+  sides alone (no merge yet). `canvas/terminal.js` opens a websocket from the page **straight to 127.0.0.1**; decided:
+  direct only, never relayed through the server. Monet local takes only the Origin of the Monet it is linked to and
+  the token of that computer (in the link's fragment, kept in the browser), and starts only names from its own list
+  (`runs()`): the page never sends a command line. It asks the server only when something happened (a file, a key, a
+  poke from the page): a watcher must not keep remote control's 15 minutes alive. The agent link lives in
+  `~/.config/monet/link` (`monet.py link`), never in a project's folder.
 - **An uploaded archive is not trusted**: `Workspace.import_project` takes files by name
   against `ARCHIVED` and writes each under that name; it never extracts a zip to a path the
   zip gives. Keep it that way.
@@ -155,6 +164,8 @@ node --test tests/measure.test.mjs   # the measuring geometry alone
 node --test tests/motion.test.mjs    # where the canvas puts parts at a pose of their joints
 uv run python notes/mg400_rakis/_verify.py     # the port against the Fusion numbers, as a table
 node scripts/shot.mjs http://localhost:8000/w/<id>#starter/rod_foot shot.png   # the canvas in headless Chrome
+                                  # (SHOT_COOKIE='monet=<the login's cookie>' logs it in; --type types into what has the focus)
+python skill/monet/scripts/monet.py local <project> [folder]   # Monet local: the folder watched, the canvas's terminal
 ```
 
 `reference/mg400_rakis/measured_from_fusion.json` holds what was measured from the Fusion

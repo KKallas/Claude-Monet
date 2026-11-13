@@ -52,6 +52,16 @@ server's log.
 | Claude Desktop | Settings → Connectors → Add custom connector → `https://<host>/w/<agent key>/mcp`, then add the skill under Settings → Capabilities → Skills. For a server on your own machine use `npx mcp-remote http://localhost:8000/w/<agent key>/mcp` in `claude_desktop_config.json`. |
 | Claude Code | `claude mcp add --transport http monet http://localhost:8000/w/<agent key>/mcp` |
 | a shell | `skill/monet/scripts/monet.py` (standard library only; building runs Monet's builder with [uv](https://docs.astral.sh/uv/)) |
+| the canvas's own terminal | `monet.py link <agent link>` once, then `monet.py local <project>` in the project's folder: see below |
+
+**Monet local: the canvas shows the folder, and has a terminal in it.** `monet.py local <project>`
+stays running on your computer. A Note changed in the folder is sent, built there and shown; what
+you change in the canvas is written into the folder; a file changed on both sides is left alone and
+said (nothing is merged yet). It prints a link to open once: after that the **Terminal** button in
+the canvas opens Claude Code, Codex or a shell in that folder. The page talks straight to
+`127.0.0.1` on your own computer: the server is not in between and never sees the terminal. Monet
+local answers only a page of the Monet it is linked to, with the token of your computer, and starts
+only what is on its own short list. This is the first step of [docs/REWIRE.md](docs/REWIRE.md).
 
 **Your agent builds; the server never runs a Note.** Building needs a shell on your computer with
 uv: `monet.py push <project> <note>.py` sends a Note, builds it there with the same Monet and CAD
@@ -447,6 +457,7 @@ canvas/       the browser view (three.js), no build step:
               lights.js      the Note's lights: where they land, beams in smoke, glow, bloom, the stage
               timeline.js    Motion's timeline: keys of joints and lights, the action line, playing
               tree.js        the Notes as a tree: the main assembly, the other designs, the modules
+              terminal.js    the terminal: this page to Monet local on the person's own computer
               motion.js      where the parts are at a pose of the joints (tested in node, and
                              against joints.py)
               measure.js     shortest distances and angles (plain arrays; tested in node)
@@ -455,7 +466,9 @@ canvas/       the browser view (three.js), no build step:
               sketch2d.js    what the sketch tools do to curves: offset, trim, fillet (tested in node)
 profiles/     printer and material profiles
 notes/        templates a new workspace starts with: starter, mg400_rakis
-skill/monet/  the skill for Claude: how to work in Monet (also served as /skill.zip and by guide())
+skill/monet/  the skill for Claude: how to work in Monet (also served as /skill.zip and by guide());
+              scripts/monet.py the tools from a shell, scripts/local.py Monet local (the folder watched,
+              the canvas's terminal)
 deploy/       Dockerfile's companions: compose, Caddy, droplet setup (docs/SETUP-ONLINE.md)
 reference/    material from the Fusion prototype (see below); mg400/: Dobot's robot description
               (URDF, MIT licence) and the sizes of its links, what the MG400 Note is held to

@@ -24,11 +24,12 @@ patching the previous shape.
 You need a **shell** on the user's computer with [uv](https://docs.astral.sh/uv/) (Claude Code,
 Cowork, Codex and the like): building runs there. Your tools, in whichever form the harness gives them:
 
-- **`scripts/monet.py`**, in this skill: every tool over HTTPS, and the building. When the skill
-  was downloaded from the user's canvas, `link.txt` beside this file carries their agent link and
-  the script reads it by itself (`python scripts/monet.py status`); else set `MONET_URL` to the
-  link (it looks like `https://host/w/AbC123…`; they find it in their canvas under "Connect your
-  agent"). It needs nothing but Python; for building it runs `uv`.
+- **`scripts/monet.py`**, in this skill: every tool over HTTPS, and the building. It finds the
+  user's agent link by itself (`python scripts/monet.py status`): in `MONET_URL` when that is set
+  (it is, in a terminal Monet local started), else in `link.txt` beside this file (the skill as
+  downloaded from the user's canvas), else where `monet.py link <link>` kept it on this computer.
+  The link looks like `https://host/w/AbC123…`; they find it in their canvas under "Connect your
+  agent". The script needs nothing but Python; for building it runs `uv`.
 - **MCP tools** from a connector usually called Monet: `guide`, `status`, `new_project`,
   `set_profile`, `read_note`, `write_note`, `sources`, `check`, `look`, `pose`, `reach`, `animate`,
   `render_animation`, `bom`, `selection`, `add_check`, `load_check`, `save`, `versions`, `diff`,
@@ -126,6 +127,48 @@ committed with it.
 If you cannot write files or run git (plain chat with only the connector), say so once: the
 server still keeps numbered versions, but the user's own history needs a harness with file
 access. Then carry on.
+
+## Monet local: the folder shown as it is
+
+`monet.py local <project> [folder]` stays running in a terminal of the user's and does the
+sending and building for you. When it runs (the user started it, or you are in a terminal it
+opened in their canvas: `MONET_PROJECT` is set there), **work on the files in the folder and
+nothing else**:
+
+- A Note you write or change in the folder is sent, built and uploaded within a second or two.
+  Do not also `push` it. Read what came of it with `monet.py tool check '{"project": …, "note": …}'`,
+  or look at it (`monet.py look`).
+- What the user changes in the canvas (a tag, a joint, a placed part) is written into the same
+  file in the folder. So read a file again before you edit it, and never write a whole file from
+  memory over one you have not just read.
+- A file changed in the folder and in the canvas since the two last agreed is left alone on both
+  sides, and Monet local says so (the *Files* tab of the canvas's terminal, or its own output).
+  Nothing merges them yet: tell the user, who starts it again with `--mine` or `--theirs`.
+- It never deletes: a Note removed from the folder stays on the server until the user deletes it
+  in the canvas.
+- Saving and committing stay yours, as below.
+
+Without it, everything is as this skill says: `pull`, edit, `push`.
+
+## A project that is a copy
+
+The person copies a project in the canvas; you cannot (a copy carries checks). What it needs
+depends on how it was made, and `status(project)` says it either way: build what is `stale` or
+`unbuilt`, nothing else.
+
+- **Made a project of a Note** (the click on a design in the tree): its Notes, the modules and
+  Notes they use, their checks, their builds, animations and looks come along. A build is current
+  by the files it read, not by the project's name, so **nothing needs building** unless it was
+  already stale in the project it came from. It starts with **no saved versions**: `load_check`
+  has nothing to compare, and your first `save` is its version 1.
+- **Uploaded from an archive** (Download, then Upload, or from another Monet): an archive keeps
+  the Notes, checks, settings and saved versions, **not the builds**. Every Note is `unbuilt` and
+  the load check is `waiting`: `monet.py build <project>` builds the saved version first, then the
+  Notes as they are, and uploads both.
+- **A new project from a template** opens built.
+
+Either way it is a project of its own: give it its own folder (`~/monet/<new project>`, `monet.py
+pull`, `git init`), never the folder of the one it came from. Its main is the Note named as it is.
 
 ## The loop
 

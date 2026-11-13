@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // A screenshot of a page of the running server from a headless Chrome: for checking the canvas without a
 // person at the screen (after adam-designer's scripts/shot.mjs).
-//   node scripts/shot.mjs http://localhost:8000/w/<id>#project/note out.png [width height] [--wait ms] [--click 'css'] [--mouse 'css x,y [shift|ctrl|meta|alt]'] [--drag 'css x1,y1 x2,y2 [shift|ctrl|meta|alt]'] [--eval 'js']…
+//   node scripts/shot.mjs http://localhost:8000/w/<id>#project/note out.png [width height] [--wait ms] [--click 'css'] [--mouse 'css x,y [shift|ctrl|meta|alt]'] [--drag 'css x1,y1 x2,y2 [shift|ctrl|meta|alt]'] [--eval 'js'] [--type 'text']…
+// SHOT_COOKIE='monet=…' logs it in: the login's cookie, set for the page's host before it is opened.
 // --click is the element's own click(); --mouse is a real press and release at (x,y) inside the element; --drag a
 // real press at (x1,y1), a few moves and a release at (x2,y2): a box select. Both take modifier keys. --eval's value
 // is printed. Steps run in the order given, a moment apart.
@@ -13,7 +14,7 @@ import { join } from 'node:path';
 const args = process.argv.slice(2);
 const steps = [];
 for (let i = 0; i < args.length;) {
-  if (/^--(click|eval|mouse|drag|wait)$/.test(args[i])) steps.push({ kind: args[i].slice(2), text: args.splice(i, 2)[1] });
+  if (/^--(click|eval|mouse|drag|wait|type)$/.test(args[i])) steps.push({ kind: args[i].slice(2), text: args.splice(i, 2)[1] });
   else i++;
 }
 const [url, out = 'shot.png', width = '1500', height = '900'] = args;
@@ -50,10 +51,12 @@ const evaluate = async (expression) => (await send('Runtime.evaluate', { express
 await send('Network.enable');
 await send('Runtime.enable');
 await send('Emulation.setDeviceMetricsOverride', { width: Number(width), height: Number(height), deviceScaleFactor: 1, mobile: false });
+if (process.env.SHOT_COOKIE) { const [name, ...v] = process.env.SHOT_COOKIE.split('='); await send('Network.setCookie', { name, value: v.join('='), url: new URL(url).origin }); }
 await send('Page.navigate', { url });
 await sleep(4000);
 for (const step of steps) {
   if (step.kind === 'wait') { await sleep(Number(step.text)); continue; }
+  if (step.kind === 'type') { await send('Input.insertText', { text: step.text.replace(/\\n/g, '\r') }); await sleep(600); continue; }      // into what has the focus; \n is Enter
   if (step.kind === 'click') {
     const ok = await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(step.text)}); if (!e) return false; e.click(); return true; })()`);
     if (!ok) console.error(`nothing matches ${step.text}`);

@@ -20,6 +20,7 @@ import { videoWriter, canWrite } from './video.js';
 import { createLights } from './lights.js';
 import { noteTree, pathsTo } from './tree.js';
 import { remote } from './remote.js';
+import { createTerminal } from './terminal.js';
 import { bomLines, grams, howWords, materialName, materialWords, partWords, poseLines, poseValues, torqueWords } from './facts.js';
 
 const $ = (s) => document.querySelector(s);
@@ -41,12 +42,14 @@ const BASE = new THREE.Color('#b9c2d6'), PICK = new THREE.Color('#ffd23f'), CLAS
 // an assembly: every part in a colour of its own, quiet enough that a tag or a pointed-at face still stands out
 const PARTS = ['#8fa8d6', '#d6a58f', '#9cc7a4', '#c9a3d0', '#d4c58a', '#8fc7cf', '#d49aa8', '#a9b0e0', '#b8cf94', '#e0b48a', '#9fb8b0', '#c7b1a0'];
 
+let terminal = null;      // terminal.js, made further down
 async function api(path, method = 'GET', body) {
   const file = body instanceof Blob;      // an archive goes as it is, anything else as JSON
   const r = await fetch(root + path, { method, headers: body ? { 'content-type': file ? 'application/zip' : 'application/json' } : {}, body: file ? body : body ? JSON.stringify(body) : undefined });
   const data = await r.json().catch(() => ({}));
   if (r.status === 401 && data.login) { location.href = `/login?next=${encodeURIComponent(location.pathname + location.hash)}`; throw new Error('log in first'); }
   if (!r.ok) throw new Error(data.error || `error ${r.status}`);
+  if (method !== 'GET') terminal?.poke();      // I changed something here: Monet local brings it into the folder
   return data;
 }
 
@@ -2767,6 +2770,9 @@ const hands = {
     return { ...hands.where(), png: out.toDataURL('image/png') };
   },
 };
+// the terminal: this page to Monet local on this computer, never through the server (terminal.js)
+terminal = createTerminal(view, $('#termBtn'), { remote, project: () => S.project,
+  mine: () => !!S.state && S.state.me.username === S.state.workspace.username });
 $('#logout').onclick = async (e) => { e.preventDefault(); await fetch('/api/logout', { method: 'POST' }); location.href = '/login'; };
 
 let dialled = false;
@@ -2842,7 +2848,7 @@ versionNow().then((v) => {
 });
 document.addEventListener('visibilitychange', lookForNewer);
 
-window.monet = { S, groups, cube, lookAlong, controls, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom,
+window.monet = { S, terminal, groups, cube, lookAlong, controls, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom,
   axes, setJoint, goHome, play, stopPlaying, timeline, partPose, lamps, setLevel, startFilm, watchFilm, get film() { return film; }, get pictures() { return pictures; }, reach, tipAt: (name) => tipAt(model(), name, S.pose),
   ghosts, snapAt, placeAt: (name) => { S.placeAt = name; showSnaps(); renderPanel(true); } };   // for looking in from the console, and from scripts/shot.mjs
 resize();

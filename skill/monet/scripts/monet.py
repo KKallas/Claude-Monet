@@ -2,9 +2,14 @@
 """monet.py: the Monet tools from a shell, and the one way to build. Standard library only (building runs Monet's
 builder with uv: https://docs.astral.sh/uv/).
 
-    The agent link: link.txt beside SKILL.md, when the skill was downloaded from the canvas (Connect your agent),
-    or else  export MONET_URL=https://host/w/<agent key>
+    The agent link: MONET_URL=https://host/w/<agent key> if it is set (Monet local sets it in its terminals), else
+    link.txt beside SKILL.md (the skill as downloaded from the canvas), else what `monet.py link` kept.
 
+    monet.py link <agent link>               keep the link on this computer (~/.config/monet/link), out of every repo
+    monet.py local <project> [folder] [--mine|--theirs] [--port=N]
+                                             stay running: the folder's Notes are sent, built and shown in the canvas
+                                             as they change, what the person changes in the canvas comes into the
+                                             folder, and the canvas gets a terminal here (scripts/local.py)
     monet.py status [project]
     monet.py pull <project> [dir]            every Note, with the saved .glb and .fingerprint.json, into dir (default .)
     monet.py push <project> <file.py>...     send Notes, build them and what uses them here, upload; prints each
@@ -26,6 +31,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,9 +42,11 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-# the link holds the agent key: MONET_URL if it is set, else the one the skill came with from the canvas
+# the link holds the agent key: MONET_URL if it is set, else the one the skill came with from the canvas, else the
+# one `monet.py link` kept on this computer (never in a repo: a project's folder is shared, the key is not)
 LINK = Path(__file__).resolve().parent.parent / "link.txt"
-URL = (os.environ.get("MONET_URL") or (LINK.read_text().strip() if LINK.exists() else "")).rstrip("/")
+KEPT = Path(os.environ.get("MONET_CONFIG") or Path.home() / ".config" / "monet") / "link"
+URL = (os.environ.get("MONET_URL") or next((f.read_text().strip() for f in (LINK, KEPT) if f.exists()), "")).rstrip("/")
 
 
 # seconds to wait before each try again, when the server cannot be reached
@@ -231,9 +239,22 @@ def show(x):
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         sys.exit(__doc__)
-    if not URL:
-        sys.exit("monet: no agent link: download the skill again from your canvas (Connect your agent), or set MONET_URL to the link (https://host/w/<agent key>)")
     cmd, a = argv[0], argv[1:]
+    if cmd == "link":
+        if not a or not re.match(r"https?://[^/\s]+/w/[A-Za-z0-9_-]{16,}/?$", a[0]):
+            sys.exit("monet: that is not an agent link (https://host/w/<agent key>): it is in your canvas, under Connect your agent")
+        KEPT.parent.mkdir(parents=True, exist_ok=True)
+        KEPT.write_text(a[0].rstrip("/") + "\n")
+        KEPT.chmod(0o600)
+        print(f"linked to {urllib.parse.urlsplit(a[0]).netloc}: kept in {KEPT}")
+        return
+    if not URL:
+        sys.exit("monet: no agent link: monet.py link <the link in your canvas, under Connect your agent>, or set MONET_URL to it (https://host/w/<agent key>)")
+    if cmd == "local":
+        if not shutil.which("uv"):
+            sys.exit("monet: Monet local needs uv (https://docs.astral.sh/uv/getting-started/installation/): install it, then run this again")
+        # with the link this script found, whichever way it found it
+        sys.exit(subprocess.call(["uv", "run", "--quiet", "--script", str(SKILL / "scripts" / "local.py"), *a], env={**os.environ, "MONET_URL": URL}))
     if cmd == "status":
         show(call("status", project=a[0] if a else ""))
     elif cmd == "pull":
