@@ -39,10 +39,9 @@ Cowork, Codex and the like): building runs there. Your tools, in whichever form 
 - **None of these**: ask the user to log in to their Monet site and use "Connect your agent"
   there. It shows what to download and set up.
 
-**The link works only while the user has remote control on.** They switch it on in their canvas,
-under "Connect your agent". It ends by itself after 15 minutes in which neither they nor you did
-anything, and at once when they log out. Then every call answers that remote control is off:
-tell them, they switch it on again, and the same link works. Do not keep retrying.
+**The link works for as long as its key is the user's current one.** There is nothing for them
+to switch on. If every call answers that the link is not valid any more, they made a new key:
+tell them, and do not keep retrying.
 
 The agent link carries the user's agent key. It is a password: use it, do not repeat it in what
 you write to anyone else, and do not put it (or `link.txt`) in files that get committed. If the
@@ -82,7 +81,7 @@ python scripts/monet.py build <project> <note> --export stl,3mf   # with the fil
 
 ## The canvas the user has open
 
-While remote control is on, the canvas they have open in their browser answers you too. `status()`
+The canvas they have open in their browser answers you too. `status()`
 lists their open pages (project, Note, area, on screen or not). These need a page open; if none
 is, the answer says so: ask them to open their canvas, or carry on with the other tools.
 
@@ -624,6 +623,5 @@ A **check** is a measurement and the range it must stay in, for example
   were not looking at; run `check` on those.
 - **The tools answer "no such workspace"**: the workspace link is wrong or the workspace was
   removed. Ask the user for the link shown in their canvas.
-- **The tools answer that remote control is off**: it ended (15 minutes of nothing, or they logged
-  out or switched it off). Ask the user to switch it on again under "Connect your agent"; the link
-  is the same.
+- **The tools answer that the agent link is not valid (any more)**: the user made a new key. Ask
+  them for the new link, or to copy the Terminal's line again from their canvas.

@@ -67,8 +67,7 @@ def client(app, admin):
 
 @pytest.fixture(scope="module")
 def reg(client):
-    """Where mari's agent comes in ("id": her agent key), and where she does ("name"). She has remote control on."""
-    assert client.put("/w/mari/api/remote", json={"on": True}).json()["on"]
+    """Where mari's agent comes in ("id": her agent key), and where she does ("name")."""
     state = client.get("/w/mari/api/state").json()
     return {"id": state["agent"].rsplit("/", 1)[1], "name": "mari"}
 
@@ -183,7 +182,6 @@ def test_the_admin_keeps_the_users(app, admin, reg):
         assert new != jaan["card"] and c.get(f"/api/login/card/{jaan['card']}").status_code == 404
         # an agent link that got out: a new key, by the user or by the admin, and the old one is dead at once
         old = c.get("/w/jaan/api/state").json()["agent"]
-        c.put("/w/jaan/api/remote", json={"on": True})
         mine = c.post("/w/jaan/api/key", json={}).json()["agent"]
         assert mine != old and c.post(old.split("testserver", 1)[1] + "/agent/status", json={}).status_code == 404
         assert c.post(mine.split("testserver", 1)[1] + "/agent/status", json={}).json()["projects"]

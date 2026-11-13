@@ -2624,45 +2624,35 @@ sheet.addEventListener('submit', async (e) => {
     if (made.left_out) notice(`${made.left_out} file${made.left_out === 1 ? '' : 's'} in the archive ${made.left_out === 1 ? 'is' : 'are'} not of a project and ${made.left_out === 1 ? 'was' : 'were'} left out`);
   } catch (err) { go.disabled = false; projectsFailed(err); }
 });
-// Connect your agent: the link, the ways in, and the switch of remote control (monet/remote.py). Off, the link opens
-// nothing; on, the agent works in this workspace and can see this page and take it somewhere, until 15 minutes pass
-// with nothing from either of you, or you log out.
-const clock = (ms) => { const t = Math.ceil(ms / 1000); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+// Connect your agent: the one line, the link, the other ways in, and what the agent did lately. The agent key opens
+// the agent's door by itself (there was a switch before it, remote control: taken out, monet/remote.py).
 const ago = (iso) => {
   if (!iso) return 'never';
   const t = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
   return t < 90 ? 'just now' : t < 5400 ? `${Math.round(t / 60)} min ago` : t < 129_600 ? `${Math.round(t / 3600)} h ago` : new Date(iso).toLocaleDateString();
 };
-const WENT = { idle: 'nothing happened for 15 minutes: neither you nor your agent did anything', logout: 'you logged out', login: 'your password was changed' };
 let connectSig = '';
 function connectBody() {
-  const agentLink = S.state.agent, local = /\/\/(localhost|127\.0\.0\.1)/.test(agentLink), v = remote.view(), on = !!v?.on;
-  connectSig = JSON.stringify([v && { ...v, left: 0 }, remote.connected()]);
+  const agentLink = S.state.agent, local = /\/\/(localhost|127\.0\.0\.1)/.test(agentLink), v = remote.view();
+  connectSig = JSON.stringify([v, remote.connected()]);
   const mine = S.state.me.username === S.state.workspace.username;
+  const close = '<form method="dialog"><div class="line"><span style="flex:1"></span><button>Close</button></div></form>';
   const head = `<h2>Connect your agent</h2>
     <p class="muted">The thinking and the building happen on your computer, with your own model: your agent builds each Note
-    there and sends what it built. This page checks, shows and exports; it never runs a Note.
-    Your agent cannot log in as you do, so it comes with a link that has your <b>agent key</b> in it, and the link opens
-    nothing until you switch remote control on.</p>
-    <div class="remote-main"><button class="remote-switch ${on ? 'on' : ''}" id="remoteSwitch" role="switch" aria-checked="${on}" ${mine && v ? '' : 'disabled'}><span class="knob"></span><span class="word">${on ? 'On' : 'Off'}</span></button>
-      <div class="remote-state"><b>${!mine ? `Remote control is ${esc(S.state.workspace.name)}'s own` : on ? 'Remote control is on' : 'Remote control is off'}</b>
-        <span class="muted">${!mine ? 'Only they can switch it on, in their own canvas.' : on
-          ? 'Your agent can work in your workspace, and see this page and take it to a part or an area while it is open. What it changes is listed below.'
-          : 'Nothing can reach your workspace from outside. Switch it on to let your agent in, for as long as something is happening.'}</span>
-        ${on ? '<span>Switches itself off in <b class="remote-count"></b>: anything you do here, or your agent asks, starts the 15 minutes again. Logging out ends it at once.</span>' : ''}
-        ${!on && v?.off && WENT[v.off.why] ? `<span class="warn">It switched itself off ${ago(v.off.at)}: ${WENT[v.off.why]}.</span>` : ''}</div></div>`;
-  const close = '<form method="dialog"><div class="line"><span style="flex:1"></span><button>Close</button></div></form>';
-  if (!on) return `${head}
-    <h3>What switching it on gives your agent</h3>
-    <p>The link below works, for an agent with a shell (Claude Code and the like: building needs one) and as MCP. Your agent
-      writes Notes, builds them on your computer, checks, saves and exports in your workspace; it sees what this page shows and takes it to a part or
-      an area. It runs no code in this page, and it cannot change or remove a check, acknowledge a load check, or delete. The link stays the same from one switching on to the next, so a connector
-      set up once keeps working.</p>${close}`;
+    there and sends what it built. This page checks, shows and exports; it never runs a Note.</p>`;
+  if (!mine) return `${head}<p>This is ${esc(S.state.workspace.name)}'s workspace: their agent and its link are their own.</p>${close}`;
   return `${head}
-    <p class="remote-warn"><b>This link is a password.</b> Whoever has it can work in your workspace as your agent, and see this page while it is open.</p>
+    <h3>The short way: the Terminal</h3>
+    <p>Press <b>Terminal</b>, copy the one line it shows and paste it into a terminal on your computer. It keeps the
+      project in a folder there, builds what changes, and gives this page a terminal with Claude Code or Codex in it.</p>
+    <div class="line" style="margin-top:0"><span style="flex:1"></span><button class="primary" id="openTerm">Open the Terminal</button></div>
+    <h3>Your agent link</h3>
+    <p>Your agent cannot log in as you do, so it comes with a link that has your <b>agent key</b> in it.</p>
+    <p class="remote-warn"><b>This link is a password.</b> Whoever has it can work in your workspace as your agent, and see this
+      page while it is open, until you make a new key. It cannot change or remove a check, acknowledge a load check, or delete.</p>
     <pre id="agentLink">${esc(agentLink)}</pre>
     <div class="line" style="margin-top:0"><span class="muted" style="flex:1">It got out, or an agent should stop?</span><button id="newKey">New key</button></div>
-    <h3>1 · Your skill, with your link in it</h3>
+    <h3>Or: your skill, with your link in it</h3>
     <p>One download: how to work in Monet, and the address to work at. <a href="${root}/skill.zip" download="monet-skill.zip">Download monet-skill.zip</a></p>
     <p><b>Claude Code</b>: unzip it into <code>~/.claude/skills/</code>. It works through its own script, which builds with
       <a href="https://docs.astral.sh/uv/getting-started/installation/" target="_blank" rel="noopener">uv</a>: install that once.
@@ -2679,66 +2669,37 @@ function connectBody() {
     <p>And the skill above, so Claude knows how to work here.</p>
     <h3>Or as a connector, Claude Code</h3>
     <pre>claude mcp add --transport http monet ${esc(agentLink)}/mcp</pre>
-    <h3>2 · A folder of your own, with git</h3>
-    <p>Make a folder for the project on your computer and let the agent keep the Notes there, with <code>git init</code>.
-      It commits after every successful save, so the history is yours and survives this server.</p>
-    <h3>3 · Say what you want</h3>
+    <h3>Say what you want</h3>
     <p>"Use Monet. Open the project mg400_rakis and show me the nest." Then point at faces here and describe the change.</p>
     <h3>Now</h3>
     <div class="remote-facts"><span>this page</span><b class="${remote.connected() ? 'ok' : 'warn'}">${remote.connected() ? 'can be seen by your agent' : 'not connected (trying again…)'}</b>
-      <span>pages open</span><b>${v.tabs}</b><span>your agent was last here</span><b>${ago(v.seen)}</b></div>
+      <span>pages open</span><b>${v?.tabs ?? 0}</b><span>your agent was last here</span><b>${ago(v?.seen)}</b></div>
     <h3>What it changed lately</h3>
-    ${v.recent.length ? `<div class="remote-log">${v.recent.map((r) => `<div><span class="muted">${ago(r.at)}</span><span title="${esc(r.what)}">${esc(r.what)}</span></div>`).join('')}</div>`
+    ${v?.recent?.length ? `<div class="remote-log">${v.recent.map((r) => `<div><span class="muted">${ago(r.at)}</span><span title="${esc(r.what)}">${esc(r.what)}</span></div>`).join('')}</div>`
       : '<p class="muted">Nothing yet. What your agent changes and where it takes this page are listed here, and kept in the server\'s log.</p>'}
     ${close}`;
 }
 function drawConnect() {
   const dlg = $('#connectDialog');
   dlg.innerHTML = connectBody();
-  showRemote();
-  $('#remoteSwitch').onclick = async (e) => {
-    e.preventDefault();
-    e.currentTarget.disabled = true;
-    try { await remote.set(!remote.view()?.on); } catch (err) { tell(err.message); }
-    ended = false;      // switched off here: nothing to be told
-    drawConnect();
-  };
+  if ($('#openTerm')) $('#openTerm').onclick = () => { dlg.close(); terminal.show(true); };
   if ($('#newKey')) $('#newKey').onclick = async (e) => {
     e.preventDefault();
-    if (!(await ask('Make a new agent key? The link above stops working at once: every agent you connected needs the new one.', { yes: 'New key', danger: true }))) return;
+    if (!(await ask('Make a new agent key? The link above stops working at once: every agent you connected needs the new one, and the Terminal a new line.', { yes: 'New key', danger: true }))) return;
     try { S.state.agent = (await api('/key', 'POST', {})).agent; drawConnect(); } catch (err) { tell(err.message); }
   };
 }
 $('#connect').onclick = () => {
-  ended = false;
   drawConnect();
   $('#connectDialog').showModal();
   remote.refresh();
 };
-// while remote control is on, the header's button says so on every page, counting down to when it ends by itself; red
-// in the last two minutes, and once it has ended (not by this page's switch) it stays red until the person looks
-const LOW = 120_000;
-let wasOn = false, ended = false;
-function showRemote() {
-  const on = !!remote.view()?.on, ms = remote.left(), left = clock(ms), b = $('#connect');
-  if (wasOn && !on) ended = true;
-  if (on) ended = false;
-  wasOn = on;
-  b.classList.toggle('remote-on', on);
-  b.classList.toggle('remote-low', on && ms < LOW);
-  b.classList.toggle('remote-ended', ended);
-  b.textContent = on ? `Remote ${left}` : ended ? 'Remote off · switch on' : 'Connect your agent';
-  b.title = on ? 'Remote control is on: your agent can work in your workspace and in this page. Anything you or the agent do starts the 15 minutes again. Click to see what it did, or to switch it off.'
-    : ended ? 'Remote control ended: your agent\'s link opens nothing now. Click to switch it on again; the link stays the same.' : '';
-  for (const el of document.querySelectorAll('.remote-count')) el.textContent = left;
-}
 remote.onChange(() => {
-  showRemote();
   const dlg = $('#connectDialog');      // drawn again only when something it shows is another: a line being selected to copy stays put
-  if (dlg.open && JSON.stringify([remote.view() && { ...remote.view(), left: 0 }, remote.connected()]) !== connectSig) drawConnect();
+  if (dlg.open && JSON.stringify([remote.view(), remote.connected()]) !== connectSig) drawConnect();
 });
-let ticks = 0;      // what the agent did lately, every five seconds while somebody is looking
-setInterval(() => { showRemote(); if (++ticks % 5 === 0 && $('#connectDialog').open && remote.view()?.on && !document.hidden) remote.refresh(); }, 1000);
+// what the agent did lately, every five seconds while somebody is looking
+setInterval(() => { if ($('#connectDialog').open && !document.hidden) remote.refresh(); }, 5000);
 
 // what the page answers the agent with, through remote.js: where it is, its words, a picture, and going somewhere
 const hands = {
@@ -2771,7 +2732,7 @@ const hands = {
   },
 };
 // the terminal: this page to Monet local on this computer, never through the server (terminal.js)
-terminal = createTerminal(view, $('#termBtn'), { remote, project: () => S.project, link: () => S.state?.agent ?? '',
+terminal = createTerminal(view, $('#termBtn'), { project: () => S.project, link: () => S.state?.agent ?? '',
   mine: () => !!S.state && S.state.me.username === S.state.workspace.username });
 $('#logout').onclick = async (e) => { e.preventDefault(); await fetch('/api/logout', { method: 'POST' }); location.href = '/login'; };
 

@@ -30,7 +30,7 @@ if (!pair?.token) {      // this browser's own, made once: it is in the line the
 const came = paired(location.hash);
 if (came) { pair = came; history.replaceState(null, '', location.pathname + location.search); }
 
-/** hooks: { remote (remote.js), mine(): is this my own workspace, project(): the one the canvas shows, link(): my agent link } */
+/** hooks: { mine(): is this my own workspace, project(): the one the canvas shows, link(): my agent link } */
 export function createTerminal(view, button, hooks) {
   const root = document.createElement('div');
   root.className = 'term';
@@ -130,7 +130,6 @@ export function createTerminal(view, button, hooks) {
         if (m.run !== 'log') about.running = [...new Set([...(about.running ?? []), m.run])];
         tabs();
         term.focus();
-        letIn();
       } else if (m.t === 'exit') {
         term.write(`\r\n\x1b[2m${NAMES[run]} ended${m.code ? ` (${m.code})` : ''}. Press Enter to start it again.\x1b[0m\r\n`);
         about.running = (about.running ?? []).filter((n) => n !== run);
@@ -148,14 +147,6 @@ export function createTerminal(view, button, hooks) {
       greeted = false;
       tabs();
     };
-  }
-
-  /** The agent in the terminal comes in by the agent's door, which opens only while remote control is on: opening
-   *  a terminal is the person letting it in, as the switch under Connect your agent is. */
-  async function letIn() {
-    const r = hooks.remote;
-    if (!hooks.mine() || r.view()?.on) return;
-    try { await r.set(true); poke(); } catch { /* said under Connect your agent */ }
   }
 
   function poke() { if (ws?.readyState === WebSocket.OPEN && greeted) ws.send(JSON.stringify({ t: 'poke' })); }

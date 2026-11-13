@@ -4,10 +4,9 @@
 People are let in by an admin (monet/auth.py): a username, a card, a password. Each has one
 workspace. In the browser it is /w/<username>, behind the login. Their agent, which cannot
 log in, comes through /w/<agent key>/agent and /w/<agent key>/mcp: the key is in the link the
-canvas shows them, it opens only what an agent may do, and only while the person has remote
-control on (monet/remote.py).
+canvas shows them, and it opens only what an agent may do. The key alone opens it (the switch
+that used to stand before it, remote control, was taken out: monet/remote.py); a new key closes it.
 """
-import asyncio
 import contextlib
 import inspect
 import io
@@ -234,11 +233,9 @@ run. What a build leaves goes up as a zip, by POST to {base}/w/KEY/upload/PROJEC
 version): result.json, faces.json, model.glb and any model.stl, model.3mf, model.step. The server takes it only if it
 is a build of the files it has, with its own Monet and kernel.
 
-**Remote control.** The link opens nothing until the user switches remote control on, in their canvas. It ends by
-itself after 15 minutes in which neither they nor you did anything, and when they log out: then every call says so.
-Tell them; they switch it on again and the same link works. While it is on, `screen`, `goto` and `view` reach the
-canvas they have open (`status` lists the pages): what it shows, a picture of it, and taking it somewhere. You change
-the project only with the tools, never in their page.
+**The canvas they have open.** `screen`, `goto` and `view` reach the canvas the user has open in a browser (`status`
+lists the pages): what it shows, a picture of it, and taking it somewhere. You change the project only with the
+tools, never in their page. The link works for as long as its key is the user's current one.
 
 Pictures: `look` answers with `image`, the address of a PNG. Fetch it and look at it.
 Files: `export` answers with `url`, the address of the 3MF / STL / STEP / GLB. Both addresses carry the agent
@@ -269,10 +266,10 @@ successful save: the history is theirs.
 
 
 def create_app(storage: str | Path, data: str | Path | None = None, max_users: int = 20, templates: str | Path | None = None,
-               profiles: str | Path | None = None, idle: float = remoting.IDLE) -> Starlette:
+               profiles: str | Path | None = None) -> Starlette:
     workspaces = Workspaces(storage, templates or ROOT / "notes", profiles or ROOT / "profiles")
     store = Store(data if data is not None else Path(storage).resolve().parent / "data")
-    remote = remoting.Remote(store, idle)
+    remote = remoting.Remote(store)
     admin = auth.ensure_admin(store)
     secret = auth.session_secret(store)
     throttle = auth.Throttle()
@@ -285,7 +282,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
 
     def changed(owner):
         """What an agent changed, or tried in the canvas: in the audit log for the admin's eye, and in the list the
-        person sees under Remote control. By MCP and by HTTP alike."""
+        person sees under Connect your agent. By MCP and by HTTP alike."""
         def told(tool, args, result):
             where = "/".join(str(x) for x in (args.get("project") or args.get("name"), args.get("note")) if x)
             what = (f"goto {where or 'here'}" + (f" ({args['room']})" if args.get("room") else "") if tool == "goto"
@@ -313,12 +310,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         owner = store.users.get(headers.get("x-monet-user", ""))
         if owner is None:
             raise ValueError("no such workspace")
-        # remote control is off: an answer in words, not a 404. To MCP a 404 is "your session is gone", and a
-        # connector that hears it drops its tools until somebody reconnects it by hand (as in Adam Designer)
-        if not remote.live(owner):
-            raise ValueError(remoting.GONE)
         seen(owner)
-        remote.note(owner)
         return caller(workspaces.of(owner["id"], owner["name"]), owner, headers)
 
     from mcp.server.transport_security import TransportSecuritySettings
@@ -378,11 +370,9 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         """The agent's door: /w/<agent key>/…. The key says whose agent it is; it opens only what an agent may do."""
         async def endpoint(request: Request):
             owner = auth.find_by_key(store, request.path_params["wid"])
-            if owner is None or not remote.live(owner):
-                why = remoting.GONE if owner else "this agent link is not valid (any more): ask the user for the one in their canvas, under Connect your agent"
-                return JSONResponse({"error": why}, 404)
+            if owner is None:
+                return JSONResponse({"error": "this agent link is not valid (any more): ask the user for the one in their canvas, under Connect your agent"}, 404)
             seen(owner)
-            remote.note(owner)
             return await inside(request, owner, fn)
         return endpoint
 
@@ -473,9 +463,6 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
                             headers={**NO_STORE, "Set-Cookie": auth.session_cookie(secret, user, secure(request))})
 
     async def do_logout(request: Request):
-        user = me(request)
-        if user:
-            remote.stop(user, "logout")      # remote control is tied to the login
         return JSONResponse({"ok": True}, headers={"Set-Cookie": auth.CLEAR_COOKIE})
 
     async def whoami(request: Request):
@@ -598,22 +585,18 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
                 "base": f"{base}/w/{owner['username']}", "agent": f"{base}/w/{owner['key']}", "origin": base, "version": info,
                 "remote": remote.view(owner) if owner["id"] == user["id"] else None}
 
-    def remote_switch(request, _ws, body):
-        """GET: is remote control on, how long is left, what the agent changed lately. PUT {on: true | false}."""
+    def remote_view(request, _ws, _body):
+        """When the person's agent was last here, how many of their pages it can see, and what it changed lately."""
         owner = request.state.owner
         if owner["id"] != request.state.me["id"]:
-            raise Problem("remote control is switched by the person whose workspace this is", 403)
-        if body.get("on") is True:
-            remote.start(owner)
-        elif body.get("on") is False:
-            remote.stop(owner, "you")
+            raise Problem("what an agent did is for the person whose workspace this is", 403)
         return remote.view(owner)
 
     async def remote_tab(websocket: WebSocket):
-        """An open canvas of the person, while remote control is on: their agent may look at it and drive it."""
+        """An open canvas of the person: their agent may look at it and take it somewhere."""
         user = auth.identify(store, secret, websocket.cookies, websocket.headers.get("authorization"))[0]
         origin = websocket.headers.get("origin")
-        if (user is None or user["username"] != websocket.path_params["wid"] or not remote.live(user)
+        if (user is None or user["username"] != websocket.path_params["wid"]
                 or (origin and urllib.parse.urlsplit(origin).netloc != websocket.headers.get("host"))):
             await websocket.close(code=4003)      # before it is accepted: refused
             return
@@ -1008,7 +991,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route("/w/{wid}", canvas),
         Route("/w/{wid}/api/state", api(state)),
         Route("/w/{wid}/api/key", api(new_key), methods=["POST"]),
-        Route("/w/{wid}/api/remote", api(remote_switch), methods=["GET", "PUT"]),
+        Route("/w/{wid}/api/remote", api(remote_view), methods=["GET"]),
         Route("/w/{wid}/api/skill.zip", api(own_skill)),
         WebSocketRoute("/w/{wid}/api/remote/tab", remote_tab),
         Route("/w/{wid}/api/projects", api(list_projects)),
@@ -1063,11 +1046,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
     @contextlib.asynccontextmanager
     async def lifespan(_app):
         async with mcp.session_manager.run():
-            sweeper = asyncio.create_task(remote.sweep())
-            try:
-                yield
-            finally:
-                sweeper.cancel()
+            yield
 
     # any origin may call: what opens a workspace is the id in the address, not a cookie a foreign page could ride on
     site = Starlette(routes=routes, lifespan=lifespan,

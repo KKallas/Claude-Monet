@@ -22,9 +22,8 @@ Who may open the terminal: only a page of the Monet this computer is linked to (
 token of this computer (~/.config/monet/local.json), which `monet.py local` prints as a link to open once. It listens
 on 127.0.0.1 and nowhere else. The page chooses a name from the list; it cannot send a command line.
 
-It asks the server only when something happened here (a file changed, a key was pressed in the terminal, the page
-said the person changed something): every call of an agent starts remote control's 15 minutes again, and a program
-that only watches must not keep it on.
+It looks at the folder every second and asks the server every few (and at once when a file changed here or the page
+says the person changed something), so what is done on either side shows on the other within seconds.
 """
 import asyncio
 import fcntl
@@ -47,6 +46,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")      # a Note's name, as monet/note.py has it
 PORTS = (47821, 47822, 47823, 47824)      # where it listens: the first that is free; the canvas tries the same ones (terminal.js)
+EVERY = 4               # seconds between two looks at the server, when nothing happened here
 KEEP = 256_000          # bytes of a terminal's output kept, for a page that comes (back) to it
 CONFIG = Path(os.environ.get("MONET_CONFIG") or Path.home() / ".config" / "monet")
 
@@ -61,7 +61,7 @@ def script():
 
 DIM, GREEN, AMBER, RED, BOLD, OFF = "\x1b[2m", "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[1m", "\x1b[0m"
 TONES = ((RED, ("does not build", "died", "refused", "cannot", "not sent", "RED")),
-         (AMBER, ("left as it is", "must be", "not green", "waiting", "is off", "gone here", "trying again")),
+         (AMBER, ("left as it is", "must be", "not green", "waiting", "gone here", "trying again")),
          (GREEN, ("checks green", "built ", "uploaded", "sent", "taken from", "started", "linked to")))
 
 
@@ -75,10 +75,6 @@ def say(text: str) -> None:
     del LOG[:-400]
     for fn in list(LISTENERS):
         fn(line)
-
-
-OFF_WORDS = ("waiting: remote control is off. Open Terminal in your canvas (that lets this computer in), or switch it on "
-             "under Connect your agent")
 
 
 class Said:
@@ -162,9 +158,8 @@ class Sync:
         """Bring the two sides together once. True when it could ask the server."""
         got, why = self.ask("sources", project=self.project)
         if got is None:
-            self.once(OFF_WORDS if "remote control is off" in why else why)
+            self.once(why)
             return False
-        self.said.discard(OFF_WORDS)        # it answers again: the next time it is off is news
         server = {name[:-3]: whole(text) for name, text in got["files"].items()}
         local = self.local()
         moved = False
@@ -325,13 +320,16 @@ class Local:
         return {**os.environ, "MONET_URL": self.ms.URL, "MONET_PROJECT": self.project, "TERM": "xterm-256color", "COLORTERM": "truecolor"}
 
     async def watch(self) -> None:
-        """The working copy, looked at every second; the server asked only when something happened here."""
+        """The working copy, looked at every second; the server every EVERY seconds, and at once when something
+        happened here (a file changed, the page poked)."""
         self.poked.set()
+        asked = 0.0
         while True:
-            if self.sync.changed():
+            if self.sync.changed() or time.time() - asked >= EVERY:
                 self.poked.set()
             if self.poked.is_set():
                 self.poked.clear()
+                asked = time.time()
                 await asyncio.to_thread(self.sync.step)
             await asyncio.sleep(1)
 
@@ -377,13 +375,9 @@ class Local:
                 await ws.send(data)
 
         async def keys():
-            last = 0.0
             async for m in ws:
                 if isinstance(m, bytes):
                     s.write(m)
-                    if time.time() - last > 3:      # the person is at it: what they did in the canvas may want bringing here
-                        last = time.time()
-                        self.poked.set()
                     continue
                 try:
                     c = json.loads(m)

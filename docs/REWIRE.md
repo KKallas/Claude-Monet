@@ -21,9 +21,9 @@ against a server on localhost.
   merge by key yet**, and no git: `open`, `init`, deposits and the board are not built.
 - The terminal runs Claude Code, Codex or a shell in the folder, lives on when the page reloads,
   and is reached only from the linked Monet's pages with the computer's token.
-- Monet local asks the server only when something happened here, so that it does not keep remote
-  control on by watching. The cost: with the terminal panel shut and nothing changing in the
-  folder, a hand edit in the canvas arrives at the next change, key or poke, not at once.
+- **Remote control is gone** (Kaspar, 2026-11-13): no switch, no 15 minutes. The agent key alone
+  opens the agent's door; a new key closes it. So Monet local simply looks at the server every
+  few seconds, and a hand edit in the canvas is in the folder within that.
 - **The try from an https page is not finished.** From `https://example.com` in Chrome 155 a
   websocket to `ws://127.0.0.1` was neither refused nor opened in 20 s, which is what a waiting
   permission prompt ("access other apps and services on this device") looks like; nobody was
@@ -112,9 +112,8 @@ is not in between and never sees a byte of it.
   Without those, any web page you visit could open a shell on your computer.
 - **What stays true.** The agent still runs no code in your canvas; this is the other direction,
   your page driving your terminal. What is typed there is you. The agent in it reaches Monet
-  through the agent door like any other, under the same rules. Opening the terminal switches
-  remote control on, which is what the switch under Connect your agent does today; a working agent
-  keeps it on (every agent call restarts the 15 minutes).
+  through the agent door like any other, under the same rules. There is no remote control switch
+  any more (taken out 2026-11-13): the agent key opens the door, a new key closes it.
 - **To be honest about.** The page's code comes from the server, so whoever controls the server
   could drive a terminal that is open. That is the trust given by linking; Monet local says which
   host it is linked to, and self-hosting stays one command.
@@ -346,7 +345,7 @@ Steps 1 to 3 need nothing from the rewire and can be worked on beside it, as Not
 ## What stays, what changes
 
 **Stays:** the Note, the runner, `accept_build`, checks and the load check, tags and joints worked
-out on the server, the canvas and its rooms, the two doors, remote control, the agent's tools,
+out on the server, the canvas and its rooms, the two doors, the agent's tools,
 jobs, accounts.
 
 **Changes:**

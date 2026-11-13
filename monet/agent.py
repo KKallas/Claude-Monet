@@ -2,8 +2,8 @@
 
 One set of tools, two ways in: MCP (Claude Desktop, Claude Code and anything else that
 speaks it) at /w/<workspace>/mcp, and plain HTTP (POST /w/<workspace>/agent/<tool> with
-a JSON body) for a harness that only has a shell. They open only while the person has
-remote control on (monet/remote.py). Beside them, one route that is not a tool: the upload
+a JSON body) for a harness that only has a shell. The agent key in the address opens them
+(nothing else stands before it: monet/remote.py). Beside them, one route that is not a tool: the upload
 of what the agent built on its own computer (upload(); the server never runs a Note).
 
 What is deliberately not here: changing or removing a check, acknowledging a load check,
@@ -34,7 +34,7 @@ class Caller:
     base: str       # https://host/w/<agent key>: the agent's own address; what it can fetch without a login
     page: str       # https://host/w/<username>: the person's canvas; they log in to see it
     owner: dict | None = None       # whose agent this is, as the accounts keep them
-    remote: object | None = None    # their open canvases (monet.remote.Remote), while remote control is on
+    remote: object | None = None    # their open canvases (monet.remote.Remote)
     done: Callable[[str, dict, dict], None] | None = None      # (tool, args, result): what it changed, written down
 
     def canvas(self, project: str = "", note: str = "") -> str:
@@ -71,13 +71,10 @@ def status(c: Caller, project: str = "") -> dict:
 
 
 def _remote(c: Caller) -> dict:
-    """How long the door stays open, and the canvases the user has open: what screen, goto and view reach."""
+    """The canvases the user has open: what screen, goto and view reach."""
     if c.remote is None or c.owner is None:
         return {}
-    left = max(0.0, (c.owner.get("agent") or {}).get("until", 0) - time.time())
-    return {"remote": {"minutes_left": round(left / 60), "ends": "by itself after 15 minutes with nothing from you or the user, and "
-                       "at once when they switch it off or log out: then every call says so. Tell them; they switch it on again"},
-            "pages": c.remote.pages(c.owner["id"])}
+    return {"pages": c.remote.pages(c.owner["id"])}
 
 
 def new_project(c: Caller, name: str, template: str = "", printer: str = "", material: str = "") -> dict:

@@ -1,5 +1,6 @@
-"""Remote control (monet/remote.py): the agent link opens only while the person has it on, it ends by itself, and while
-it is on the agent sees and drives the canvas they have open. A canvas here is a websocket answered by a thread."""
+"""The agent's door and its line to the canvas (monet/remote.py): the agent key alone opens the door (the switch that
+stood before it, remote control, was taken out on 2026-11-13), a new key closes it, and the agent sees and drives the
+canvas the person has open. A canvas here is a websocket answered by a thread."""
 import base64
 import contextlib
 import json
@@ -87,39 +88,30 @@ def rpc(live, link, method, params=None):
                      headers={"accept": "application/json, text/event-stream"})
 
 
-def test_the_link_opens_nothing_until_the_person_switches_it_on(app, live, mari):
+def test_the_key_alone_opens_the_agents_door(app, live, mari):
     c, link = mari
-    assert c.get("/w/mari/api/state").json()["remote"]["on"] is False
-    with contextlib.nullcontext(TestClient(app)) as nobody:      # (not entered: the server is started once, by `live`)
-        off = nobody.post(f"{link}/agent/status", json={})
-        assert off.status_code == 404 and "remote control is off" in off.json()["error"]
-        picture = nobody.get(f"{link}/file/p/starter/n/rod_foot/render.png")
-        assert picture.status_code == 404 and "remote control is off" in picture.json()["error"]
-    # MCP stays connected while it is off: it lists its tools, and every call says, in words, that it is off
+    view = c.get("/w/mari/api/state").json()["remote"]
+    assert "on" not in view and view["tabs"] == 0 and view["recent"] == []      # no switch, no clock
+    nobody = TestClient(app)        # not logged in, nothing switched on: the key is what opens it
+    s = nobody.post(f"{link}/agent/status", json={}).json()
+    assert s["projects"] == ["mg400_rakis", "starter"] and s["pages"] == [] and "remote" not in s
+    assert nobody.get(f"{link}/file/p/starter/n/rod_foot/render.png").status_code == 200
     assert rpc(live, link, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}).status_code == 200
     tools = {t["name"] for t in rpc(live, link, "tools/list").json()["result"]["tools"]}
     assert {"screen", "goto", "view", "status"} <= tools and "page" not in tools      # no code of the agent's runs in the canvas
-    r = rpc(live, link, "tools/call", {"name": "status", "arguments": {}}).json()["result"]
-    assert r["isError"] and "remote control is off" in r["content"][0]["text"]
-    assert rpc(live, "/w/" + "A" * 32, "tools/list").status_code == 404        # a key that is nobody's is gone, as before
-
-    view = c.put("/w/mari/api/remote", json={"on": True}).json()
-    assert view["on"] and 14 * 60_000 < view["left"] <= 15 * 60_000 and view["tabs"] == 0
-    s = c.post(f"{link}/agent/status", json={}).json()
-    assert s["projects"] == ["mg400_rakis", "starter"] and s["remote"]["minutes_left"] == 15 and s["pages"] == []
     assert json.loads(rpc(live, link, "tools/call", {"name": "status", "arguments": {}}).json()["result"]["content"][0]["text"])["pages"] == []
+    assert rpc(live, "/w/" + "A" * 32, "tools/list").status_code == 404        # a key that is nobody's opens nothing
+    assert nobody.post("/w/" + "A" * 32 + "/agent/status", json={}).status_code == 404
     # no canvas open: the tools that ask one say so, the others work
     assert "no canvas of Mari is open" in c.post(f"{link}/agent/screen", json={}).json()["error"]
     assert c.post(f"{link}/agent/view", json={}).status_code == 503
-    assert c.put("/w/mari/api/remote", json={"on": False}).json()["on"] is False
-    assert c.post(f"{link}/agent/status", json={}).status_code == 404
-    assert c.put("/w/mari/api/remote", json={"on": True}).json()["on"]        # the same link works again
-    assert c.post(f"{link}/agent/status", json={}).json()["projects"]
+    # there is nothing to switch any more
+    assert c.put("/w/mari/api/remote", json={"on": False}).status_code == 405
+    assert nobody.post(f"{link}/agent/status", json={}).status_code == 200
 
 
 def test_the_agent_sees_the_open_canvas_and_takes_it_somewhere(app, live, admin, mari):
     c, link = mari
-    c.put("/w/mari/api/remote", json={"on": True})
 
     def answer(m):
         if m["what"] == "screen":
@@ -163,60 +155,26 @@ def test_the_agent_sees_the_open_canvas_and_takes_it_somewhere(app, live, admin,
     assert until(lambda: c.post(f"{link}/agent/status", json={}).json()["pages"] == [])      # the tab closed
 
 
-def test_it_ends_by_itself_and_hangs_up_on_the_page(app, admin):
+def test_it_stays_open_over_a_logout_and_a_new_key_closes_it(app, admin):
     c, link = person(app, admin, "toomas")
-    c.put("/w/toomas/api/remote", json={"on": True})
-    u = owner(app, "toomas")
-    # every call of the agent starts the 15 minutes again; so does the person doing something in the canvas
-    u["agent"]["until"] = time.time() + 60
-    c.post(f"{link}/agent/status", json={})
-    assert u["agent"]["until"] > time.time() + 14 * 60
-    with canvas(c, "toomas", lambda m: (True, None)) as (ws, _asked):
-        u["agent"]["until"] = time.time() + 60
-        ws.send_json({"t": "alive"})
-        assert until(lambda: u["agent"]["until"] > time.time() + 14 * 60)
-        u["agent"]["until"] = time.time() + 60
-        ws.send_json({"t": "state", "project": "starter", "note": "rod_foot", "room": "part", "hidden": False})     # a heartbeat is not that
-        time.sleep(0.1)
-        assert u["agent"]["until"] < time.time() + 61
-    # 15 minutes of nothing: off, and it says why
-    u["agent"]["until"] = time.time() - 1
-    assert "remote control is off" in c.post(f"{link}/agent/status", json={}).json()["error"]
-    view = c.get("/w/toomas/api/remote").json()
-    assert view["on"] is False and view["off"]["why"] == "idle" and view["recent"] == []
-    # switched off: the page is hung up on
-    c.put("/w/toomas/api/remote", json={"on": True})
-    with c.websocket_connect("/w/toomas/api/remote/tab") as ws:
-        ws.send_json({"t": "state", "project": "starter"})
-        c.put("/w/toomas/api/remote", json={"on": False})
-        with pytest.raises(WebSocketDisconnect) as gone:
-            while True:
-                ws.receive_json()
-        assert gone.value.code == 4001
-    # a new password ends it, and so does logging out
-    c.put("/w/toomas/api/remote", json={"on": True})
-    assert c.put("/api/me/password", json={"current": "correct horse", "password": "another good one"}).status_code == 200
-    assert c.post(f"{link}/agent/status", json={}).status_code == 404 and c.get("/w/toomas/api/remote").json()["off"]["why"] == "login"
-    c.put("/w/toomas/api/remote", json={"on": True})
     assert c.post(f"{link}/agent/status", json={}).json()["projects"]
+    assert c.get("/w/toomas/api/remote").json()["seen"]                       # when the agent was last here
+    assert "agent" not in owner(app, "toomas")                                 # no switch kept with the account
     c.post("/api/logout")
-    assert c.post(f"{link}/agent/status", json={}).status_code == 404
-    assert u["agent"]["off"]["why"] == "logout"
-    log = [e for e in admin.get("/api/users").json()["log"] if e.get("user") == "toomas" and e["type"].startswith("remote")]
-    assert [e.get("why") for e in log if e["type"] == "remote-off"] == ["logout", "login", "you", "idle"]      # newest first
+    assert TestClient(app).post(f"{link}/agent/status", json={}).status_code == 200      # the agent works on while they are away
+    made = admin.post(f"/api/users/{owner(app, 'toomas')['id']}/key").json()
+    assert made and TestClient(app).post(f"{link}/agent/status", json={}).status_code == 404   # a new key: the old link is dead at once
 
 
-def test_only_the_person_switches_it_and_only_their_own_page_dials(app, admin, mari):
+def test_only_their_own_page_dials(app, admin, mari):
     c, _link = mari
-    c.put("/w/mari/api/remote", json={"on": True})
-    # an admin may look into mari's workspace, but not switch her remote control, nor offer their page to her agent
-    assert admin.put("/w/mari/api/remote", json={"on": False}).status_code == 403
+    # an admin may look into mari's workspace, but not see what her agent did, nor offer their page to her agent
+    assert admin.get("/w/mari/api/remote").status_code == 403
     assert admin.get("/w/mari/api/state").json()["remote"] is None
     for who, headers in ((admin, {}), (TestClient(app), {}), (c, {"origin": "https://elsewhere.example"})):
         with pytest.raises(WebSocketDisconnect):
             with who.websocket_connect("/w/mari/api/remote/tab", headers=headers) as ws:
                 ws.receive_json()
-    c.put("/w/mari/api/remote", json={"on": False})
-    with pytest.raises(WebSocketDisconnect):       # off: no page dials in
-        with c.websocket_connect("/w/mari/api/remote/tab") as ws:
-            ws.receive_json()
+    with c.websocket_connect("/w/mari/api/remote/tab") as ws:      # her own page, with nothing switched on
+        ws.send_json({"t": "state", "project": "starter"})
+        assert until(lambda: c.get("/w/mari/api/remote").json()["tabs"] == 1)

@@ -83,12 +83,12 @@ wrong:
   runs **no code in the person's canvas** (Adam Designer's `page` was left out on purpose, Kaspar
   2026-10-25): code in a logged-in page is the person, and no route could tell it apart. The agent
   edits at file level through its tools; the page answers only `screen`, `goto` and `view`.
-- **Remote control** (`monet/remote.py`, the page's side `canvas/remote.js`; from Adam Designer's
-  docs/15, without its `page`): the agent key opens nothing until the person switches it on under Connect your agent.
-  It ends after 15 idle minutes (the person's clicks and keys, told by the page as `alive`, and every
-  agent call start them again; a page's heartbeat does not), at logout and at a new password. MCP
-  answers `initialize` and `tools/list` while it is off, so a connector is not dropped. Only the
-  person's own pages dial `/w/<username>/api/remote/tab`, never an admin's looking in.
+- **The agent key alone opens the agent's door; there is no remote control switch** (Kaspar, 2026-11-13: the
+  agent runs on the person's computer, started by their own hand, so a switch and its 15 minutes were one step too
+  many). A new key closes it (the person's, or an admin's for them); logging out does not. Do not bring a switch or a
+  timer back without him. What is left in `monet/remote.py` and `canvas/remote.js` (from Adam Designer's docs/15,
+  without its `page`) is the agent's line to the open canvas: only the person's own pages dial
+  `/w/<username>/api/remote/tab`, never an admin's looking in, and they answer `screen`, `goto` and `view`.
 - **Monet local and the terminal** (Kaspar, 2026-11-13; the plan is docs/REWIRE.md): `skill/monet/scripts/local.py`,
   started by `monet.py local <project> [folder]`, runs on the person's computer: it sends, builds and uploads the
   folder's Notes as they change, writes what the canvas changed into the folder, and leaves a file changed on both
@@ -100,8 +100,8 @@ wrong:
   `skill/monet/scripts/start.py`) fetches `/skill.zip` into `~/.cache/monet`, keeps the link, and runs local.py in
   `~/monet/<project>`. The page makes the token (kept in its localStorage) and looks for Monet local by itself on
   the ports of `PORTS` (the same list in local.py and terminal.js; the first free one is taken). What Monet local
-  says (`say()`) is the same in its own terminal and in the panel's Activity tab. It asks the server only when something happened (a file, a key, a
-  poke from the page): a watcher must not keep remote control's 15 minutes alive. The agent link lives in
+  says (`say()`) is the same in its own terminal and in the panel's Activity tab. It looks at the folder every
+  second and at the server every few (`EVERY`), at once on a poke from the page. The agent link lives in
   `~/.config/monet/link` (`monet.py link`), never in a project's folder.
 - **An uploaded archive is not trusted**: `Workspace.import_project` takes files by name
   against `ARCHIVED` and writes each under that name; it never extracts a zip to a path the

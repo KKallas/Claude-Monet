@@ -282,18 +282,7 @@ dialog.ask { width: min(420px, 92vw); }      /* the page's own alert and confirm
 .dial-presets button { grid-column: span 2; padding: 4px 0; font-size: 12px; }
 .dial-presets [data-p="default"], .dial-presets [data-p="last"] { grid-column: span 5; }
 
-/* remote control (canvas/remote.js): the switch in Connect your agent, and the header's button while it is on */
-#connect.remote-on { border-color: var(--warn); color: var(--warn); font-variant-numeric: tabular-nums; }
-#connect.remote-on:hover { background: var(--warn); color: #1a1f2e; }
-#connect:is(.remote-low, .remote-ended) { border-color: var(--err); color: var(--err); animation: throb .8s ease-in-out infinite alternate; }
-#connect:is(.remote-low, .remote-ended):hover { background: var(--err); color: #1a1f2e; animation: none; }
-.remote-main { display: flex; gap: 16px; align-items: flex-start; margin: 14px 0 6px; }
-.remote-switch { flex: none; display: flex; align-items: center; gap: 10px; width: 112px; height: 44px; padding: 0 12px 0 6px; border-radius: 22px; font-size: 14px; font-weight: 600; }
-.remote-switch .knob { width: 32px; height: 32px; border-radius: 50%; background: var(--text-muted); transition: transform .15s, background .15s; }
-.remote-switch.on { flex-direction: row-reverse; padding: 0 6px 0 12px; border-color: var(--warn); color: var(--warn); }
-.remote-switch.on .knob { background: var(--warn); }
-.remote-state { display: grid; gap: 4px; }
-.remote-state b { color: var(--text-bright); }
+/* Connect your agent: the warning beside the link, the facts and what the agent changed lately */
 .remote-warn { border-left: 2px solid var(--warn); padding-left: 10px; }
 .remote-facts { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; }
 .remote-facts span { color: var(--text-muted); }
