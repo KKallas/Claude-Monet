@@ -6,6 +6,9 @@
 
     monet.py local <project> [folder]        (folder: where the project's files are, default the one you are in)
 
+or, with nothing set up, the one line the canvas gives (its Terminal panel): uv run https://<host>/start.py <agent
+link> <project>, which fetches this and starts it in ~/monet/<project> (scripts/start.py).
+
 It does two things, for one project in one folder:
 
 1. **The canvas shows the working copy.** A Python file changed in the folder is sent to Monet, built here with
@@ -43,7 +46,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")      # a Note's name, as monet/note.py has it
-PORT = 8765
+PORTS = (47821, 47822, 47823, 47824)      # where it listens: the first that is free; the canvas tries the same ones (terminal.js)
 KEEP = 256_000          # bytes of a terminal's output kept, for a page that comes (back) to it
 CONFIG = Path(os.environ.get("MONET_CONFIG") or Path.home() / ".config" / "monet")
 
@@ -56,13 +59,43 @@ def script():
     return module
 
 
+DIM, GREEN, AMBER, RED, BOLD, OFF = "\x1b[2m", "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[1m", "\x1b[0m"
+TONES = ((RED, ("does not build", "died", "refused", "cannot", "not sent", "RED")),
+         (AMBER, ("left as it is", "must be", "not green", "waiting", "is off", "gone here", "trying again")),
+         (GREEN, ("checks green", "built ", "uploaded", "sent", "taken from", "started", "linked to")))
+
+
 def say(text: str) -> None:
-    line = f"{time.strftime('%H:%M:%S')}  {text}"
-    print(line, flush=True)
+    """One line of what is going on: on this terminal, and in the canvas's panel (its Activity tab), the same words."""
+    tone = next((c for c, words in TONES if any(w in text for w in words)), "")
+    stamp = time.strftime("%H:%M:%S")
+    line = f"{DIM}{stamp}{OFF}  {tone}{text}{OFF if tone else ''}"
+    print(line if sys.stdout.isatty() else re.sub(r"\x1b\[[0-9;]*m", "", f"{stamp}  {text}"), flush=True)
     LOG.append(line)
     del LOG[:-400]
     for fn in list(LISTENERS):
         fn(line)
+
+
+OFF_WORDS = ("waiting: remote control is off. Open Terminal in your canvas (that lets this computer in), or switch it on "
+             "under Connect your agent")
+
+
+class Said:
+    """What the script's building prints for a person (its progress, on stderr), said here line by line instead."""
+
+    def __init__(self):
+        self.rest = ""
+
+    def write(self, text: str) -> int:
+        *lines, self.rest = (self.rest + text).split("\n")
+        for line in lines:
+            if line.strip():
+                say(line.strip())
+        return len(text)
+
+    def flush(self) -> None:
+        pass
 
 
 LOG: list = []
@@ -129,8 +162,9 @@ class Sync:
         """Bring the two sides together once. True when it could ask the server."""
         got, why = self.ask("sources", project=self.project)
         if got is None:
-            self.once(why)
+            self.once(OFF_WORDS if "remote control is off" in why else why)
             return False
+        self.said.discard(OFF_WORDS)        # it answers again: the next time it is off is news
         server = {name[:-3]: whole(text) for name, text in got["files"].items()}
         local = self.local()
         moved = False
@@ -178,8 +212,10 @@ class Sync:
 
     def build(self) -> None:
         """Whatever is not built for its source as it is, built here and uploaded."""
+        import contextlib
         try:
-            answers = self.ms.build_all(self.project)
+            with contextlib.redirect_stderr(Said()):
+                answers = self.ms.build_all(self.project)
         except SystemExit as e:
             self.once(str(e.code))
             return
@@ -266,8 +302,10 @@ class Session:
 
 
 class Local:
-    def __init__(self, ms, project: str, folder: Path, token: str, port: int, prefer: str = ""):
-        self.ms, self.project, self.folder, self.token, self.port = ms, project, folder, token, port
+    def __init__(self, ms, project: str, folder: Path, token, port: int, prefer: str = "", quiet: bool = False):
+        self.ms, self.project, self.folder, self.port, self.quiet = ms, project, folder, port, quiet
+        self.tokens = [token] if isinstance(token, str) else list(token)
+        self.token = self.tokens[0]
         self.sync = Sync(ms, project, folder, prefer)
         self.sessions: dict = {}
         self.poked = asyncio.Event()
@@ -301,7 +339,8 @@ class Local:
         """One page. Its first words are the token and what it wants to see; anything else and it is hung up on."""
         try:
             hello = json.loads(await asyncio.wait_for(ws.recv(), 10))
-            ok = isinstance(hello, dict) and hmac.compare_digest(str(hello.get("token") or ""), self.token)
+            given = str(hello.get("token") or "") if isinstance(hello, dict) else ""
+            ok = any(hmac.compare_digest(given, t) for t in self.tokens)
         except (asyncio.TimeoutError, ValueError, TypeError):
             ok = False
         if not ok:
@@ -394,9 +433,23 @@ class Local:
 
     async def run(self) -> None:
         import websockets
-        async with websockets.serve(self.serve, "127.0.0.1", self.port, origins=self.origins(), max_size=1_000_000):
-            say(f"Monet local: {self.project} in {self.folder}, linked to {self.ms._host()}")
-            say(f"the terminal of your canvas: open this once in the browser you use Monet in\n\n    {self.origin}/#local={self.port}.{self.token}\n")
+        server = None
+        for port in ([self.port] if self.port else PORTS):      # another program may have one of them: the next, then
+            try:
+                server = await websockets.serve(self.serve, "127.0.0.1", port, origins=self.origins(), max_size=1_000_000)
+                self.port = port
+                break
+            except OSError as e:
+                busy = e
+        if server is None:
+            raise busy
+        async with server:
+            home = str(self.folder).replace(str(Path.home()), "~", 1)
+            say(f"{BOLD}Monet local{OFF}: {self.project} in {home}, linked to {self.ms._host()}")
+            if self.quiet:      # started by the canvas's one line: the page knows the token already
+                say("the Terminal panel of your canvas finds this by itself. Leave this running; Ctrl+C ends it")
+            else:
+                say(f"the terminal of your canvas: open this once in the browser you use Monet in\n\n    {self.origin}/#local={self.port}.{self.token}\n")
             try:
                 await self.watch()
             finally:
@@ -404,26 +457,35 @@ class Local:
                     s.stop()
 
 
-def token() -> str:
-    """This computer's own, made once: the page keeps it, so the link is opened once and not at every start."""
+def tokens(more: str = "") -> list:
+    """Whom this computer's terminal answers: its own token, made once, and those a canvas made for the line it gave
+    the person to start this with (--pair; the newest few are kept, so each browser of theirs keeps working)."""
     f = CONFIG / "local.json"
     try:
-        return json.loads(f.read_text())["token"]
-    except (OSError, ValueError, KeyError):
-        made = secrets.token_urlsafe(24)
+        kept = json.loads(f.read_text())
+    except (OSError, ValueError):
+        kept = {}
+    own = kept.get("token") or secrets.token_urlsafe(24)
+    paired = [t for t in kept.get("paired") or [] if isinstance(t, str) and t != more]
+    if more:
+        paired.append(more)
+    now = {"token": own, "paired": paired[-8:]}
+    if now != kept:
         CONFIG.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps({"token": made}) + "\n")
+        f.write_text(json.dumps(now) + "\n")
         f.chmod(0o600)
-        return made
+    return [own, *now["paired"]]
 
 
 def main(argv) -> None:
     flags = [a for a in argv if a.startswith("--")]
     rest = [a for a in argv if not a.startswith("--")]
-    port = PORT
+    port, pair = 0, ""
     for f in flags:
         if f.startswith("--port="):
             port = int(f.split("=", 1)[1])
+        elif re.fullmatch(r"--pair=[A-Za-z0-9_-]{24,64}", f):
+            pair = f.split("=", 1)[1]
         elif f not in ("--mine", "--theirs"):
             sys.exit(__doc__)
     if not rest:
@@ -431,16 +493,19 @@ def main(argv) -> None:
     ms = script()
     if not ms.URL:
         sys.exit("monet: this computer is not linked: monet.py link https://host/w/<agent key>  (the link is in your canvas, under Connect your agent)")
-    folder = Path(rest[1] if len(rest) > 1 else ".").resolve()
+    folder = Path(rest[1] if len(rest) > 1 else ".").expanduser().resolve()
+    if len(rest) > 1:
+        folder.mkdir(parents=True, exist_ok=True)      # a folder named for the project is made when it is not there
     if not folder.is_dir():
         sys.exit(f"monet: there is no folder {folder}")
     prefer = "mine" if "--mine" in flags else "theirs" if "--theirs" in flags else ""
     try:
-        asyncio.run(Local(ms, rest[0], folder, token(), port, prefer).run())
+        asyncio.run(Local(ms, rest[0], folder, tokens(pair), port, prefer, quiet=bool(pair)).run())
     except KeyboardInterrupt:
         pass
     except OSError as e:
-        sys.exit(f"monet: cannot listen on 127.0.0.1:{port} ({e.strerror or e}): is Monet local running already? (--port=N for another)")
+        sys.exit(f"monet: cannot listen on 127.0.0.1 ({e.strerror or e}): is Monet local running already, four times over? "
+                 f"(ports {PORTS[0]} to {PORTS[-1]}; --port=N for another)")
 
 
 if __name__ == "__main__":

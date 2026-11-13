@@ -240,6 +240,8 @@ def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         sys.exit(__doc__)
     cmd, a = argv[0], argv[1:]
+    if re.match(r"https?://[^/\s]+/w/", cmd):      # the link by itself: they meant to keep it
+        cmd, a = "link", argv
     if cmd == "link":
         if not a or not re.match(r"https?://[^/\s]+/w/[A-Za-z0-9_-]{16,}/?$", a[0]):
             sys.exit("monet: that is not an agent link (https://host/w/<agent key>): it is in your canvas, under Connect your agent")

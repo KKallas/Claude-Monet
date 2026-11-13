@@ -443,6 +443,11 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
     async def skill_zip(_request: Request):
         return skill_archive()
 
+    async def start_script(_request: Request):
+        """What the canvas's one line runs on the person's computer (uv run https://host/start.py <agent link> <project>):
+        it fetches /skill.zip and starts Monet local. For anyone: there is no key in it."""
+        return Response((ROOT / "skill" / "monet" / "scripts" / "start.py").read_bytes(), media_type="text/x-python; charset=utf-8", headers=NO_STORE)
+
     # ---- logging in (from Adam Designer) ------------------------------------------
     def fail(e: auth.HttpError):
         return JSONResponse({"error": e.message, **e.extra}, e.status, headers=NO_STORE)
@@ -983,6 +988,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route("/api", api_docs),
         Route("/llms.txt", api_docs),
         Route("/skill.zip", skill_zip),
+        Route("/start.py", start_script),
         # logging in
         Route("/api/login", do_login, methods=["POST"]),
         Route("/api/login/card/{card}", card_info),

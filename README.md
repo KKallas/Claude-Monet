@@ -52,15 +52,20 @@ server's log.
 | Claude Desktop | Settings → Connectors → Add custom connector → `https://<host>/w/<agent key>/mcp`, then add the skill under Settings → Capabilities → Skills. For a server on your own machine use `npx mcp-remote http://localhost:8000/w/<agent key>/mcp` in `claude_desktop_config.json`. |
 | Claude Code | `claude mcp add --transport http monet http://localhost:8000/w/<agent key>/mcp` |
 | a shell | `skill/monet/scripts/monet.py` (standard library only; building runs Monet's builder with [uv](https://docs.astral.sh/uv/)) |
-| the canvas's own terminal | `monet.py link <agent link>` once, then `monet.py local <project>` in the project's folder: see below |
+| the canvas's own terminal | press **Terminal** in the canvas, copy the one line it shows, paste it into a terminal on your computer: see below |
 
-**Monet local: the canvas shows the folder, and has a terminal in it.** `monet.py local <project>`
-stays running on your computer. A Note changed in the folder is sent, built there and shown; what
-you change in the canvas is written into the folder; a file changed on both sides is left alone and
-said (nothing is merged yet). It prints a link to open once: after that the **Terminal** button in
-the canvas opens Claude Code, Codex or a shell in that folder. The page talks straight to
+**Monet local: one line, and the canvas shows the folder and has a terminal in it.** The canvas's
+**Terminal** panel gives one line (`uv run https://<host>/start.py <your agent link> <project>
+--pair=…`). Pasted into a terminal on your computer it fetches Monet's tools, keeps the project in
+`~/monet/<project>` and stays in the foreground, saying what it does; the panel's Activity tab shows
+the same lines and finds it by itself. A Note changed in the folder is sent, built there and shown;
+what you change in the canvas is written into the folder; a file changed on both sides is left alone
+and said (nothing is merged yet). The panel's other tabs open Claude Code, Codex or a shell in that
+folder. (With the repository or the skill at hand, `monet.py local <project> [folder]` is the same
+thing.) The page talks straight to
 `127.0.0.1` on your own computer: the server is not in between and never sees the terminal. Monet
-local answers only a page of the Monet it is linked to, with the token of your computer, and starts
+local answers only a page of the Monet it is linked to, with a token it knows (the page makes one and
+puts it in the line), and starts
 only what is on its own short list. This is the first step of [docs/REWIRE.md](docs/REWIRE.md).
 
 **Your agent builds; the server never runs a Note.** Building needs a shell on your computer with

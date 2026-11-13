@@ -449,6 +449,15 @@ def test_mcp_door(live, client, reg):
     assert rpc("tools/list", {}, wid="A" * 32).status_code == 404 and rpc("tools/list", {}, wid=reg["name"]).status_code == 404
 
 
+def test_the_one_lines_script_is_for_anyone_and_holds_no_key(app):
+    import io
+    import zipfile
+    r = TestClient(app).get("/start.py")
+    assert r.status_code == 200 and "uv run https://<host>/start.py" in r.text and "/w/<agent key>" in r.text
+    names = zipfile.ZipFile(io.BytesIO(TestClient(app).get("/skill.zip").content)).namelist()
+    assert "monet/scripts/local.py" in names and "monet/scripts/builder.py" in names      # what it fetches and starts
+
+
 def test_skill_zip(client):
     import io, zipfile
     names = zipfile.ZipFile(io.BytesIO(client.get("/skill.zip").content)).namelist()

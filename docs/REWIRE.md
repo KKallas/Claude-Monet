@@ -6,9 +6,15 @@ in the plan for a few hours and is out: the home is git, nothing else.*
 
 ## What is built (2026-11-13, branch `rewire`)
 
-The first slice of steps 1 and 2: `monet.py link`, `monet.py local <project> [folder]`
-(`skill/monet/scripts/local.py`) and the Terminal panel (`canvas/terminal.js`), tested in
-`tests/test_local.py` and by hand in headless Chrome against a server on localhost.
+The first slice of steps 1 and 2: Monet local (`skill/monet/scripts/local.py`) and the Terminal
+panel (`canvas/terminal.js`), tested in `tests/test_local.py` and by hand in headless Chrome
+against a server on localhost.
+
+- **Started with one line.** The panel shows it (`uv run <origin>/start.py <agent link> <project>
+  --pair=<token>`), the person pastes it into a terminal, and the panel finds Monet local by
+  itself. The first version asked for a repository, `link`, a folder and a second link to open:
+  too many steps (Kaspar, the same day). `monet link`, `open` and `init` of the plan below are
+  this one line now; what is left of them is git.
 
 - The folder's Notes are sent, built and uploaded as they change; a file changed in the canvas is
   written into the folder; one changed on both sides is left alone and said. **Whole files, no

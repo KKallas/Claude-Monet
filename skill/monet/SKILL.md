@@ -130,8 +130,9 @@ access. Then carry on.
 
 ## Monet local: the folder shown as it is
 
-`monet.py local <project> [folder]` stays running in a terminal of the user's and does the
-sending and building for you. When it runs (the user started it, or you are in a terminal it
+Monet local stays running in a terminal of the user's and does the sending and building for
+you. They start it with the one line their canvas shows under **Terminal** (it keeps the project in
+`~/monet/<project>`), or with `monet.py local <project> [folder]`. When it runs (the user started it, or you are in a terminal it
 opened in their canvas: `MONET_PROJECT` is set there), **work on the files in the folder and
 nothing else**:
 
@@ -142,7 +143,7 @@ nothing else**:
   file in the folder. So read a file again before you edit it, and never write a whole file from
   memory over one you have not just read.
 - A file changed in the folder and in the canvas since the two last agreed is left alone on both
-  sides, and Monet local says so (the *Files* tab of the canvas's terminal, or its own output).
+  sides, and Monet local says so (the *Activity* tab of the canvas's terminal, or its own output).
   Nothing merges them yet: tell the user, who starts it again with `--mine` or `--theirs`.
 - It never deletes: a Note removed from the folder stays on the server until the user deletes it
   in the canvas.

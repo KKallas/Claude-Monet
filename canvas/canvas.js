@@ -2771,7 +2771,7 @@ const hands = {
   },
 };
 // the terminal: this page to Monet local on this computer, never through the server (terminal.js)
-terminal = createTerminal(view, $('#termBtn'), { remote, project: () => S.project,
+terminal = createTerminal(view, $('#termBtn'), { remote, project: () => S.project, link: () => S.state?.agent ?? '',
   mine: () => !!S.state && S.state.me.username === S.state.workspace.username });
 $('#logout').onclick = async (e) => { e.preventDefault(); await fetch('/api/logout', { method: 'POST' }); location.href = '/login'; };
 

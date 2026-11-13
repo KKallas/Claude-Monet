@@ -162,3 +162,45 @@ async def test_a_terminal_in_the_folder_that_lives_on_when_the_page_goes(running
                 if isinstance(m, str) and json.loads(m).get("t") == "exit":
                     assert json.loads(m)["code"] == 3
                     break
+
+
+def test_the_tokens_it_answers_its_own_and_those_a_canvas_made(tmp_path, monkeypatch):
+    monkeypatch.setattr(local, "CONFIG", tmp_path / "config")
+    own = local.tokens()
+    assert len(own) == 1 and local.tokens() == own                      # made once, kept
+    assert local.tokens("a-token-the-canvas-made-0001") == [own[0], "a-token-the-canvas-made-0001"]
+    for i in range(12):
+        local.tokens(f"a-token-the-canvas-made-1{i:03d}")
+    kept = local.tokens()
+    assert kept[0] == own[0] and len(kept) == 9 and kept[-1].endswith("1011")      # the newest few
+    assert oct((tmp_path / "config" / "local.json").stat().st_mode & 0o777) == "0o600"
+
+
+async def test_a_page_with_a_token_the_canvas_made_gets_in(tmp_path, monkeypatch):
+    monkeypatch.setattr(local, "runs", lambda: {"shell": ["/bin/sh"]})
+    it = local.Local(Server(), "p", tmp_path, ["this-computers-own", "the-one-in-the-line"], 0)
+    async with websockets.serve(it.serve, "127.0.0.1", 0, origins=it.origins()) as server:
+        url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        for token in ("this-computers-own", "the-one-in-the-line"):
+            async with websockets.connect(url, origin="https://monet.example") as ws:
+                await ws.send(json.dumps({"token": token, "run": "log"}))
+                assert json.loads(await ws.recv())["run"] == "log"
+
+
+async def test_a_port_another_program_has_is_passed_over(tmp_path, monkeypatch):
+    import socket
+    with socket.socket() as taken, socket.socket() as free:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        free.bind(("127.0.0.1", 0))
+        ports = (taken.getsockname()[1], free.getsockname()[1])
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", ports[0]))
+        taken.listen()
+        monkeypatch.setattr(local, "PORTS", ports)
+        it = local.Local(Server(off=True), "p", tmp_path, "t", 0, quiet=True)
+        task = asyncio.create_task(it.run())
+        async with asyncio.timeout(5):
+            while it.port != ports[1]:
+                await asyncio.sleep(0.05)
+        task.cancel()
