@@ -1,5 +1,5 @@
-# Every push to main: the checks; if they pass and the droplet's secrets are set, the image is
-# built here and sent to the droplet. A failing check deploys nothing.
+# Every push to main: the open canvases are told at once that a build is on its way; the checks; if they pass and
+# the droplet's secrets are set, the image is built here and sent to the droplet. A failing check deploys nothing.
 #   secrets: DROPLET_HOST (ip or name) · DROPLET_USER (root) · DROPLET_SSH_KEY (a private key whose
 #   public half is in the droplet's authorized_keys: a deploy key made for this, not yours)
 #   variables: DOMAIN (the public name, for the last look from outside)
@@ -10,12 +10,40 @@ on:
   pull_request:
 
 jobs:
+  # As the run starts, before a test has run: the open canvases are told a new build is on its way and count down to
+  # it (the tests, the building, the sending: about a quarter of an hour). Beside the checks, not before them, and
+  # never in their way: a droplet that does not answer costs the note, not the run.
+  announce:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    env:
+      DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+      DROPLET_USER: ${{ secrets.DROPLET_USER }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip when no droplet is configured
+        id: gate
+        run: echo "go=${{ secrets.DROPLET_SSH_KEY != '' && secrets.DROPLET_HOST != '' }}" >> "$GITHUB_OUTPUT"
+      - name: SSH key
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.DROPLET_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # the port is knocked on all day: ask again rather than fail on a dropped connection
+          for try in $(seq 1 10); do ssh-keyscan -T 10 -H "$DROPLET_HOST" >> ~/.ssh/known_hosts 2>/dev/null; [ -s ~/.ssh/known_hosts ] && break; sleep 4; done
+          test -s ~/.ssh/known_hosts
+      - name: Say a new build is on its way
+        if: steps.gate.outputs.go == 'true'
+        run: deploy/coming.sh "${DROPLET_USER:-root}@$DROPLET_HOST" testing
+
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # the CAD kernel (OCP) links against these even when nothing is ever drawn; ffmpeg makes animations MP4s
-      - run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libxrender1 libxext6 libsm6 libfontconfig1 ffmpeg
+      # the CAD kernel (OCP) links against these even when nothing is ever drawn
+      - run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libxrender1 libxext6 libsm6 libfontconfig1
       - uses: astral-sh/setup-uv@v5
         with: { enable-cache: true }
       - run: uv sync --frozen
@@ -46,14 +74,11 @@ jobs:
           # the port is knocked on all day: ask again rather than fail on a dropped connection
           for try in $(seq 1 10); do ssh-keyscan -T 10 -H "$DROPLET_HOST" >> ~/.ssh/known_hosts 2>/dev/null; [ -s ~/.ssh/known_hosts ] && break; sleep 4; done
           test -s ~/.ssh/known_hosts
-      - name: Say a new build is on its way
+      - name: The tests passed, it is being built
         if: steps.gate.outputs.go == 'true'
-        # the canvas counts down to it (monet/app.py: coming); the server clears the note when this build comes up.
-        # The time is the droplet's own, the clock the server measures with.
-        run: |
-          for try in $(seq 1 10); do ssh -o ConnectTimeout=20 "${DROPLET_USER:-root}@$DROPLET_HOST" \
-            "printf '{\"commit\": \"%s\", \"since\": %s}\n' $(git rev-parse --short HEAD) \$(date +%s) > /opt/monet/data/coming.json" && exit 0; sleep 4; done
-          echo "::warning::could not leave the note that a build is coming"
+        # the note was left when the run started (the job announce); the canvas counts down to it (monet/app.py:
+        # coming) and the server clears it when this build comes up. The time is the droplet's own clock.
+        run: deploy/coming.sh "${DROPLET_USER:-root}@$DROPLET_HOST" building
       - name: Build, send, restart
         if: steps.gate.outputs.go == 'true'
         run: deploy/push-image.sh "${DROPLET_USER:-root}@$DROPLET_HOST"
@@ -73,11 +98,35 @@ jobs:
       - name: Take the note back, it is not coming
         if: failure() && steps.gate.outputs.go == 'true'
         # only if the note is still this build's (what is running stays what it was)
-        run: |
-          ssh -o ConnectTimeout=20 "${DROPLET_USER:-root}@$DROPLET_HOST" \
-            "grep -qs '\"$(git rev-parse --short HEAD)\"' /opt/monet/data/coming.json && rm -f /opt/monet/data/coming.json; true"
+        run: deploy/coming.sh "${DROPLET_USER:-root}@$DROPLET_HOST" gone
       - name: A look from outside
         if: steps.gate.outputs.go == 'true' && vars.DOMAIN != ''
         run: |
           # the certificate comes by itself once the name resolves; until then this only says so
           curl -fsS --retry 5 --retry-delay 5 "https://$DOMAIN/api/version" || echo "::warning::https://$DOMAIN does not answer yet (DNS, or the certificate is still on its way)"
+
+  # A check failed: nothing is deployed, so the note that a build is coming is taken back.
+  called-off:
+    needs: [announce, check]
+    if: always() && needs.check.result != 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+      DROPLET_USER: ${{ secrets.DROPLET_USER }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip when no droplet is configured
+        id: gate
+        run: echo "go=${{ secrets.DROPLET_SSH_KEY != '' && secrets.DROPLET_HOST != '' }}" >> "$GITHUB_OUTPUT"
+      - name: SSH key
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.DROPLET_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # the port is knocked on all day: ask again rather than fail on a dropped connection
+          for try in $(seq 1 10); do ssh-keyscan -T 10 -H "$DROPLET_HOST" >> ~/.ssh/known_hosts 2>/dev/null; [ -s ~/.ssh/known_hosts ] && break; sleep 4; done
+          test -s ~/.ssh/known_hosts
+      - name: Take the note back, it is not coming
+        if: steps.gate.outputs.go == 'true'
+        run: deploy/coming.sh "${DROPLET_USER:-root}@$DROPLET_HOST" gone

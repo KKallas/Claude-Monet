@@ -25,7 +25,6 @@ builder with uv: https://docs.astral.sh/uv/).
     monet.py pose <project> <note> "j1=30, j2=-10" [out.png]   an assembly moved: what it hits, and its picture
     monet.py animate <project> <note> <keys.json>    keyframes on the timeline: {"fps", "length", "tracks": {joint: [[frame, value], …]}}
                                              ("none" takes the animation away)
-    monet.py render-animation <project> <note> [out.gif|out.mp4] [view] [fps]   the timeline as a GIF or MP4, rendered by the server
     monet.py bom <project> <note> [out.csv]  the bill of materials; with out.csv, also as a spreadsheet
     monet.py save <project> "message"        then: git add -A && git commit
     monet.py export <project> <note> <3mf|stl|step|glb> [out]
@@ -346,19 +345,6 @@ def main(argv):
     elif cmd == "animate":
         keys = None if a[2] == "none" else json.loads(Path(a[2]).read_text())
         show(call("animate", project=a[0], note=a[1], animation=keys))
-    elif cmd == "render-animation":
-        out = Path(a[2] if len(a) > 2 else f"{a[1]}.gif")
-        args = dict(project=a[0], note=a[1], format="mp4" if out.suffix.lower() == ".mp4" else "gif",
-                    **({"view": a[3]} if len(a) > 3 else {}), **({"fps": float(a[4])} if len(a) > 4 else {}))
-        r = call("render_animation", **args)
-        while not r.get("url"):      # a big assembly renders apart, for minutes: its progress on one line
-            print(f"\r  {r.get('state', 'rendering')} {a[1]}: {r.get('done', 0)}/{r.get('frames', '?')} frames ", end="", file=sys.stderr, flush=True)
-            time.sleep(3)
-            r = call("render_animation", **args)
-        print(file=sys.stderr)
-        get(r.pop("url"), out, "fetching the animation")
-        show(r)
-        print(out)
     elif cmd == "bom":
         r = call("bom", project=a[0], note=a[1])
         csv_url = r.pop("csv")

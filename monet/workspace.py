@@ -36,7 +36,7 @@ import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import bom as boms, derive, feynman, jobs, joints, lights as lamps, materials, note as notes, runner, semmelweis
+from . import bom as boms, derive, feynman, joints, lights as lamps, materials, note as notes, runner, semmelweis
 
 ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
@@ -93,58 +93,6 @@ ARCHIVED = re.compile(rf"^(versions/[0-9]{{4}}/)?({_NOTE}\.py|{_NOTE}\.checks\.j
 _locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
 _times_guard = threading.Lock()
-
-
-def value_at(keys: list, f: float) -> float:
-    """A track's value at frame f: straight between its keys, held outside them (as valueAt in canvas/timeline.js)."""
-    if f <= keys[0][0]:
-        return keys[0][1]
-    if f >= keys[-1][0]:
-        return keys[-1][1]
-    i = 1
-    while keys[i][0] < f:
-        i += 1
-    (f0, v0), (f1, v1) = keys[i - 1], keys[i]
-    return v1 if f1 == f0 else v0 + (v1 - v0) * (f - f0) / (f1 - f0)
-
-
-_EPS = 1e-9
-
-
-def advance(anim: dict, frame: float, lo: float, d: float, loop: bool = False) -> tuple:
-    """One step of playing, as advance in canvas/timeline.js (a test holds them together): from `frame`, the actions met
-    up to `lo`, on by d frames. Returns (frame, lo, stop, action): a pause stops at its frame, a goto goes on from just
-    before `to`, the end goes round or stops."""
-    nxt, length = frame + d, anim["length"]
-    hi = min(nxt, length)
-    a = next((x for x in anim.get("actions") or () if lo + _EPS < x["frame"] <= hi + _EPS), None)
-    if a and a["do"] == "pause":
-        return a["frame"], a["frame"], True, a
-    if a and a["do"] == "goto":
-        return a["to"], a["to"] - 0.5, False, a
-    if nxt >= length - _EPS:
-        return (length, length, True, None) if not loop else (nxt % length, 0.0, False, None)
-    return nxt, nxt, False, None
-
-
-def played(anim: dict, fps: float, most: int = 20_000) -> list:
-    """The frames of the timeline a video shows at `fps` pictures a second: played from 0 as the canvas plays it, its
-    actions met. It ends at the end, at a pause (held there `hold` seconds), or where a goto would go round again: a
-    loop is shown once (a GIF goes round by itself)."""
-    step, frame, lo, out, met = anim["fps"] / fps, 0.0, 0.0, [0.0], set()
-    while len(out) < most:
-        frame, lo, stop, a = advance(anim, frame, lo, step)
-        if a and a["do"] == "goto":
-            if a["frame"] in met:
-                break
-            met.add(a["frame"])
-        out.append(float(frame))
-        if stop:
-            if len(out) > 1 and out[-1] == out[-2]:
-                out.pop()
-            out += [out[-1]] * round(float((a or {}).get("hold", 0)) * fps)
-            break
-    return out
 
 
 class Problem(Exception):
@@ -677,72 +625,6 @@ class Project:
             (self.dir / "monet.json").write_text(json.dumps(settings, indent=1) + "\n")
             self.touch()
             return animations
-
-    def render_animation(self, name: str, view: str = "iso", fps: float | None = None, size: int = 480, format: str = "gif",
-                         wait: bool | float = True) -> tuple:
-        """(the GIF or MP4, what is in it) of the Note's timeline, rendered here frame by frame from its build (as
-        pose() draws it, followers moved along): one camera for the whole motion. Kept until the build or the keys
-        change. It is rendered as a job (monet/jobs.py), apart from the requests: with wait False (or a number of
-        seconds, waited first), a call answers (None, {…, "state": "rendering", "done", "frames"}) until the file is
-        there."""
-        from . import render
-        if format not in ("gif", "mp4"):
-            raise Problem("format is gif or mp4")
-        anim = (self.settings.get("animations") or {}).get(name)
-        if not anim or not anim.get("tracks"):
-            raise Problem(f"{name} has no animation: give it keyframes first (animate, or the timeline in Motion)", 404)
-        if view not in render.VIEWS:
-            raise Problem(f"view is one of {', '.join(render.VIEWS)}")
-        r = self.result(name)
-        if not r["ok"] or not r.get("motion"):
-            raise Problem(f"{name} has no joints to move" if r["ok"] else f"{name} does not build", 409)
-        mo = r["motion"]
-        moved = set(joints.drivers(mo))
-        used = {j: k for j, k in anim["tracks"].items() if j in moved}
-        if not used:
-            raise Problem(f"none of the animated joints ({', '.join(anim['tracks'])}) is a joint of {name} moved by hand: "
-                          f"there are {', '.join(sorted(moved)) or 'none'}")
-        out_fps = float(min(anim["fps"], fps or 15))
-        if not 1 <= out_fps <= 60:
-            raise Problem("fps is from 1 to 60")
-        size = int(min(1024, max(160, size)))
-        frames = played(anim, out_fps)
-        for _ in range(4):       # at most 240 pictures: a long timeline is shown at fewer of them a second
-            if len(frames) <= 240:
-                break
-            out_fps *= 240 / len(frames)
-            frames = played(anim, out_fps)
-        frames, count = frames[:240], min(240, len(frames))
-        out = self.out / name
-        key = hashlib.sha256(json.dumps([used, frames, view, out_fps, size, (out / "model.glb").stat().st_mtime_ns], default=str).encode()).hexdigest()[:16]
-        path = out / f"animation-{key}.{format}"
-        info = {"frames": count, "fps": round(out_fps, 3), "seconds": round((count - 1) / out_fps, 3), "view": view,
-                "joints": sorted(used), "ignored": sorted(set(anim["tracks"]) - set(used))}
-        if path.exists():
-            return path, {**info, "state": "done"}
-        job = str(path)
-        got = jobs.state(job)
-        if got and got["state"] == "failed":          # no ffmpeg here, or it failed: said, not a crash
-            raise Problem(got["error"], 503)
-        if not got:
-            try:
-                got = jobs.submit(job, render.animation_job, str(out), mo, used, frames, view, size, out_fps,
-                                  sorted(r.get("keepouts") or []), f"{self.name}/{name}", format, str(path),
-                                  str(out / f".animation-{key}.progress"), progress_path=out / f".animation-{key}.progress",
-                                  label=f"{self.name}/{name}", frames=count)
-            except jobs.Busy as e:
-                raise Problem(str(e), 503) from None
-        if wait is not False:
-            try:
-                done = jobs.wait(job, None if wait is True else float(wait))
-            except Exception as e:
-                jobs.state(job)      # forgotten, so it can be asked for again
-                raise Problem(str(e), 503) from None
-            if done:
-                jobs.state(job)
-                return path, {**info, "state": "done"}
-            got = jobs.state(job) or got
-        return None, {**info, **got}
 
     @property
     def tolerance(self) -> float:

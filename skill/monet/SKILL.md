@@ -31,7 +31,7 @@ Cowork, Codex and the like): building runs there. Your tools, in whichever form 
   The link looks like `https://host/w/AbC123…`. The script needs nothing but Python; for building it runs `uv`.
   The tools (`monet.py tool <name> '{…}'`, or its own commands): `guide`, `status`, `new_project`,
   `set_profile`, `read_note`, `write_note`, `sources`, `check`, `look`, `pose`, `reach`, `animate`,
-  `render_animation`, `bom`, `selection`, `add_check`, `load_check`, `save`, `versions`, `diff`,
+  `bom`, `selection`, `add_check`, `load_check`, `save`, `versions`, `diff`,
   `export`, and for the canvas the user has open: `screen`, `goto`, `view`.
 - **No shell**: you cannot build, so you cannot change a part. Say so once, and ask the user for a
   harness with a shell (there is no MCP connector any more: it was taken out).
@@ -501,7 +501,7 @@ LIGHTS = {
   {"lens": [[60, 0], [90, 1]], "room": [[0, 0.3], [40, 0.08]], "haze": [[0, 0.3], [90, 0.75]]}})`,
   levels 0 to 1. Time an animation by its light: the grid glows up, the doors open, the projector
   fades in. The person renders it in the canvas (Render video, in Animation) at the canvas's
-  quality, lights and all; `render_animation` draws the joints only, not the lights.
+  quality, lights and all. You cannot render it: there is no video on the server.
 - The beams are rays cast against the build: a beam that gets out where it should not (through a
   slit between two doors, a hole at a pole) shows as a shaft of light with everything closed.
 
@@ -610,20 +610,18 @@ def pieces(p=PARAMS):
 
 `animate(project, note, {"fps": 30, "length": 120, "tracks": {"leaf_left": [[0, 0], [60, 36], [120, 0]]}})`
 puts keyframes on the timeline in Motion, for the user to play (`null` takes it away; a joint that
-follows moves along by itself). `render_animation(project, note, view="iso", fps=15, format="gif")`
-renders it on the server as a GIF, or with `format="mp4"` as an H.264 video. A big assembly takes
-minutes, so the render runs apart, one at a time on the server, and the call answers within about
-40 s: done, with a `url`; or still running, `state` "rendering" (or "waiting"), `done` of `frames`,
-and you call it again with the same arguments until `state` is "done" and there is a `url`. `monet.py render-animation <project> <note>
-out.mp4` does that waiting for you, with the progress on one line. Do not stitch `pose()` pictures
-together yourself, and do not start the same render again while it runs.
+follows moves along by itself). **The video is the person's to make, in the canvas**: Motion →
+Animation → Render video draws every frame there, lights and all, and gives an MP4 to download.
+The server draws no video (its GIF and MP4 were taken out). To see a moment of the motion
+yourself, call `pose` with the joints as they are at that frame; to show the user, `goto` their
+canvas to the Note in Motion and tell them to press play.
 
 The timeline has an **action line**: `"actions": [{"frame": 60, "do": "pause", "hold": 1.5},
 {"frame": 110, "do": "goto", "to": 20}]` in the same animation. Playing meets them, a scrub never
 does: a `pause` stops at its frame (▶ goes on from there), a `goto` plays on from frame `to` (back:
 a loop). One action to a frame, from frame 1. Those are the only verbs, and they are data: nothing
 in the timeline runs code. A video follows the same path: it ends at a pause (held `hold` seconds,
-up to 10) and shows a loop once, so use a pause to end a GIF on the pose that matters.
+up to 10) and shows a loop once, so use a pause to end a video on the pose that matters.
 
 ## Tags and checks
 

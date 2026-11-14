@@ -41,7 +41,7 @@ test('the ruler numbers stand apart', () => {
   assert.equal(tickStep(10000, 1000), 1000);
 });
 
-test('playing meets the actions as the server plays them for a video (tests/advance.json)', () => {
+test('playing meets the actions: a pause stops, a goto goes on, the end ends or goes round (tests/advance.json)', () => {
   const fx = JSON.parse(readFileSync(new URL('./advance.json', import.meta.url)));
   for (const s of fx.steps) {
     const r = advance(fx.anims[s.anim], { frame: s.frame, lo: s.lo }, s.d, s.loop);
@@ -49,9 +49,19 @@ test('playing meets the actions as the server plays them for a video (tests/adva
   }
 });
 
-test('a video shows the frames the server shows (played, tests/advance.json)', () => {
+test('a video shows the frames playing would (played, tests/advance.json)', () => {
   const fx = JSON.parse(readFileSync(new URL('./advance.json', import.meta.url)));
   for (const p of fx.played) assert.deepEqual(played(fx.anims[p.anim], p.fps), p.out, `${p.anim} at ${p.fps}`);
+});
+
+test('a video follows the actions: to the end, to a pause and held there, a loop of gotos shown once', () => {
+  const plain = { fps: 30, length: 60, tracks: {} }, every3 = (to) => Array.from({ length: to / 3 + 1 }, (_, i) => i * 3);
+  assert.deepEqual(played(plain, 10), every3(60));
+  assert.deepEqual(played({ ...plain, actions: [{ frame: 30, do: 'pause', hold: 1.0 }] }, 10), [...every3(30), ...Array(10).fill(30)]);
+  assert.deepEqual(played({ ...plain, actions: [{ frame: 30, do: 'pause' }] }, 10).slice(-2), [27, 30]);
+  assert.deepEqual(played({ ...plain, actions: [{ frame: 50, do: 'goto', to: 10 }] }, 3), [0, 10, 20, 30, 40, 10, 20, 30, 40]);
+  // two gotos sending playing to each other: shown once, it ends
+  assert.ok(played({ ...plain, actions: [{ frame: 20, do: 'goto', to: 40 }, { frame: 40, do: 'goto', to: 20 }] }, 30).length < 100);
 });
 
 test('an action is met once, going past it, never where playing starts', () => {

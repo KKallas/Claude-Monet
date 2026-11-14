@@ -397,9 +397,9 @@ LIGHTS = {
   a few frames between each picture of the view, from the camera as it stood when it began, so the
   person works on meanwhile. Playing keeps time on a slow computer by skipping frames; when it runs
   under 25 fps the video is rendered by itself, and when it is done it plays over the view, smooth.
-  The frames are the server's (`played()`, in both, held by `tests/advance.json`). The server's
-  GIF/MP4 stays the agent's quick look, with a plainer beam: a job of its own (`monet/jobs.py`,
-  issue #9), one at a time in a process apart, answered with its progress until the file is there.
+  The frames are those playing would show (`played()` in `canvas/timeline.js`, `tests/advance.json`).
+  There was a second video, a GIF or MP4 drawn on the server without lights: taken out (2026-11-14),
+  with its job runner and ffmpeg. An agent looks at a moment of the motion with `pose`.
 - **Pixels** (0.11.0, issue #10): `kind: "pixels"` makes every solid of the parts it names a pixel,
   lit from the LEDs the Note's `leds()` gives (the build finds each LED's pixel: `runner.pixels_of`,
   and reports the count, density, densest over sparsest and the current at full white, which checks
@@ -546,7 +546,7 @@ the saved version with a build of it again. Back up `storage/` if the work matte
 - Splitting a big part makes dowel joints only: no laps, dovetails or bolt tabs, and no cradle for a
   piece that will not stand on its cut face.
 - Lights: no facts or checks of what they do yet (lux on a surface, how much of a beam is cut off, a
-  projector's picture landing whole), no lights in the server's GIF/MP4, the stage (a floor, a wall
+  projector's picture landing whole), the stage (a floor, a wall
   before the projector) is the canvas's own guess, a projector throws a test picture only. The finish
   (photographic pictures and videos by picture and video models, checked against the build) is planned,
   in "Showing it" above. The action line has two verbs, pause and goto.

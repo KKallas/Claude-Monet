@@ -285,20 +285,28 @@ function dress() {
   styleAll(); paint();
 }
 
+// What lies over the lower part of the view (the timeline, the terminal over it): the picture is drawn for what is
+// left. The middle of what is looked at stands in the middle of the part still seen, and Fit fits that part.
+const under = { timeline: 0, terminal: 0 };
+const covered = () => Math.max(0, Math.min(view.clientHeight - 80, Math.max(under.timeline, under.terminal)));
+const fitHalf = () => radius * 1.2 * view.clientHeight / Math.max(1, view.clientHeight - covered());
 function resize() {
   const w = view.clientWidth, h = view.clientHeight;
   renderer.setSize(w, h, false);
   for (const o of [selLines, dimLine, ...holo.children, ...drawn.children, ...sheets.children, ...axes.children]) o.material.resolution?.set(w, h);
   for (const m of neonMaterials) m.resolution.set(w, h);
   sketch.resize();
-  const half = radius * 1.2, aspect = w / Math.max(1, h);
+  const half = fitHalf(), aspect = w / Math.max(1, h), low = covered();
   Object.assign(ortho, { left: -half * aspect, right: half * aspect, top: half, bottom: -half, near: 0.01, far: radius * 40 });
   Object.assign(persp, { aspect, near: radius / 100, far: radius * 100 });
-  ortho.updateProjectionMatrix(); persp.updateProjectionMatrix();
+  for (const cam of [ortho, persp]) {      // the window of each camera moved down by half of what is covered: the picture moves up
+    if (low > 0 && h > 0) cam.setViewOffset(w, h, 0, low / 2, w, h); else if (cam.view) cam.clearViewOffset();
+    cam.updateProjectionMatrix();
+  }
   lamps.resize();
 }
 // how far the perspective camera stands for the part to fill the view as the orthographic one shows it at zoom 1
-const fitDistance = (fov = persp.fov) => radius * 1.2 / Math.tan(THREE.MathUtils.degToRad(fov) / 2);
+const fitDistance = (fov = persp.fov) => fitHalf() / Math.tan(THREE.MathUtils.degToRad(fov) / 2);
 // half the height of what is seen around the target, in mm
 const seenHalf = () => camera.isOrthographicCamera ? camera.top / camera.zoom
   : camera.position.distanceTo(controls.target) * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / camera.zoom;
@@ -310,8 +318,8 @@ function useCamera(next) {
   if (next === camera) return;
   const half = seenHalf(), dir = camera.position.clone().sub(controls.target).normalize();
   next.up.copy(camera.up);
-  if (next.isPerspectiveCamera) { next.zoom = camera.zoom; next.position.copy(controls.target).addScaledVector(dir, fitDistance() * half * camera.zoom / (radius * 1.2)); }
-  else { next.zoom = radius * 1.2 / half; next.position.copy(controls.target).addScaledVector(dir, radius * 8); }
+  if (next.isPerspectiveCamera) { next.zoom = camera.zoom; next.position.copy(controls.target).addScaledVector(dir, fitDistance() * half * camera.zoom / fitHalf()); }
+  else { next.zoom = fitHalf() / half; next.position.copy(controls.target).addScaledVector(dir, radius * 8); }
   next.add(head);
   camera = next; controls.object = camera;
   resize(); controls.update();
@@ -1330,30 +1338,10 @@ const atPose = (name) => {
   const mo = model(), p = mo?.poses?.[name];
   return !!p?.resolved && drivers(mo).every((k) => Math.abs((S.pose[k] ?? 0) - (p.values[k] ?? 0)) < 1e-6);
 };
-/** The timeline as a GIF or an MP4, drawn on the server from the build: fetched with the wait shown, then saved. */
-async function exportAnimation(fmt = 'gif') {
-  const view = $('#gifView')?.value || 'iso', note = S.note, what = fmt === 'mp4' ? 'video' : 'GIF';
-  busy(`drawing the ${what}…`, {});
-  try {
-    const url0 = `${root}/p/${S.project}/n/${note}/animation.${fmt}?view=${encodeURIComponent(view)}&fps=${fmt === 'mp4' ? 30 : 15}`;
-    let r = await fetch(url0);
-    while (r.status === 202) {      // rendered apart on the server, one at a time: its progress, then the file
-      const p = await r.json().catch(() => ({}));
-      busy(`drawing the ${what} on the server… ${p.done ?? 0}/${p.frames ?? '?'} frames${p.state === 'waiting' ? ' (waiting for another render)' : ''}`, {});
-      await new Promise((ok) => setTimeout(ok, 2000));
-      r = await fetch(url0);
-    }
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `error ${r.status}`);
-    const url = URL.createObjectURL(await r.blob()), a = Object.assign(document.createElement('a'), { href: url, download: `${note}.${fmt}` });
-    document.body.append(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    busy();
-  } catch (e) { busy(); tell(`The ${what} was not made: ${e.message}`); }
-}
 
 // ---- the view as a video, rendered in the background --------------------------------------------------------------
 // Playing keeps time: a slow computer skips frames (the timeline moves by the clock). Render video draws every frame
-// of the timeline (as the server's video has them: played()) from the camera as it stood when it began, a few between
+// of the timeline (played(), in timeline.js) from the camera as it stood when it began, a few between
 // each picture of the view, so the person goes on working and never sees them; H.264 (canvas/video.js). Done, the video
 // plays over the view, smooth however slow this computer is. It starts by itself when playing runs under 25 fps.
 const filmKey = () => JSON.stringify([S.project, S.note, S.rev, timeline.anim.fps, timeline.anim.tracks, timeline.anim.actions, lamps.on]);
@@ -1499,7 +1487,7 @@ const timeline = createTimeline($('#timeline'), {
       if (!$('#panel [data-card="gif"]') !== !keyed) renderPanel();      // the Animation card comes or goes
     } catch (e) { notice(`the keyframes were not kept: ${e.message}`); }
   },
-  height(px) { view.style.setProperty('--tl-h', `${px}px`); view.classList.toggle('timed', px > 0); },
+  height(px) { view.style.setProperty('--tl-h', `${px}px`); view.classList.toggle('timed', px > 0); if (under.timeline !== px) { under.timeline = px; if (ready) resize(); } },
 });
 function showTimeline() {
   const mo = moving() ? model() : null;
@@ -1763,10 +1751,8 @@ function motionCards() {
   const anim = S.proj?.animations?.[S.note];
   if (Object.values(anim?.tracks ?? {}).some((k) => k.length) || Object.values(anim?.lights ?? {}).some((k) => k.length)) {
     const f = film?.note === S.note ? film : null, rendering = f && !f.done;
-    cards.push(card('gif', 'Animation', `<p class="muted" style="margin-top:0">The timeline, ${fmt(anim.length)} frames at ${fmt(anim.fps)} fps. <b>Render video</b> draws every frame from this view, lights and all, in the background while you work: smooth however slow this computer is (it starts by itself when playing runs under ${SMOOTH} fps). GIF and MP4 are drawn on the server, plainer.</p>
-      <div class="line"><button class="primary" data-act="film" title="${rendering ? 'stop rendering the video' : 'draw every frame of the timeline from this view, in the background, as an H.264 video'}">${rendering ? '■ Stop' : '● Render video'}</button>${f?.done ? `<button data-act="watch" title="the video over the view${filmed() ? '' : ' (made before the timeline changed)'}">▶ Watch</button>` : ''}<span style="flex:1"></span>
-        <select id="gifView" title="where the camera stands">${['iso', 'front', 'right', 'top', 'iso_back'].map((k) => `<option value="${k}">${k.replace('_', ' ')}</option>`).join('')}</select>
-        <button data-act="gif">GIF</button><button data-act="mp4">MP4</button></div>`));
+    cards.push(card('gif', 'Animation', `<p class="muted" style="margin-top:0">The timeline, ${fmt(anim.length)} frames at ${fmt(anim.fps)} fps. <b>Render video</b> draws every frame from this view, lights and all, in the background while you work: smooth however slow this computer is (it starts by itself when playing runs under ${SMOOTH} fps). When it is done: Watch, and Download MP4 there.</p>
+      <div class="line"><button class="primary" data-act="film" title="${rendering ? 'stop rendering the video' : 'draw every frame of the timeline from this view, in the background, as an H.264 video'}">${rendering ? '■ Stop' : '● Render video'}</button>${f?.done ? `<button data-act="watch" title="the video over the view${filmed() ? '' : ' (made before the timeline changed)'}">▶ Watch</button>` : ''}<span style="flex:1"></span></div>`));
   }
   return cards;
 }
@@ -2494,7 +2480,6 @@ $('#panel').addEventListener('click', (e) => {
   if (a === 'clear') { select([], {}); return; }
   if (a === 'posehome') { goHome(); return; }
   if (a === 'posego') { goPose(b.dataset.name); return; }
-  if (a === 'gif' || a === 'mp4') { exportAnimation(a); return; }
   if (a === 'film') { if (film && !film.done) stopFilm('the video stopped'); else startFilm(); return; }
   if (a === 'watch') { watchFilm(); return; }
   if (a === 'lights') {
@@ -2703,6 +2688,7 @@ brief = createBrief($('#briefBtn'), { project: () => S.project, api, ask, tell,
 // the terminal: this page to Monet local on this computer, never through the server (terminal.js)
 terminal = createTerminal(view, $('#termBtn'), { project: () => S.project, link: () => S.state?.agent ?? '',
   mine: () => !!S.state && S.state.me.username === S.state.workspace.username,
+  height(px) { if (under.terminal !== px) { under.terminal = px; resize(); wake(); } },      // it lies over the view: the picture is drawn for what is left
   // the one thing that closes the agent's door: another key (the line with the old one in it stops working at once)
   async newKey() {
     if (!(await ask('Make a new agent key? The line you started Monet local with stops working at once: stop it (Ctrl+C) and start it again with the new line. Anyone else who had the old line is shut out.', { yes: 'New key', danger: true }))) return false;
@@ -2759,7 +2745,7 @@ async function lookForNewer() {
   }
   // its times are the server's clock: only the difference is used, so this page's clock may be off
   const c = v.coming;
-  coming = c ? { commit: c.commit, start: Date.now() - (c.now - c.since) * 1000, ready: Date.now() + (c.since + c.expect - c.now) * 1000 } : null;
+  coming = c ? { commit: c.commit, stage: c.stage, start: Date.now() - (c.now - c.since) * 1000, ready: Date.now() + (c.since + c.expect - c.now) * 1000 } : null;
   if (!coming) document.querySelector('.newer')?.remove();
   showComing();
 }
@@ -2770,7 +2756,7 @@ function showComing() {
   const when = left > 90 ? `ready in about ${Math.round(left / 60)} min, around ${at}` : left > 0 ? `ready in about ${left} s` : 'ready any moment now';
   const bar = newer();
   bar.className = 'newer coming';
-  bar.innerHTML = `<span>A new version of Monet is being built (${esc(coming.commit)}): ${when}.</span><span class="track"><i style="width:${(done * 100).toFixed(1)}%"></i></span>`;
+  bar.innerHTML = `<span>A new version of Monet is on its way (${esc(coming.commit)}), ${coming.stage === 'testing' ? 'being tested' : 'being built'}: ${when}.</span><span class="track"><i style="width:${(done * 100).toFixed(1)}%"></i></span>`;
 }
 setInterval(showComing, 1000);
 // the build this page runs, beside the name, as in Adam Designer: a link to its source
@@ -2778,8 +2764,9 @@ versionNow().then((v) => {
   if (!v) return;
   loadedCommit = v.commit;
   $('#chip').innerHTML = `${esc(v.version)} · <a href="${esc(v.source)}" target="_blank" rel="noopener" title="the source: ${esc(v.license)}">${esc(v.commit)}</a>`;
-  // then every minute; every ten seconds while a build is on its way, so the button comes soon after it does
-  (function watch() { lookForNewer().finally(() => setTimeout(watch, coming ? 10_000 : 60_000)); })();
+  // then every twenty seconds, so the note is there soon after a push started its run; every ten while a build is on
+  // its way, so the button comes soon after it does
+  (function watch() { lookForNewer().finally(() => setTimeout(watch, coming ? 10_000 : 20_000)); })();
 });
 document.addEventListener('visibilitychange', lookForNewer);
 

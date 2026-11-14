@@ -1,5 +1,5 @@
 {
-  "_": "One step of playing the timeline: canvas/timeline.js advance and monet/workspace.py advance both meet these (tests/timeline.test.mjs, tests/test_workspace.py); played: the frames of a video, played() in both.",
+  "_": "One step of playing the timeline: canvas/timeline.js advance meets these (tests/timeline.test.mjs); played: the frames of the canvas's video, played() there. (There was a Python copy for the server's GIF and MP4: gone with them, 2026-11-14.)",
   "anims": {
     "acts": {"fps": 30, "length": 120, "tracks": {}, "actions": [{"frame": 20, "do": "pause"}, {"frame": 60, "do": "pause", "hold": 1.5}, {"frame": 100, "do": "goto", "to": 20}]},
     "plain": {"fps": 30, "length": 120, "tracks": {}}

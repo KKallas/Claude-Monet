@@ -100,6 +100,16 @@ def test_a_deploy_on_its_way_and_how_long_it_took(tmp_path):
     assert not (data / "coming.json").exists() and json.loads((data / "deploys.json").read_text()) == [200]
     (data / "coming.json").write_text(json.dumps({"commit": "f00ba48", "since": time.time()}))
     assert TestClient(create_app(tmp_path / "storage", data)).get("/api/version").json()["coming"]["expect"] == 200
+    # a note left when the push started its run (the tests and all) says where it stands, and is timed apart
+    (data / "coming.json").write_text(json.dumps({"commit": "f00ba49", "since": time.time() - 60, "whole": True, "stage": "testing"}))
+    v = TestClient(create_app(tmp_path / "storage", data)).get("/api/version").json()["coming"]
+    assert v["stage"] == "testing" and v["expect"] == 8 * 60
+    (data / "coming.json").write_text(json.dumps({"commit": running, "since": time.time() - 800, "whole": True, "stage": "building"}))
+    TestClient(create_app(tmp_path / "storage", data)).get("/api/version")
+    assert json.loads((data / "deploys-whole.json").read_text()) == [800] and json.loads((data / "deploys.json").read_text()) == [200]
+    (data / "coming.json").write_text(json.dumps({"commit": "f00ba4a", "since": time.time(), "whole": True, "stage": "nonsense"}))
+    v = TestClient(create_app(tmp_path / "storage", data)).get("/api/version").json()["coming"]
+    assert v["expect"] == 800 and v["stage"] == "building"
 
 
 def test_nothing_of_a_workspace_without_a_login(app, reg):
@@ -582,7 +592,7 @@ def test_a_note_is_put_at_a_snap_point_from_the_canvas(client, reg):
 
 
 def test_the_lamp_over_both_doors(client, reg):
-    """The new tools over HTTP: the profile from the canvas, an animation from the agent and its GIF, the BOM as a
+    """The new tools over HTTP: the profile from the canvas, an animation from the agent, the BOM as a
     spreadsheet; each file from the door it belongs to."""
     from test_lamp import LAMP, LEAF, VERTEBRA
     w, h = f"/w/{reg['id']}", f"/w/{reg['name']}"
@@ -597,27 +607,10 @@ def test_the_lamp_over_both_doors(client, reg):
     # the agent's timeline, as JSON in a query string's way too
     anim = {"fps": 10, "length": 10, "tracks": {"leaf_left": [[0, 0], [10, 90]]}}
     assert client.post(f"{w}/agent/animate", json={"project": "lamp_http", "note": "lamp", "animation": json.dumps(anim)}).json()["animation"]["length"] == 10
-    for _ in range(600):      # rendered apart (issue #9): asked again until the file is there
-        r = client.post(f"{w}/agent/render_animation", json={"project": "lamp_http", "note": "lamp", "fps": 5}).json()
-        if r.get("url"):
-            break
-        time.sleep(0.1)
-    assert r["frames"] == 6
-    gif = client.get(r["url"].split("testserver", 1)[1])
-    assert gif.headers["content-type"] == "image/gif" and gif.content[:6] == b"GIF89a"
-    def fetched(url):      # the canvas asks again until it is there (202 and the progress meanwhile)
-        first = got = client.get(url)
-        for _ in range(600):
-            if got.status_code != 202:
-                break
-            time.sleep(0.1)
-            got = client.get(url)
-        return first, got
-    first, gif = fetched(f"{h}/api/p/lamp_http/n/lamp/animation.gif")
-    assert first.status_code == 202 and first.json()["frames"] == 11 and gif.content[:6] == b"GIF89a"
-    _, mp4 = fetched(f"{h}/api/p/lamp_http/n/lamp/animation.mp4")
-    assert mp4.headers["content-type"] == "video/mp4" and mp4.content[4:8] == b"ftyp"
-    assert client.get(f"{h}/api/p/lamp_http/n/lamp/animation.avi").status_code == 404
+    # no video is drawn here (the canvas renders its own): neither door has a file of one
+    assert client.post(f"{w}/agent/render_animation", json={"project": "lamp_http", "note": "lamp"}).status_code == 404
+    assert client.get(f"{h}/api/p/lamp_http/n/lamp/animation.gif").status_code == 404
+    assert client.get(f"{w}/file/p/lamp_http/n/lamp/animation.mp4").status_code == 404
     b = client.post(f"{w}/agent/bom", json={"project": "lamp_http", "note": "lamp"}).json()
     assert b["printed"]["vertebra"]["qty"] == 3
     csv = client.get(b["csv"].split("testserver", 1)[1])

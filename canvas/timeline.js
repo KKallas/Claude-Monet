@@ -16,7 +16,7 @@ export function actionBetween(actions = [], lo, hi) {
 /**
  * One step of playing: from {frame, lo} (lo: up to where the actions are met already) on by `d` frames. Returns
  * {frame, lo, stop, action}. A goto lands just before `to`, so an action at `to` is met on the next step; at the end
- * it goes round (loop) or stops there. The same step as `advance` in monet/workspace.py: a test holds them together.
+ * it goes round (loop) or stops there. Held by tests/advance.json.
  */
 export function advance(anim, { frame, lo }, d, loop) {
   const next = frame + d, a = actionBetween(anim.actions, lo, Math.min(next, anim.length));
@@ -54,8 +54,7 @@ export function opened(a) {
   delete out.lights;
   return out;
 }
-/** The frames of the timeline a video shows at `fps` pictures a second, as monet/workspace.py played() has them (the
- *  two held together by tests/advance.json): from 0, its actions met; it ends at the end, at a pause (held `hold`
+/** The frames of the timeline a video shows at `fps` pictures a second (tests/advance.json): from 0, its actions met; it ends at the end, at a pause (held `hold`
  *  seconds), or where a goto would go round again (a loop is shown once). */
 export function played(anim, fps, most = 20000) {
   const step = anim.fps / fps, out = [0], met = new Set();

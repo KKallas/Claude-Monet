@@ -211,6 +211,9 @@ def test_the_tokens_it_answers_its_own_and_those_a_canvas_made(tmp_path, monkeyp
 
 async def test_a_page_with_a_token_the_canvas_made_gets_in(tmp_path, monkeypatch):
     monkeypatch.setattr(local, "runs", lambda: {"shell": ["/bin/sh"]})
+    # nothing said before: the Activity tab would send it all, and this client, which hangs up without reading, would
+    # wait ten seconds for its goodbye behind those lines (twice: that was 20 of this suite's seconds; a browser reads)
+    monkeypatch.setattr(local, "LOG", [])
     it = local.Local(Server(), "p", tmp_path, ["this-computers-own", "the-one-in-the-line"], 0)
     async with websockets.serve(it.serve, "127.0.0.1", 0, origins=it.origins()) as server:
         url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"

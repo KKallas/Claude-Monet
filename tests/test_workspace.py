@@ -324,37 +324,6 @@ def test_the_action_line_is_checked_and_kept(project):
             project.set_animation("rod_foot", {"length": 60, "actions": bad})
 
 
-def test_advance_plays_as_the_canvas_does():
-    """The same steps as canvas/timeline.js advance (tests/advance.json, which tests/timeline.test.mjs reads too)."""
-    from monet.workspace import advance
-    fx = json.loads((Path(__file__).parent / "advance.json").read_text())
-    for s in fx["steps"]:
-        f, lo, stop, a = advance(fx["anims"][s["anim"]], s["frame"], s["lo"], s["d"], s["loop"])
-        assert [f, lo, stop, a and a["frame"]] == s["out"], s
-
-
-def test_a_video_shows_what_the_canvas_renders():
-    """played(), as canvas/timeline.js has it too (tests/advance.json): the canvas's own video and the server's agree."""
-    from monet.workspace import played
-    fx = json.loads((Path(__file__).parent / "advance.json").read_text())
-    for p in fx["played"]:
-        assert played(fx["anims"][p["anim"]], p["fps"]) == p["out"], p
-
-
-def test_a_video_follows_the_actions():
-    """To the end; to a pause and held there; a loop of gotos shown once."""
-    from monet.workspace import played
-    plain = {"fps": 30, "length": 60, "tracks": {}}
-    assert played(plain, 10) == [float(f) for f in range(0, 61, 3)]
-    held = {**plain, "actions": [{"frame": 30, "do": "pause", "hold": 1.0}]}
-    assert played(held, 10) == [float(f) for f in range(0, 31, 3)] + [30.0] * 10
-    assert played({**plain, "actions": [{"frame": 30, "do": "pause"}]}, 10)[-2:] == [27.0, 30.0]
-    loop = {"fps": 30, "length": 60, "tracks": {}, "actions": [{"frame": 50, "do": "goto", "to": 10}]}
-    assert played(loop, 3) == [0.0, 10.0, 20.0, 30.0, 40.0, 10.0, 20.0, 30.0, 40.0]
-    stuck = {**plain, "actions": [{"frame": 20, "do": "goto", "to": 40}, {"frame": 40, "do": "goto", "to": 20}]}
-    assert len(played(stuck, 30)) < 100          # two gotos sending playing to each other: shown once, it ends
-
-
 def test_the_main_is_the_note_named_as_the_project_or_the_biggest_design(ws):
     """status says what each Note uses (imports and PLACED) and which is the main: the canvas draws the tree from it."""
     from monet.workspace import main_of

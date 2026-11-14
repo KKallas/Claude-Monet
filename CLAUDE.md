@@ -125,14 +125,15 @@ wrong:
   assembly still uses `build()`. The agent may write a timeline (`animate`): it changes no geometry.
 - **The action line is data, never code** (Kaspar, 2026-11-11): the timeline's `actions` have two verbs, `pause` and
   `goto` (`workspace.ACTIONS`); add a verb when one is needed, never a script, since the agent runs no code in the canvas.
-  Playing steps through `advance` in `canvas/timeline.js`, and a video through its Python copy in `workspace.py`
-  (`played`); `tests/advance.json` holds the two together. The finish by picture models is planned in the README
+  Playing steps through `advance` in `canvas/timeline.js`, and the canvas's video through `played` there
+  (`tests/advance.json`; the Python copy went with the server's video). The finish by picture models is planned in the README
   ("Showing it"); who calls the models is still open.
-- **Slow work is a job** (issue #9): `render_animation` runs in `monet/jobs.py` (a process pool of one, a fresh process
-  each, at most 4 waiting) and answers its progress (202 on the file route) until the file is there; never render in
-  a request. The canvas renders its own video in the background (`canvas/video.js`, `startFilm`/`shoot` in canvas.js:
+- **The video is the canvas's own** (`canvas/video.js`, `startFilm`/`shoot` in canvas.js): rendered in the background,
   frames between the view's pictures, from a frozen camera, poses by `placeParts`, levels by `lamps.lightly`, never
-  `poseTo`/`setLevel`, which check clashes and restyle); it starts by itself when playing runs under 25 fps.
+  `poseTo`/`setLevel`, which check clashes and restyle; it starts by itself when playing runs under 25 fps. **The server
+  draws no video** (Kaspar, 2026-11-14): `render_animation`, `monet/jobs.py`, the animation routes and ffmpeg were
+  taken out (they were most of the test suite's time). An agent sees a moment of a motion with `pose`. Do not render in
+  a request, and do not bring a renderer back to the server without him.
 - **Pixels** (0.11.0, issue #10): a `pixels` light's pixels are solids of the parts it names, found by the build
   (`runner.pixels_of`, with the LEDs of the Note's `leds()`), in faces.json `pixels` and the report's `pixels`.
   `canvas/pixels.js` patches the parts' materials (onBeforeCompile, chained); colours are kept as shown (sRGB) and made
@@ -163,6 +164,14 @@ wrong:
   that mean the same are the same (`meaning()` in local.py: checks by name, without `by`, 1 as 1.0). Git itself is done
   by the user's agent with `git` and `gh` (skill: `references/repository.md`; for the person: `docs/REPOSITORY.md`,
   linked from the Brief). No git on the server, and no token of anybody's in Monet.
+- **A build on its way is said from the start of the run** (Kaspar, 2026-11-14): the workflow's first job (`announce`,
+  beside the checks) leaves `data/coming.json` on the droplet through `deploy/coming.sh` (`testing`, then `building`
+  when the checks passed, `gone` when one failed: the job `called-off`); `coming()` in `monet/app.py` answers it in
+  `/api/version` with a stage and how long whole runs took lately (`deploys-whole.json`; a note without `whole` is the
+  building alone, timed apart), and the canvas counts down to it (it asks every 20 s).
+- **What lies over the view** (the timeline, the terminal): `covered()` and `fitHalf()` in `canvas.js`. Both cameras
+  get a view offset so the middle of what is looked at stands in the middle of what is still seen, and Fit fits that.
+  A panel that covers the view tells `under` its height and calls `resize()`.
 - **Opening a Note in the canvas** (`open()`/`openNow()` in `canvas.js`): one rules at a time. A later one takes over
   (`late()` after every await), the page's own poll waits while one runs (`opens`), and `held` is the project/Note whose
   build the frame holds, which is what decides whether the camera refits and the frame says "loading" (`arriving()`).

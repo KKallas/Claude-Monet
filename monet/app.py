@@ -52,16 +52,19 @@ def version() -> dict:
             "license": "AGPL-3.0-or-later", "note": os.environ.get("MONET_NOTE", "")}
 
 
-# A deploy on its way: as it starts building, deploy.yml writes data/coming.json, {"commit", "since"}. Until that
+# A deploy on its way: as soon as a push starts its run, deploy.yml writes data/coming.json, {"commit", "since",
+# "whole": true, "stage": "testing"} (deploy/coming.sh), and says "building" when the tests have passed. Until that
 # commit is the one running, /api/version says so, with how long it should take: the middle of the last few deploys,
-# timed here as each one comes up.
-DEPLOY_GUESS = 240      # seconds, until there are deploys to go by
-DEPLOY_STALE = 30 * 60      # a note older than this is a deploy that never came
+# timed here as each one comes up. A note without "whole" is one left when the building started (as before
+# 2026-11-14, and by push-image.sh from a laptop): those are timed apart, they are a quarter as long.
+DEPLOY_GUESS = 240      # seconds, until there are deploys to go by: the building alone
+DEPLOY_GUESS_WHOLE = 8 * 60      # and with the tests before it (2026-11-14: about 3 minutes of tests since the server draws no video, 4 of building)
+DEPLOY_STALE = 40 * 60      # a note older than this is a deploy that never came
 
 
-def deploy_times(data: Path) -> list[int]:
+def deploy_times(data: Path, whole: bool = False) -> list[int]:
     try:
-        return [int(t) for t in json.loads((data / "deploys.json").read_text())]
+        return [int(t) for t in json.loads((data / ("deploys-whole.json" if whole else "deploys.json")).read_text())]
     except (OSError, ValueError, TypeError):
         return []
 
@@ -74,8 +77,10 @@ def coming(data: Path, running: str) -> dict | None:
         return None
     if commit == running or not 0 <= time.time() - since < DEPLOY_STALE:
         return None
-    times = sorted(deploy_times(data))
-    return {"commit": commit, "since": since, "expect": times[len(times) // 2] if times else DEPLOY_GUESS, "now": time.time()}
+    whole = note.get("whole") is True
+    times = sorted(deploy_times(data, whole))
+    return {"commit": commit, "since": since, "expect": times[len(times) // 2] if times else DEPLOY_GUESS_WHOLE if whole else DEPLOY_GUESS,
+            "now": time.time(), "stage": note.get("stage") if note.get("stage") in ("testing", "building") else "building"}
 
 
 def arrived(data: Path, running: str) -> None:
@@ -88,7 +93,8 @@ def arrived(data: Path, running: str) -> None:
     except (OSError, ValueError, KeyError, TypeError):
         return
     if 0 < took < DEPLOY_STALE:
-        (data / "deploys.json").write_text(json.dumps((deploy_times(data) + [round(took)])[-8:]))
+        whole = note.get("whole") is True
+        (data / ("deploys-whole.json" if whole else "deploys.json")).write_text(json.dumps((deploy_times(data, whole) + [round(took)])[-8:]))
     with contextlib.suppress(OSError):
         (data / "coming.json").unlink()
 
@@ -867,21 +873,6 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         label = name if v == "draft" else f"{name}-v{v}"
         return FileResponse(path, media_type=EXPORTS[fmt], filename=f"{label}.{fmt}", headers=NO_STORE)
 
-    def animation_file(request, ws, _body):
-        """The timeline of an assembly as a GIF or an MP4, rendered here from its build (render_animation)."""
-        p, name = note_of(request, ws)
-        q, fmt = request.query_params, request.path_params["fmt"]
-        if fmt not in ("gif", "mp4"):
-            raise Problem("an animation is a .gif or an .mp4", 404)
-        try:
-            fps = float(q.get("fps") or 0) or None
-        except ValueError:
-            raise Problem("fps is a number")
-        path, info = p.render_animation(name, q.get("view", "iso"), fps, format=fmt, wait=False)
-        if path is None:      # rendering apart (monet/jobs.py): ask again for the file
-            return JSONResponse(info, status_code=202, headers=NO_STORE)
-        return FileResponse(path, media_type="image/gif" if fmt == "gif" else "video/mp4", filename=f"{name}.{fmt}", headers=NO_STORE)
-
     def bom_of(request, ws, _body):
         p, name = note_of(request, ws)
         return p.bom(name)
@@ -994,7 +985,6 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route(n + "/diff", api(diff)),
         Route(n + "/diff.glb", api(diff_model)),
         Route(n + "/export.{fmt}", api(export)),
-        Route(n + "/animation.{fmt}", api(animation_file)),
         Route(n + "/bom", api(bom_of)),
         Route(n + "/bom.csv", api(bom_csv)),
         # the agent's door: /w/<agent key>: the tools, and the files their answers point at
@@ -1005,7 +995,6 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route(f + "/model.glb", door(model)),
         Route(f + "/fingerprint.json", door(fingerprint)),
         Route(f + "/export.{fmt}", door(export)),
-        Route(f + "/animation.{fmt}", door(animation_file)),
         Route(f + "/bom.csv", door(bom_csv)),
         Route("/w/{wid}/file/view.png", door(view_png)),
         Mount("/static/{build}", Fresh(directory=CANVAS)),      # /static/<commit>/canvas.js: what the pages ask for

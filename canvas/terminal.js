@@ -31,7 +31,8 @@ const came = paired(location.hash);
 if (came) { pair = came; history.replaceState(null, '', location.pathname + location.search); }
 
 /** hooks: { mine(): is this my own workspace, project(): the one the canvas shows, link(): my agent link,
- *  newKey(): make another agent key (asks first), true when it was made } */
+ *  newKey(): make another agent key (asks first), true when it was made, height(px): how much of the view the
+ *  open panel covers (0 when shut) } */
 export function createTerminal(view, button, hooks) {
   const root = document.createElement('div');
   root.className = 'term';
@@ -160,6 +161,7 @@ export function createTerminal(view, button, hooks) {
     h = Math.round(Math.max(120, Math.min(view.clientHeight - 80, next)));
     root.style.height = `${h}px`;
     view.style.setProperty('--term-h', root.hidden ? '0px' : `${h}px`);
+    hooks.height?.(root.hidden ? 0 : h);      // the view draws its picture for what the panel leaves of it
   }
 
   async function show(on) {
