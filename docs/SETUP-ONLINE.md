@@ -62,10 +62,9 @@ ever run on the droplet: people's agents build on their own computers and upload
 
 - `https://monet.example.org` shows the login page.
 - Log in, open `starter/rod_foot`: the part appears (built when the image was made).
-- `https://monet.example.org/api` describes the agent's door; the skill from "Connect your agent"
-  builds with uv on the person's computer.
-- Claude Desktop → Settings → Connectors → Add custom connector → the address from
-  "Connect your agent" in the canvas.
+- `https://monet.example.org/api` describes the agent's door.
+- In the canvas, **Terminal** shows one line: pasted into a terminal on the person's computer it fetches the
+  skill, builds with uv there, and the panel comes alive.
 
 ## Looking after it
 

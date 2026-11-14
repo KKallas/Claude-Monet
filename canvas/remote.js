@@ -8,10 +8,8 @@
 
 const MAX = 200_000, PICTURE = 12_000_000;      // characters of an answer, and of one with a picture in it
 
-let view = null, ws = null, retry = 0, again = 0, said = '';
+let mine = false, ws = null, retry = 0, said = '';
 let base = '', app = null;
-const listeners = new Set();
-const changed = () => { for (const fn of listeners) fn(); };
 
 /** What a value of the page is as JSON: Sets and Maps as lists and objects, a cycle cut, three.js kept short. */
 function json(value, max = MAX) {
@@ -52,10 +50,10 @@ function say(always = false) {
 }
 
 function dial() {
-  if (ws || !view) return;
+  if (ws || !mine) return;
   const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${base}/remote/tab`);
   ws = socket;
-  socket.onopen = () => { retry = 0; said = ''; say(); changed(); };
+  socket.onopen = () => { retry = 0; said = ''; say(); };
   socket.onmessage = (e) => {
     let m;
     try { m = JSON.parse(String(e.data)); } catch { return; }
@@ -65,42 +63,22 @@ function dial() {
   socket.onclose = (e) => {
     if (ws !== socket) return;
     ws = null;
-    changed();
     if (e.code === 4003) return;      // not mine to dial (logged out, or looking in at another's)
-    again = setTimeout(dial, Math.min(30_000, 2000 * 2 ** retry++));
+    setTimeout(dial, Math.min(30_000, 2000 * 2 ** retry++));
   };
 }
 
-function take(next) {
-  view = next;
-  if (next) dial();
-  else { clearTimeout(again); const old = ws; ws = null; said = ''; if (old) { old.onclose = null; old.close(); } }
-  changed();
-}
-
-async function refresh() {
-  try {
-    const r = await fetch(`${base}/remote`, { cache: 'no-store' });
-    if (r.ok) take(await r.json());
-  } catch { /* the server is away; the next look will tell */ }
-  return view;
-}
-
 export const remote = {
-  /** api: '/w/<username>/api'. hands: what the page answers with (where, screen, goto, view). first: the state's own
-   *  view: null when this is not the person's own workspace, and then nothing dials. */
-  start(api, hands, first) {
-    base = api; app = hands;
-    take(first ?? null);
+  /** api: '/w/<username>/api'. hands: what the page answers with (where, screen, goto, view). own: this is the
+   *  person's own workspace; when it is not (an admin looking in), nothing dials. */
+  start(api, hands, own) {
+    base = api; app = hands; mine = !!own;
+    dial();
     window.addEventListener('hashchange', () => say());
     document.addEventListener('visibilitychange', () => say());
     setInterval(() => say(true), 25_000);
   },
   /** what the page shows changed (another Note, another area): said to the server if it is another */
   say: () => say(),
-  /** { seen, tabs, recent }: when the agent was last here, the pages it can see, what it changed lately */
-  view: () => view,
   connected: () => ws?.readyState === WebSocket.OPEN,
-  onChange(fn) { listeners.add(fn); },
-  refresh,
 };

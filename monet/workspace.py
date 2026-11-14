@@ -44,12 +44,50 @@ EXPORTS = {"stl": "model/stl", "3mf": "model/3mf", "step": "model/step", "glb": 
 MATERIALS = ("pla", "pom", "aluminium", "pc")      # what the canvas can render a part as (canvas/look.js); pc: clear polycarbonate
 ACTIONS = {"pause": ("hold",), "goto": ("to",)}    # the verbs of the timeline's action line and what each may say more
 MAX_SOURCE = 200_000
+# The brief: the project in words, for whoever picks it up next (a person, or an agent on another computer with an
+# hour of somebody's tokens): what it is, where its repository and its issues are, what is done, what comes next.
+# One Markdown file beside the Notes; it travels with the folder, the archive and every saved version.
+BRIEF = "PROJECT.md"
+MAX_BRIEF = 64_000
+BRIEF_TEMPLATE = """# {project}
+
+What this is, in a paragraph: what it does, who it is for, what it is made of.
+
+## Where it lives
+
+- Repository: (the git address of this folder)
+- Issues: (where the work is listed, for example https://github.com/OWNER/REPO/issues)
+- Monet: {where}
+
+## State
+
+What exists and works today: which Notes are built and green, what was printed, bought or tried.
+
+## Milestones
+
+- [ ] the first one
+
+## Next
+
+The next things to do, the most useful first, each small enough for one sitting. Name the issue it belongs to.
+
+1. …
+
+## Log
+
+Newest first. One entry a sitting: the date, who worked (a person, or an agent and its model), what was done,
+what was left open.
+
+## Working notes
+
+What the next one needs and would not find in the Notes: decisions and why, dead ends, measurements, suppliers.
+"""
 MAX_ARCHIVE = 100_000_000      # bytes of a project as an archive: of the zip, and of what it unpacks to
 MAX_ARCHIVE_FILES = 5000
 # what an archive of a project holds, and all that is taken from one that comes in: the Notes, their checks, the
 # settings, and of every saved version the same and what was kept of each Note
 _NOTE = r"[a-z][a-z0-9_]{0,47}"
-ARCHIVED = re.compile(rf"^(versions/[0-9]{{4}}/)?({_NOTE}\.py|{_NOTE}\.checks\.json|monet\.json)$"
+ARCHIVED = re.compile(rf"^(versions/[0-9]{{4}}/)?({_NOTE}\.py|{_NOTE}\.checks\.json|monet\.json|PROJECT\.md)$"
                       rf"|^versions/[0-9]{{4}}/(meta\.json|{_NOTE}\.glb|{_NOTE}\.fingerprint\.json)$")
 
 _locks: dict[str, threading.RLock] = {}
@@ -414,6 +452,8 @@ class Workspace:
                 raise Problem(f"{rel} in that archive is not what Monet writes there")
             if rel.endswith(".py") and "/" not in rel and len(text) > MAX_SOURCE:
                 raise Problem(f"{rel} is too long for a Note")
+            if rel.endswith(BRIEF) and len(raw) > MAX_BRIEF:
+                raise Problem(f"{rel} is too long for a brief")
         # a saved version is whole or it is refused: what it says of each Note has to be in the archive too
         for n in sorted({rel.split("/")[1] for rel in got if "/" in rel}):
             meta = docs.get(f"versions/{n}/meta.json") or {}
@@ -735,6 +775,37 @@ class Project:
 
     def is_note(self, name: str) -> bool:
         return notes.parse(self.read(name))["is_note"]
+
+    # ---- the brief (PROJECT.md) ----------------------------------------------------
+    def brief(self, where: str = "") -> dict:
+        """The project in words, for whoever picks it up next. Before one is written: empty, with a start to fill in."""
+        f = self.dir / BRIEF
+        text = f.read_text(encoding="utf-8") if f.is_file() else ""
+        out = {"project": self.name, "file": BRIEF, "text": text, "bytes": len(text.encode("utf-8")),
+               "updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(f.stat().st_mtime)) if text else None}
+        if not text:
+            out["template"] = BRIEF_TEMPLATE.format(project=self.name, where=where or f"project `{self.name}`")
+        return out
+
+    def brief_row(self) -> dict | None:
+        f = self.dir / BRIEF
+        return {"bytes": f.stat().st_size, "updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(f.stat().st_mtime))} if f.is_file() else None
+
+    def write_brief(self, text) -> dict:
+        """The whole of it, as text. It is no Note and no check: nothing is built from it, nothing is tested by it."""
+        if not isinstance(text, str):
+            raise Problem("the brief is text (Markdown)")
+        text = text.replace("\r\n", "\n").replace("\x00", "")
+        if len(text.encode("utf-8")) > MAX_BRIEF:
+            raise Problem(f"the brief is at most {MAX_BRIEF // 1000} kB: it is what the next one reads first, keep to what they need", 413)
+        with self.lock:
+            f = self.dir / BRIEF
+            if text.strip():
+                f.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
+            else:
+                f.unlink(missing_ok=True)
+            self.touch()
+        return self.brief()
 
     def archive(self) -> bytes:
         """The project as a zip, in a folder of its name: to keep, or to upload here or to another Monet. The Notes,
@@ -1184,7 +1255,7 @@ class Project:
             vdir = self.vdir / f".saving-{n:04d}"
             shutil.rmtree(vdir, ignore_errors=True)
             vdir.mkdir(parents=True)
-            for f in list(self.dir.glob("*.py")) + list(self.dir.glob("*.checks.json")) + [self.dir / "monet.json"]:
+            for f in list(self.dir.glob("*.py")) + list(self.dir.glob("*.checks.json")) + [self.dir / "monet.json", self.dir / BRIEF]:
                 if f.exists():
                     shutil.copy2(f, vdir / f.name)
             meta = {"n": n, "at": now(), "message": str(message).strip()[:300], "commit": str(commit).strip()[:64], "notes": {}}
@@ -1373,4 +1444,5 @@ class Project:
         return {"project": self.name, "rev": self.rev, "printer": self.settings.get("printer"), "material": self.settings.get("material"),
                 "looks": self.settings.get("looks", {}),
                 "animations": self.settings.get("animations", {}),
-                "version": head["n"] if head else None, "notes": rows, "main": main_of(rows, self.name)}
+                "version": head["n"] if head else None, "notes": rows, "main": main_of(rows, self.name),
+                "brief": self.brief_row()}      # PROJECT.md: None until one is written

@@ -1,4 +1,4 @@
-"""The doors: the canvas API, the agent's door over plain HTTP (POST) and over MCP, and the upload of what the
+"""The doors: the canvas API, the agent's door over plain HTTP (POST), and the upload of what the
 agent built on its own computer."""
 import contextlib
 import json
@@ -43,7 +43,7 @@ def app(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def live(app):
-    """The server, started: what MCP needs. Nobody is logged in here."""
+    """The server, started. Nobody is logged in here."""
     with TestClient(app) as c:
         yield c
 
@@ -431,20 +431,13 @@ def test_projects_are_archived_uploaded_and_deleted_by_the_person_only(app, admi
     assert [e["project"] for e in log if e["type"] in ("project-upload", "project-delete") and e["user"] == "mari"] == ["copy", "copy"]
 
 
-def test_mcp_door(live, client, reg):
-    def rpc(method, params, wid=reg["id"]):
-        return live.post(f"/w/{wid}/mcp", json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
-                           headers={"accept": "application/json, text/event-stream"})
-    tools = {t["name"] for t in rpc("tools/list", {}).json()["result"]["tools"]}
-    assert {"guide", "write_note", "look", "save", "selection"} <= tools
-    r = rpc("tools/call", {"name": "status", "arguments": {"project": "starter"}}).json()["result"]
-    assert json.loads(r["content"][0]["text"])["project"] == "starter"
-    r = rpc("tools/call", {"name": "look", "arguments": {"project": "starter", "note": "rod_foot", "views": "iso"}}).json()["result"]
-    assert [c["type"] for c in r["content"]] == ["text", "image"]
-    r = rpc("tools/call", {"name": "check", "arguments": {"project": "nope", "note": "x"}}).json()["result"]
-    assert r["isError"] and "no project 'nope'" in r["content"][0]["text"]       # the reason reaches the model
-    assert "Rules" in json.loads(rpc("tools/call", {"name": "guide", "arguments": {}}).json()["result"]["content"][0]["text"])["guide"]
-    assert rpc("tools/list", {}, wid="A" * 32).status_code == 404 and rpc("tools/list", {}, wid=reg["name"]).status_code == 404
+def test_there_is_no_mcp_door(live, client, reg):
+    """MCP was taken out (2026-11-14): the agent's door is plain HTTP, which the skill's script speaks."""
+    rpc = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+    assert live.post(f"/w/{reg['id']}/mcp", json=rpc, headers={"accept": "application/json, text/event-stream"}).status_code == 404
+    assert {"guide", "write_note", "look", "save", "selection"} <= set(live.get(f"/w/{reg['id']}/agent").json()["tools"])
+    said = live.get("/api").text
+    assert "/mcp" not in said and "MCP" not in said
 
 
 def test_the_one_lines_script_is_for_anyone_and_holds_no_key(app):
@@ -469,23 +462,11 @@ def test_skill_zip(client):
     assert f'"build123d=={version("build123d")}"' in z.read("monet/scripts/builder.py").decode()
 
 
-def test_the_persons_skill_carries_their_link(admin, client, reg, tmp_path, monkeypatch):
-    import importlib.util, io, zipfile
-    got = client.get("/w/mari/api/skill.zip")
-    assert got.headers["content-type"] == "application/zip" and got.headers["cache-control"] == "no-store"
-    zipfile.ZipFile(io.BytesIO(got.content)).extractall(tmp_path)
-    link = client.get("/w/mari/api/state").json()["agent"]
-    assert (tmp_path / "monet" / "link.txt").read_text().strip() == link and (tmp_path / "monet" / "SKILL.md").exists()
-    # its script finds the link by itself; MONET_URL, when set, goes first
-    monkeypatch.delenv("MONET_URL", raising=False)
-    spec = importlib.util.spec_from_file_location("monet_skill_script", tmp_path / "monet" / "scripts" / "monet.py")
-    script = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(script)
-    assert script.URL == link
-    # it holds the key: only for the person, never for an admin looking in, nor through the agent's door
-    assert admin.get("/w/mari/api/skill.zip").status_code == 403
-    assert TestClient(client.app).get("/w/mari/api/skill.zip").status_code == 401
-    assert client.get(f"/w/{reg['id']}/api/skill.zip").status_code == 404
+def test_the_skill_carries_nobodys_key(admin, client, reg):
+    """There was a download with the person's link in it (Connect your agent): gone with that dialog. The link reaches
+    their computer in the one line of the Terminal, and is kept there (~/.config/monet/link)."""
+    assert client.get("/w/mari/api/skill.zip").status_code == 404
+    assert client.get("/w/mari/api/state").json()["mine"] is True and admin.get("/w/mari/api/state").json()["mine"] is False
 
 
 LIDBOX = '''"""A box with a lid on a hinge pin, behind the box's back wall."""
@@ -645,3 +626,41 @@ def test_the_lamp_over_both_doors(client, reg):
     # a route belongs to one door: the person's BOM is not the agent's, the agent's file is not the person's
     assert client.get(f"{w}/api/p/lamp_http/n/lamp/bom").status_code in (401, 403, 404)
     assert client.get(f"/w/{reg['name']}/file/p/lamp_http/n/lamp/bom.csv").status_code == 404
+
+
+def test_the_brief_is_the_projects_and_both_doors_read_and_write_it(admin, client, reg):
+    """PROJECT.md: what the project is, where its repository and issues are, what is done, what comes next: how the
+    one who worked on it leaves it for the next. No Note and no check: the agent may write it."""
+    import io
+    import zipfile
+    door = f"/w/{reg['id']}/agent"
+    assert client.post("/w/mari/api/projects", json={"name": "handed", "template": "starter"}).status_code == 200
+    first = client.post(f"{door}/brief", json={"project": "handed"}).json()
+    assert first["text"] == "" and first["updated"] is None and "## Next" in first["template"] and "## Log" in first["template"]
+    assert reg["id"] not in first["template"]                              # the start names the canvas, never the key
+    assert client.post(f"{door}/status", json={"project": "handed"}).json()["brief"] is None
+    text = "# handed\n\nA rod foot.\n\n## Next\n\n1. print it\n"
+    wrote = client.post(f"{door}/write_brief", json={"project": "handed", "text": text}).json()
+    assert wrote["written"] and wrote["text"] == text and wrote["bytes"] == len(text)
+    assert client.post(f"{door}/status", json={"project": "handed"}).json()["brief"]["bytes"] == len(text)
+    # the person reads the same file in the canvas, and writes it
+    assert client.get("/w/mari/api/p/handed/brief").json()["text"] == text
+    rev = client.get("/w/mari/api/p/handed/rev").json()["rev"]
+    mine = text + "\n## Log\n\n- by hand\n"
+    assert client.put("/w/mari/api/p/handed/brief", json={"text": mine}).json()["text"] == mine
+    assert client.get("/w/mari/api/p/handed/rev").json()["rev"] != rev        # the open canvases hear of it
+    assert client.post(f"{door}/brief", json={"project": "handed"}).json()["text"] == mine
+    # it is words, and so many of them
+    assert client.post(f"{door}/write_brief", json={"project": "handed", "text": "x" * 64_001}).status_code == 413
+    assert client.put("/w/mari/api/p/handed/brief", json={"text": 7}).status_code == 400
+    assert client.post(f"{door}/brief", json={"project": "nope"}).status_code == 404
+    # it travels with the project: in the archive, and back in from one
+    packed = client.get("/w/mari/api/p/handed/archive.zip").content
+    assert "handed/PROJECT.md" in zipfile.ZipFile(io.BytesIO(packed)).namelist()
+    assert client.post("/w/mari/api/projects/upload?name=handed_on", content=packed, headers={"content-type": "application/zip"}).status_code == 200
+    assert client.get("/w/mari/api/p/handed_on/brief").json()["text"] == mine
+    # emptied, it is gone
+    assert client.put("/w/mari/api/p/handed/brief", json={"text": "  \n"}).json()["text"] == ""
+    assert client.post(f"{door}/status", json={"project": "handed"}).json()["brief"] is None
+    for name in ("handed", "handed_on"):
+        assert client.delete(f"/w/mari/api/p/{name}").status_code == 200

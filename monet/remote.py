@@ -4,25 +4,24 @@ since 2026-11-13 without its switch).
 There was a switch here, remote control: the agent key opened nothing until the person switched it on, and it ended
 after 15 idle minutes. Kaspar took it out (2026-11-13): the agent now runs on the person's own computer, started by
 their own hand (Monet local, the terminal of the canvas), and a switch to let it in was one step too many. **The agent
-key alone opens the agent's door.** What closes it is a new key (Connect your agent → New key).
+key alone opens the agent's door.** What closes it is a new key (the canvas's Terminal → New key).
 
 Every open canvas of the person dials `/w/<username>/api/remote/tab` and says what it shows. The agent's tools
 `screen`, `goto` and `view` are questions to the page on screen (else the one heard from last): `{t: ask, id, what,
 args}`, answered `{t: result, id, ok, json}`. The page answers these three by name and runs no code of the agent's:
 what the agent changes goes through the server's tools and their rules, never as the person in their page. Everything
-it changed is written down.
+it changed is written down in the server's log (app.py, changed()).
 """
 import asyncio
 import concurrent.futures
 import itertools
 import json
 import time
-from collections import deque
 from dataclasses import dataclass, field
 
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from .store import Store, now
+from .store import Store
 from .workspace import Problem
 
 
@@ -44,17 +43,8 @@ class Remote:
         self.store = store
         self.tabs: list[Tab] = []
         self.waiting: dict[str, concurrent.futures.Future] = {}
-        self.recent: dict[str, deque] = {}      # what each person's agent changed lately: for their eye, not kept over a restart
         self.pictures: dict[str, bytes] = {}    # the last picture `view` took of each person's canvas
         self._seq = itertools.count(1)
-
-    def note(self, user: dict, what: str = "") -> None:
-        """What the agent changed (when it changed something): for the person's eye, under Connect your agent."""
-        if what:
-            self.recent.setdefault(user["id"], deque(maxlen=30)).appendleft({"at": now(), "what": what[:200]})
-
-    def view(self, user: dict) -> dict:
-        return {"seen": user.get("lastAgent"), "tabs": len(self.tabs_of(user["id"])), "recent": list(self.recent.get(user["id"], []))}
 
     # ---- the pages ----------------------------------------------------------------
     async def serve(self, ws: WebSocket, user: dict) -> None:

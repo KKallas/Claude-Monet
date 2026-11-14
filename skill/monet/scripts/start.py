@@ -4,7 +4,7 @@
 # ///
 """Monet local, from nothing, with one line: the line the canvas shows in its Terminal panel.
 
-    uv run https://<host>/start.py https://<host>/w/<agent key> <project> [--pair=<token>] [--mine|--theirs] [--port=N]
+    uv run https://<host>/start.py https://<host>/w/<agent key> <project> [--pair=<token>] [--for=2h] [--mine|--theirs] [--port=N]
 
 It fetches the server's own skill (its script, the builder pinned to the server's CAD kernel) into ~/.cache/monet,
 again whenever the server runs another build; keeps the agent link on this computer (~/.config/monet/link, never in

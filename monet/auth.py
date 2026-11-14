@@ -7,7 +7,7 @@ for one. Typing only a username cannot set a first password, so knowing someone'
 username is not enough to claim their account.
 
 New here: the agent key. Each user has one; it is in the link their own LLM harness
-(Claude Desktop, Claude Code, anything that speaks MCP or HTTPS) connects with, because
+(Claude Code, Codex, anything with a shell: skill/monet/scripts/monet.py) connects with, because
 such a harness cannot log in. What comes in with the key is "the agent": it works in
 that user's workspace and can write Notes and add checks, but it cannot change, loosen
 or remove a check, nor wave through a red load check. Those need the person, logged in.

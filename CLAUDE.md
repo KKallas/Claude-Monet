@@ -23,7 +23,6 @@ Read README.md first. It is the design. This file is how to work on it.
 - Tests: `pytest`. Each Note gets a test that builds it and runs its checks
   (`tests/test_notes.py` picks up every Note under `notes/`).
 - Every saved version stores a GLB and a fingerprint JSON next to the Note.
-- The MCP SDK is v2 (`mcp.server.mcpserver.MCPServer`, not `FastMCP`).
 
 ## Reference: the MG400 work table
 
@@ -54,13 +53,15 @@ wrong:
   in; a card link sets the first password; there is no signing up. Each user has one
   workspace, in a folder named by their user id (never by name or key).
 - **Two doors.** The person: `/w/<username>/…`, behind the login (cookie, or HTTP Basic for
-  scripts). Their agent: `/w/<agent key>/agent/<tool>` (POST JSON), `/w/<agent key>/mcp`,
+  scripts). Their agent: `/w/<agent key>/agent/<tool>` (POST JSON),
   `/w/<agent key>/upload/<project>/<note>` (a build, as a zip) and `/w/<agent key>/file/…` (GET),
   with the key as the only credential. There is no GET or parts workflow for fetch-only LLMs:
   agents need a shell (Kaspar, 2026-10-26). A route belongs to one
   door or the other (`api()` and `door()` in `monet/app.py`); do not make one answer to both.
 - **No model in the server.** The agent is the user's own harness. One definition of the
-  tools serves MCP and HTTPS: `monet/agent.py`; it is described for LLMs at `/api`.
+  tools: `monet/agent.py`, over HTTPS; it is described for LLMs at `/api`. **MCP was taken out** (Kaspar, 2026-11-14),
+  with the Connect dialog and the skill download that carried the link: an agent needs a shell to build, so the
+  skill's script is the one way in. Do not bring a connector back without him.
 - **The server never runs a Note** (Kaspar, 2026-10-26). The agent builds on the user's computer
   (`monet/build.py`, shipped in the skill zip with the server's own modules and its kernel pinned:
   `builder_script()` in `monet/app.py`) and uploads; `Project.accept_build` takes it only if every file
@@ -147,6 +148,17 @@ wrong:
   `status()` gives each row's `uses` (imports and `PLACED`) and the project's `main` (`workspace.main_of`: that Note, else a
   guess, `named: False`); `canvas/tree.js` makes the side panel's tree from them, the same in every room. Making a project
   of another design (`Workspace.project_of`) carries checks, so it is a route of the canvas API only.
+- **The brief** (Kaspar, 2026-11-14): `PROJECT.md` beside the Notes is how a project is handed on between sittings
+  (what it is, where its repository and issues are, state, milestones, next, the log): `Project.brief`/`write_brief` in
+  `monet/workspace.py`, the agent's tools `brief` and `write_brief`, the canvas's **Brief** (`canvas/brief.js`, whose
+  small Markdown renderer escapes first and makes tags only from its own patterns: keep it so). It is no Note and no
+  check, so the agent may write it; it is in `ARCHIVED` and copied into every saved version; Monet local keeps it in
+  step with the folder. Its words tell an agent what to work on and never loosen a rule (the skill says so). `--for=2h`
+  on Monet local gives a sitting an end (`MONET_UNTIL` in its terminals): said, never enforced.
+- **Opening a Note in the canvas** (`open()`/`openNow()` in `canvas.js`): one rules at a time. A later one takes over
+  (`late()` after every await), the page's own poll waits while one runs (`opens`), and `held` is the project/Note whose
+  build the frame holds, which is what decides whether the camera refits and the frame says "loading" (`arriving()`).
+  Do not add an await to `openNow` without `if (late()) return` after it.
 - **`skill/monet/` is the single source of the agent's instructions**: the skill zip and the
   `guide` tool both serve it. When behaviour changes, change it there.
 

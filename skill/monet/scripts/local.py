@@ -4,12 +4,12 @@
 # ///
 """Monet local: the program that stays running on the person's computer while a project is worked on.
 
-    monet.py local <project> [folder]        (folder: where the project's files are, default the one you are in)
+    monet.py local <project> [folder] [--for=2h]   (folder: where the project's files are, default the one you are in)
 
 or, with nothing set up, the one line the canvas gives (its Terminal panel): uv run https://<host>/start.py <agent
 link> <project>, which fetches this and starts it in ~/monet/<project> (scripts/start.py).
 
-It does two things, for one project in one folder:
+It does three things, for one project in one folder:
 
 1. **The canvas shows the working copy.** A Python file changed in the folder is sent to Monet, built here with
    Monet's builder and uploaded, as `monet.py push` does. A file changed on the server (the person tagged a face in
@@ -17,6 +17,11 @@ It does two things, for one project in one folder:
    and said: nothing is merged here yet.
 2. **A terminal for the canvas.** A websocket on 127.0.0.1 gives the person's own page a terminal in the folder,
    running one of a short list (claude, codex, a shell). The server is not in between and never sees it.
+
+3. **The brief, and how long.** PROJECT.md (the project in words: what it is, where its repository and issues are,
+   what is done, what comes next) is kept in step with the server like a Note. With `--for=90m` or `--for=2h` the
+   sitting has an end: the agent in the terminal is told when (MONET_UNTIL), and this says so ten minutes before, so
+   that the brief is brought up to date for whoever works on it next. Nothing is stopped: it is said.
 
 Who may open the terminal: only a page of the Monet this computer is linked to (its Origin), and only with the
 token of this computer (~/.config/monet/local.json), which `monet.py local` prints as a link to open once. It listens
@@ -47,6 +52,7 @@ HERE = Path(__file__).resolve().parent
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")      # a Note's name, as monet/note.py has it
 PORTS = (47821, 47822, 47823, 47824)      # where it listens: the first that is free; the canvas tries the same ones (terminal.js)
 EVERY = 4               # seconds between two looks at the server, when nothing happened here
+BRIEF = "PROJECT.md"    # the project in words, for whoever works on it next: kept in step with the server, as the Notes are
 KEEP = 256_000          # bytes of a terminal's output kept, for a page that comes (back) to it
 CONFIG = Path(os.environ.get("MONET_CONFIG") or Path.home() / ".config" / "monet")
 
@@ -61,7 +67,7 @@ def script():
 
 DIM, GREEN, AMBER, RED, BOLD, OFF = "\x1b[2m", "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[1m", "\x1b[0m"
 TONES = ((RED, ("does not build", "died", "refused", "cannot", "not sent", "RED")),
-         (AMBER, ("left as it is", "must be", "not green", "waiting", "gone here", "trying again")),
+         (AMBER, ("left as it is", "must be", "not green", "waiting", "gone here", "trying again", "this sitting", "left here", "left there")),
          (GREEN, ("checks green", "built ", "uploaded", "sent", "taken from", "started", "linked to")))
 
 
@@ -140,8 +146,10 @@ class Sync:
         return out
 
     def changed(self) -> bool:
-        """Did a Python file here change since the last look? By time and size: cheap enough to ask every second."""
+        """Did a Python file here (or the brief) change since the last look? By time and size: cheap enough to ask every second."""
         now = {f.stem: (f.stat().st_mtime_ns, f.stat().st_size) for f in self.folder.glob("*.py") if NAME_RE.match(f.stem) and f.is_file()}
+        if (self.folder / BRIEF).is_file():
+            now[BRIEF] = ((self.folder / BRIEF).stat().st_mtime_ns, (self.folder / BRIEF).stat().st_size)
         if now == self.seen:
             return False
         self.seen = now
@@ -194,6 +202,7 @@ class Sync:
                 self.known[name] = sha(mine)
                 say(f"{name}.py: sent" + (f" ({r['error']})" if r.get("error") else ""))
             moved = True
+        self.brief()
         self.prefer = ""        # --mine and --theirs settle what differed at the start, nothing later
         self.seen = {}
         self.changed()
@@ -202,6 +211,54 @@ class Sync:
         if moved or not self.built:
             self.build()
         return True
+
+    def brief(self) -> None:
+        """PROJECT.md, the project in words for whoever works on it next: kept the same on both sides, as the Notes
+        are. It is no Note: nothing is built from it."""
+        got, why = self.ask("brief", project=self.project)
+        if got is None:
+            return      # a server from before there were briefs: nothing to keep
+        f = self.folder / BRIEF
+        try:
+            mine = whole(f.read_text(encoding="utf-8")) if f.is_file() else None
+        except (OSError, UnicodeDecodeError):
+            self.once(f"{BRIEF} cannot be read as text: left alone")
+            return
+        mine = mine if mine and mine.strip() else None
+        theirs, k = got.get("text") or None, self.known.get(BRIEF)
+        if mine == theirs:
+            if mine is None:
+                self.once(f"no {BRIEF} yet (the project in words, for whoever works on it next): the first to work here writes it")
+            else:
+                self.known[BRIEF] = sha(mine)
+            return
+        if mine is None:
+            if k == sha(theirs):
+                self.once(f"{BRIEF} is gone here and still on the server: left there")
+                return
+            take = "theirs"
+        elif theirs is None:
+            if k == sha(mine):
+                self.once(f"{BRIEF} was emptied in the canvas and is still here: left here")
+                return
+            take = "mine"
+        else:
+            i_changed, they_changed = sha(mine) != k, sha(theirs) != k
+            take = "mine" if i_changed and not they_changed else "theirs" if they_changed and not i_changed else self.prefer
+        if not take:
+            self.once(f"{BRIEF} was changed here and on the server since they last agreed: left as it is on both sides. "
+                      f"Start again with --mine to send this folder's, or --theirs to take the server's")
+        elif take == "theirs":
+            f.write_text(theirs, encoding="utf-8")
+            self.known[BRIEF] = sha(theirs)
+            say(f"{BRIEF}: taken from the server" + (" (it was not here yet)" if mine is None else " (changed in the canvas)"))
+        else:
+            r, why = self.ask("write_brief", project=self.project, text=mine)
+            if r is None:
+                self.once(f"{BRIEF} not sent: {why}")
+                return
+            self.known[BRIEF] = sha(mine)
+            say(f"{BRIEF}: sent")
 
     built = False
 
@@ -297,8 +354,9 @@ class Session:
 
 
 class Local:
-    def __init__(self, ms, project: str, folder: Path, token, port: int, prefer: str = "", quiet: bool = False):
+    def __init__(self, ms, project: str, folder: Path, token, port: int, prefer: str = "", quiet: bool = False, until: float = 0):
         self.ms, self.project, self.folder, self.port, self.quiet = ms, project, folder, port, quiet
+        self.until, self.warned = until, set()      # when this sitting ends (--for), and what was said of it already
         self.tokens = [token] if isinstance(token, str) else list(token)
         self.token = self.tokens[0]
         self.sync = Sync(ms, project, folder, prefer)
@@ -317,7 +375,21 @@ class Local:
         return [self.origin]
 
     def env(self) -> dict:
-        return {**os.environ, "MONET_URL": self.ms.URL, "MONET_PROJECT": self.project, "TERM": "xterm-256color", "COLORTERM": "truecolor"}
+        """What a program in the terminal is told: where Monet is, which project, and when the sitting ends."""
+        ends = {"MONET_UNTIL": time.strftime("%Y-%m-%dT%H:%M", time.localtime(self.until))} if self.until else {}
+        return {**os.environ, "MONET_URL": self.ms.URL, "MONET_PROJECT": self.project, "TERM": "xterm-256color", "COLORTERM": "truecolor", **ends}
+
+    def clock(self) -> None:
+        """A sitting with an end (--for): said ten minutes before it and when it is over. Nothing is stopped."""
+        left = self.until - time.time() if self.until else None
+        if left is None:
+            return
+        if left <= 0 and "over" not in self.warned:
+            self.warned.add("over")
+            say(f"the time of this sitting is over: {BRIEF} should say now what was done and what comes next")
+        elif 0 < left <= 600 and "soon" not in self.warned:
+            self.warned.add("soon")
+            say(f"{max(1, round(left / 60))} minutes of this sitting are left: time to bring {BRIEF} up to date (State, Next, the Log)")
 
     async def watch(self) -> None:
         """The working copy, looked at every second; the server every EVERY seconds, and at once when something
@@ -325,6 +397,7 @@ class Local:
         self.poked.set()
         asked = 0.0
         while True:
+            self.clock()
             if self.sync.changed() or time.time() - asked >= EVERY:
                 self.poked.set()
             if self.poked.is_set():
@@ -444,6 +517,8 @@ class Local:
                 say("the Terminal panel of your canvas finds this by itself. Leave this running; Ctrl+C ends it")
             else:
                 say(f"the terminal of your canvas: open this once in the browser you use Monet in\n\n    {self.origin}/#local={self.port}.{self.token}\n")
+            if self.until:
+                say(f"this sitting ends at {time.strftime('%H:%M', time.localtime(self.until))}: the agent is told (MONET_UNTIL) and leaves {BRIEF} up to date before then")
             try:
                 await self.watch()
             finally:
@@ -474,10 +549,12 @@ def tokens(more: str = "") -> list:
 def main(argv) -> None:
     flags = [a for a in argv if a.startswith("--")]
     rest = [a for a in argv if not a.startswith("--")]
-    port, pair = 0, ""
+    port, pair, until = 0, "", 0.0
     for f in flags:
         if f.startswith("--port="):
             port = int(f.split("=", 1)[1])
+        elif m := re.fullmatch(r"--for=(\d{1,4})(m|h)", f):      # how long this sitting is: --for=90m, --for=2h
+            until = time.time() + int(m.group(1)) * (3600 if m.group(2) == "h" else 60)
         elif re.fullmatch(r"--pair=[A-Za-z0-9_-]{24,64}", f):
             pair = f.split("=", 1)[1]
         elif f not in ("--mine", "--theirs"):
@@ -486,7 +563,7 @@ def main(argv) -> None:
         sys.exit(__doc__)
     ms = script()
     if not ms.URL:
-        sys.exit("monet: this computer is not linked: monet.py link https://host/w/<agent key>  (the link is in your canvas, under Connect your agent)")
+        sys.exit("monet: this computer is not linked: monet.py link https://host/w/<agent key>  (the link is in the one line your canvas shows under Terminal)")
     folder = Path(rest[1] if len(rest) > 1 else ".").expanduser().resolve()
     if len(rest) > 1:
         folder.mkdir(parents=True, exist_ok=True)      # a folder named for the project is made when it is not there
@@ -494,7 +571,7 @@ def main(argv) -> None:
         sys.exit(f"monet: there is no folder {folder}")
     prefer = "mine" if "--mine" in flags else "theirs" if "--theirs" in flags else ""
     try:
-        asyncio.run(Local(ms, rest[0], folder, tokens(pair), port, prefer, quiet=bool(pair)).run())
+        asyncio.run(Local(ms, rest[0], folder, tokens(pair), port, prefer, quiet=bool(pair), until=until).run())
     except KeyboardInterrupt:
         pass
     except OSError as e:

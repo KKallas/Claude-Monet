@@ -30,13 +30,15 @@ if (!pair?.token) {      // this browser's own, made once: it is in the line the
 const came = paired(location.hash);
 if (came) { pair = came; history.replaceState(null, '', location.pathname + location.search); }
 
-/** hooks: { mine(): is this my own workspace, project(): the one the canvas shows, link(): my agent link } */
+/** hooks: { mine(): is this my own workspace, project(): the one the canvas shows, link(): my agent link,
+ *  newKey(): make another agent key (asks first), true when it was made } */
 export function createTerminal(view, button, hooks) {
   const root = document.createElement('div');
   root.className = 'term';
   root.hidden = true;
   root.innerHTML = `<div class="term-grip" title="drag: how tall the terminal is"></div>
     <div class="term-bar"><span class="term-tabs"></span><span class="term-where"></span><span class="sp"></span>
+      <button data-term="key" title="another agent key: the line with the old one in it stops working, for you and for anyone who got hold of it" hidden>New key</button>
       <button data-term="end" title="end what runs here (it keeps running when this panel is only closed)" hidden>End</button>
       <button data-term="close" title="close the panel: what runs in it runs on">×</button></div>
     <div class="term-body"><div class="term-x"></div><div class="term-help" hidden></div></div>`;
@@ -70,6 +72,7 @@ export function createTerminal(view, button, hooks) {
     $('.term-where').classList.toggle('warn', !!about && !!hooks.project() && about.project !== hooks.project());
     $('.term-where').title = about && hooks.project() && about.project !== hooks.project() ? `Monet local works on ${about.project}; the canvas shows ${hooks.project()}` : '';
     $('[data-term="end"]').hidden = !(greeted && run !== 'log');
+    $('[data-term="key"]').hidden = !hooks.mine();
   }
 
   /** The one line that starts everything on the person's computer: this server's script, their agent link, the project
@@ -93,8 +96,10 @@ export function createTerminal(view, button, hooks) {
       <p class="term-wait"><i></i>looking for it on this computer… this panel comes alive by itself when it runs.</p>
       <p class="muted">It keeps the project's files in <code>~/monet/${esc(hooks.project() || '…')}</code>, builds them there as they change, and shows here what it does.
         It needs <a href="https://docs.astral.sh/uv/getting-started/installation/" target="_blank" rel="noopener">uv</a>.
-        The line holds your agent key: it is a password. This page talks to your computer directly; nothing of the terminal goes through ${esc(location.host)}.
-        ${why === 'token' ? '<br><b>Monet local runs here but was started for another browser: stop it (Ctrl+C) and start it with this line.</b>' : ''}</p>`}`;
+        The line holds your agent key: it is a password, and whoever has it can work in your workspace as your agent until you press <b>New key</b> above.
+        It cannot change or remove a check, acknowledge a load check, or delete. This page talks to your computer directly; nothing of the terminal goes through ${esc(location.host)}.
+        ${why === 'token' ? '<br><b>Monet local runs here but was started for another browser: stop it (Ctrl+C) and start it with this line.</b>' : ''}
+        ${why === 'key' ? '<br><b>The key is new: stop Monet local (Ctrl+C) and start it with this line.</b>' : ''}</p>`}`;
   }
 
   function hangUp() {
@@ -174,6 +179,7 @@ export function createTerminal(view, button, hooks) {
     if (b.dataset.run) { run = b.dataset.run; try { localStorage.setItem('monet.term.run', run); } catch { /* not kept */ } about = about && { ...about, run: undefined }; dial(); }
     else if (b.dataset.term === 'close') show(false);
     else if (b.dataset.term === 'end' && ws && greeted) ws.send(JSON.stringify({ t: 'end' }));
+    else if (b.dataset.term === 'key') hooks.newKey().then((made) => { if (made) { hangUp(); about = null; tabs(); help('key'); } });
     else if (b.dataset.term === 'copy') navigator.clipboard?.writeText(line()).then(() => { b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1500); });
   });
   $('.term-grip').addEventListener('pointerdown', (e) => {

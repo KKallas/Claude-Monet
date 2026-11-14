@@ -30,6 +30,30 @@ against a server on localhost.
   there to click it. To be done by hand on the test instance, in Chrome, Firefox and Safari.
 - The view is not made smaller by the open terminal: the panel lies over its lower part.
 
+### Added 2026-11-14
+
+- **The brief: `PROJECT.md`.** The first piece of "Let it rip" (`NEXT.md` in the plan below is this file's Next and
+  Log): one Markdown file beside the Notes that says what the project is, where its repository and its issues are,
+  what is done, the milestones, what to do next, and who did what. An agent reads it first and brings it up to date
+  before it stops (the tools `brief` and `write_brief`, `monet.py brief` / `write-brief`); the person reads and
+  writes it in the canvas (**Brief**, beside the project's name). Monet local keeps it in step with the folder like
+  a Note; it is in the archive and in every saved version. So a project can be picked up on any computer by
+  anybody's agent with nothing but its folder: a friend with tokens left over at the end of the week clones the
+  repository, runs the one line against their own Monet, and their agent starts from Next.
+- **A sitting with a limit.** `--for=2h` (or `90m`) on the one line: the agent in the terminal is told when the
+  sitting ends (`MONET_UNTIL`), Monet local says so ten minutes before, and the skill tells the agent to have the
+  brief written by then. Nothing is stopped. A limit in tokens is the harness's own to keep; the skill says the same
+  for it: stop at a whole step with enough left to write the brief.
+- **Not carried by the folder yet**: checks, the animation, looks and the printer (`monet.json`, `*.checks.json`)
+  live on the server and in its archive, not in the folder Monet local keeps. A friend who starts from the git
+  repository alone gets the Notes and the brief, builds them, and has no checks. That is the next piece of "the
+  home is a git repository": the folder holds everything an archive does.
+- **MCP is out** (Kaspar, 2026-11-14), with the Connect dialog and the skill download that carried the link. One
+  way in for an agent: HTTPS, through the skill's script. *New key* moved to the Terminal panel.
+- **Going between rooms** while Monet local uploads no longer leaves the frame on the Note before: one `open()`
+  rules at a time (`canvas.js`), the page's own look every two seconds waits for it, and while another Note is
+  fetched the frame fades and says which one is coming.
+
 ## In one paragraph
 
 Today a project lives in Monet's `storage/` and your git is a copy beside it. After the rewire it
@@ -104,7 +128,7 @@ is not in between and never sees a byte of it.
 
 - It starts one of a short list, in the project's folder: `claude`, `codex`, or a shell. The list
   is Monet local's own; the page picks by name and cannot send a command line.
-- The PTY has `MONET_URL` in its environment, so the skill's script and the MCP connector work
+- The PTY has `MONET_URL` in its environment, so the skill's script works
   with no setup. The key is never written into the repo.
 - **Pairing.** `monet local` prints a link to your canvas with its port and a random token in the
   URL's fragment (which is not sent to the server); the page keeps it. Monet local binds to

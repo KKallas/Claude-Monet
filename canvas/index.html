@@ -23,6 +23,7 @@
     <b aria-label="MONET"><span data-t="M">M</span><canvas class="hole" aria-hidden="true"></canvas><span data-t="NET">NET</span></b>
     <span class="chip" id="chip"></span>
     <button id="project" title="the projects of this workspace: open one, start one, download, upload or delete"><span id="projectName">no project</span><span class="chev"></span></button>
+    <button id="briefBtn" hidden>Brief</button>
     <span class="rooms" title="four places to work: a drawing on a face, one part, the parts put together, and how they move">
       <button data-room="sketch">Sketch</button><button data-room="part">Part</button><button data-room="assembly">Assembly</button><button data-room="motion">Motion</button>
     </span>
@@ -31,7 +32,6 @@
     <a class="quiet" id="usersLink" href="/users" hidden>Users</a>
     <a class="quiet" id="logout" href="#">Log out</a>
     <button id="termBtn" title="a terminal on your own computer, in the project's folder: your agent (Claude Code, Codex) or a shell, through Monet local">Terminal</button>
-    <button class="primary" id="connect">Connect your agent</button>
   </header>
 
   <aside>
@@ -135,6 +135,7 @@
       <button id="compareOff">×</button>
     </div>
     <div class="timeline" id="timeline" hidden></div>
+    <div class="arriving" id="arriving" hidden><span>loading</span><b></b><i></i></div>
     <div class="build">
       <div class="busy" id="busy" hidden><span id="busyText"></span><div class="track" id="busyTrack"><i id="busyBar"></i></div></div>
       <div class="last" id="last" hidden></div>
@@ -145,7 +146,6 @@
   <div class="panel" id="panel"></div>
 </div>
 
-<dialog id="connectDialog"></dialog>
 <dialog id="projectsDialog"></dialog>
 <script type="module" src="/static/canvas.js"></script>
 </body>

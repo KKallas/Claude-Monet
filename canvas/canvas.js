@@ -1,4 +1,4 @@
-// The canvas: see the part, point at it, own the checks. The agent works through the other door (MCP);
+// The canvas: see the part, point at it, own the checks. The agent works through the other door (monet/agent.py);
 // this page follows along by asking the project for its revision every two seconds.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -21,6 +21,7 @@ import { createLights } from './lights.js';
 import { noteTree, pathsTo } from './tree.js';
 import { remote } from './remote.js';
 import { createTerminal } from './terminal.js';
+import { createBrief } from './brief.js';
 import { bomLines, grams, howWords, materialName, materialWords, partWords, poseLines, poseValues, torqueWords } from './facts.js';
 
 const $ = (s) => document.querySelector(s);
@@ -42,7 +43,7 @@ const BASE = new THREE.Color('#b9c2d6'), PICK = new THREE.Color('#ffd23f'), CLAS
 // an assembly: every part in a colour of its own, quiet enough that a tag or a pointed-at face still stands out
 const PARTS = ['#8fa8d6', '#d6a58f', '#9cc7a4', '#c9a3d0', '#d4c58a', '#8fc7cf', '#d49aa8', '#a9b0e0', '#b8cf94', '#e0b48a', '#9fb8b0', '#c7b1a0'];
 
-let terminal = null;      // terminal.js, made further down
+let terminal = null, brief = null;      // terminal.js, made further down
 async function api(path, method = 'GET', body) {
   const file = body instanceof Blob;      // an archive goes as it is, anything else as JSON
   const r = await fetch(root + path, { method, headers: body ? { 'content-type': file ? 'application/zip' : 'application/json' } : {}, body: file ? body : body ? JSON.stringify(body) : undefined });
@@ -1089,9 +1090,11 @@ function roomBar() {
     : S.room === 'motion' ? 'drag a part: it moves as its joint lets it · drag a tip (◎): the joints follow it · drag beside: orbit · right-drag: pan · wheel: zoom<br>click: select · Shift: add · Ctrl: take away'
     : 'drag: orbit · right-drag: pan · wheel: zoom<br>click: select · Shift: add · Ctrl: take away · Shift- or Ctrl-drag: box';
   canvas.style.cursor = S.room === 'sketch' ? 'crosshair' : S.boxTool ? 'crosshair' : '';
+  if (S.room !== 'motion') $('#filmPlayer')?.remove();      // a video plays over Motion's view, not over another room's
   remote.say();
   showPlanes();
   syncLights();
+  brief?.mark(S.proj?.brief);      // PROJECT.md: the button says whether the project has one
 }
 function startSketch(what) {
   S.room = 'sketch';
@@ -1122,7 +1125,8 @@ async function goRoom(room) {
   }
   if (S.room === 'sketch') sketch.end();
   if (room === 'assembly' || room === 'motion') {
-    if (kindOf(S.note) === 'assembly' && S.data?.report?.built) {      // the same assembly, in the other room: nothing to load
+    // the same assembly, in the other room: nothing to load (unless a load is under way: then this click takes over from it)
+    if (kindOf(S.note) === 'assembly' && S.data?.report?.built && !opens) {
       stopPlaying(); S.room = room; setMode('part'); roomBar(); renderSide(); assemblyBar(); spread(); paint(); renderPanel(true); showGhosts();
       if (room === 'motion') checkPose();
       return;
@@ -1139,7 +1143,7 @@ async function goRoom(room) {
   const part = S.proj.notes.find((n) => n.kind === 'note' && n.name === picked) ?? S.proj.notes.find((n) => n.kind === 'note' && n.name === (kindOf(S.note) === 'note' ? S.note : S.lastPart))
     ?? S.proj.notes.find((n) => n.kind === 'note');
   if (!part) { S.room = 'assembly'; roomBar(); return notice('there is no part in this project yet'); }
-  if (part.name === S.note) { S.room = 'part'; roomBar(); showSketches(); renderPanel(true); return; }
+  if (part.name === S.note && !opens) { S.room = 'part'; roomBar(); showSketches(); renderPanel(true); return; }
   return open(S.project, part.name);
 }
 document.querySelectorAll('[data-room]').forEach((b) => { b.onclick = () => goRoom(b.dataset.room); });
@@ -1424,7 +1428,7 @@ function shoot() {
       f.done = true; f.url = URL.createObjectURL(blob); f.bytes = blob.size;
       busy(); renderPanel(true);
       notice('the video is ready: Watch it under Animation');
-      if (f.why) watchFilm();      // started because playing was slow: shown at once
+      if (f.why && film === f && moving() && S.note === f.note) watchFilm();      // started because playing was slow: shown at once, if the view is still there
     }).catch((e) => { film = null; busy(); tell(`The video was not made: ${e.message}`); });
   }
 }
@@ -2070,11 +2074,32 @@ $('aside').addEventListener('change', (e) => {      // a plane's distance off it
 $('aside').addEventListener('mouseover', (e) => { const pl = e.target.closest('[data-plane]')?.dataset.plane ?? null; if (pl !== S.hotPlane) { S.hotPlane = pl; showPlanes(pl); } });
 $('#versions').onclick = (e) => { const el = e.target.closest('[data-version]'); if (el && S.data?.is_note) compare(el.dataset.version); };
 
+// One open() rules at a time: a later one (a click on another Note or room) takes over, and the one before it stops
+// where it is, so two loads never paint over each other; the page's own look every two seconds waits while one runs.
+let opening = 0, opens = 0, held = '';      // held: the project/Note whose build the frame holds
 async function open(project, note) {
+  const turn = ++opening, late = () => turn !== opening;
+  opens++;
+  try { return await openNow(project, note, late); } finally {
+    opens--;
+    // however it ended (an answer that never came, too): nothing is left saying "loading" with nobody loading
+    if (!late()) { arriving(); if (B.text === 'loading…') busy(); }
+  }
+}
+/** While another Note is fetched the frame says so: the one before it fades, with what is coming written over it. */
+function arriving(name) {
+  view.classList.toggle('fetching', !!name);
+  $('#arriving').hidden = !name;
+  if (name) $('#arriving b').textContent = name;
+}
+async function openNow(project, note, late) {
   if (S.compare) compareOff();
   const changedNote = project !== S.project || note !== S.note;
+  arriving(note && held !== `${project}/${note}` ? note : null);      // said at once: the first answer may be seconds away
   S.project = project;
-  S.proj = await api(`/p/${project}`);
+  const proj = await api(`/p/${project}`);
+  if (late()) return;
+  S.proj = proj;
   S.rev = S.proj.rev;
   const names = S.proj.notes.map((n) => n.name);
   // a project opens on its main (the Note named as the project, or the biggest design), where there is one
@@ -2084,6 +2109,7 @@ async function open(project, note) {
   if (changedNote) {
     S.sel = nothing(); S.inspect = null; S.tagSel = null; S.saveResult = null; S.hotPart = null; S.hidden = new Set(); explode = 0; sketch.end();
     stopPlaying(); Object.assign(S, { pose: {}, freePose: {}, clash: [], edit: null, hotJoint: null });
+    $('#filmPlayer')?.remove();      // a video of the Note that was
   }
   // the room follows the Note: an assembly is worked on in Assembly (or Motion), a part in Part (or in Sketch, while one is drawn)
   const kind = kindOf(S.note);
@@ -2096,38 +2122,55 @@ async function open(project, note) {
   document.querySelectorAll('[data-sel]').forEach((b) => b.classList.toggle('on', b.dataset.sel === S.mode));
   roomBar();
   renderSide();
-  if (!S.note) { S.data = null; S.parts = []; assemble({}); assemblyBar(); showSelection(); renderPanel(true); showLast(); return; }
+  if (!S.note) { arriving(); held = ''; S.data = null; S.parts = []; assemble({}); assemblyBar(); showSelection(); renderPanel(true); showLast(); return; }
   busy('loading…', {});
+  // (not changedNote: an open() that took over from one that had already named the Note still brings another build in)
+  const other = held !== `${project}/${S.note}`;
+  if (other) arriving(S.note);
   showLast();
   try {
-    S.data = await api(`/p/${project}/n/${S.note}`);
-    S.rev = (await api(`/p/${project}/rev`)).rev;   // working out a tag moved the revision
+    const data = await api(`/p/${project}/n/${S.note}`);
+    if (late()) return;
+    S.data = data;
+    const { rev } = await api(`/p/${project}/rev`);   // working out a tag moved the revision
+    if (late()) return;
+    S.rev = rev;
     // stale: the agent has not built it since its source changed; its last build is shown meanwhile
     const last = S.data.report?.state === 'stale';
     if (S.data.report?.built || last) {
       const stamp = `r=${S.rev}${last ? '&last=1' : ''}`;
       const [loaded, described] = await Promise.all([loadInto(new THREE.Group(), `${root}/p/${project}/n/${S.note}/model.glb?${stamp}`, true),
         fetch(`${root}/p/${project}/n/${S.note}/faces.json?${stamp}`).then((r) => r.json())]);
+      if (late()) return;
       // numbers of faces, lines and points only mean something within one build: a rebuilt part starts unselected
-      const same = !changedNote && described.faces.length === S.faces.length && (described.edges ?? []).length === S.edges.length && (described.points ?? []).length === S.points.length;
+      const same = !other && described.faces.length === S.faces.length && (described.edges ?? []).length === S.edges.length && (described.points ?? []).length === S.points.length;
       if (!same) { S.sel = nothing(); S.inspect = null; }
       for (const id of [...S.sel.curve]) if (!curveOf(id)) S.sel.curve.delete(id);
       S.faces = described.faces; S.parts = described.parts ?? []; S.edges = described.edges ?? []; S.points = described.points ?? [];
       lamps.described(described);      // a pixels light's pixels and LEDs, as the build found them
       assemble(loaded);
-      frame(groups.part, !changedNote);
+      held = `${project}/${S.note}`;
+      frame(groups.part, !other);
       spread();
-    } else { S.faces = []; S.parts = []; S.edges = []; S.points = []; S.sel = nothing(); assemble({}); showSelection(); }
+    } else { held = ''; S.faces = []; S.parts = []; S.edges = []; S.points = []; S.sel = nothing(); assemble({}); showSelection(); }
     assemblyBar();
-    S.proj = await api(`/p/${project}`);
+    const after = await api(`/p/${project}`);
+    if (late()) return;
+    S.proj = after;
     if (S.room !== 'sketch') S.room = kindOf(S.note) === 'assembly' ? (S.room === 'motion' ? 'motion' : 'assembly') : 'part';      // now that it is built, it is known for what it is
     keepPose();
     lamps.set(S.data.report?.built || last ? S.data.report?.lights ?? [] : []);
     if (lamps.on) lamps.rebuilt();
     roomBar(); renderSide();
-  } catch (e) { S.data = { error: e.message }; lamps.set([]); }
-  busy();
+  } catch (e) {
+    if (late()) return;
+    S.data = { error: e.message }; lamps.set([]);
+    // the Note asked for did not come: the one before it does not stay in the frame under this one's name
+    if (other) { held = ''; S.faces = []; S.parts = []; S.edges = []; S.points = []; S.sel = nothing(); assemble({}); showSelection(); }
+  }
+  busy(); arriving();
   styleAll(); paint(); showTag(); renderPanel(true); showLast(); assemblyBar(); showSnaps(); showGhosts(); syncLights(); showTimeline();
+  if (other && moving()) timeline.settle();      // back in Motion: posed and lit as the timeline stands, not as built
 }
 
 /** No project is open: the one that was is gone, or there is none yet. */
@@ -2276,7 +2319,7 @@ function renderPanel(force) {
   if (!force && panel.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) { S.stale = true; return; }
   S.stale = false;
   const d = S.data;
-  if (!d) { panel.innerHTML = S.project ? '<div class="card"><h2>No Note open</h2><p class="muted">Connect your agent and ask it for a part. It appears here as soon as it is written.</p></div>'
+  if (!d) { panel.innerHTML = S.project ? '<div class="card"><h2>No Note open</h2><p class="muted">Open the Terminal, start your agent there and ask it for a part. It appears here as soon as it is written.</p></div>'
     : '<div class="card"><h2>No project open</h2><p class="muted">Start one, or upload an archive of one, under the name at the top left.</p></div>'; return; }
   if (d.error) { panel.innerHTML = `<div class="card"><h2>${esc(S.note)}</h2><p class="err">${esc(d.error)}</p></div>`; return; }
   const r = d.report, cards = [], mats = S.proj?.profiles?.materials;
@@ -2624,83 +2667,6 @@ sheet.addEventListener('submit', async (e) => {
     if (made.left_out) notice(`${made.left_out} file${made.left_out === 1 ? '' : 's'} in the archive ${made.left_out === 1 ? 'is' : 'are'} not of a project and ${made.left_out === 1 ? 'was' : 'were'} left out`);
   } catch (err) { go.disabled = false; projectsFailed(err); }
 });
-// Connect your agent: the one line, the link, the other ways in, and what the agent did lately. The agent key opens
-// the agent's door by itself (there was a switch before it, remote control: taken out, monet/remote.py).
-const ago = (iso) => {
-  if (!iso) return 'never';
-  const t = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
-  return t < 90 ? 'just now' : t < 5400 ? `${Math.round(t / 60)} min ago` : t < 129_600 ? `${Math.round(t / 3600)} h ago` : new Date(iso).toLocaleDateString();
-};
-let connectSig = '';
-function connectBody() {
-  const agentLink = S.state.agent, local = /\/\/(localhost|127\.0\.0\.1)/.test(agentLink), v = remote.view();
-  connectSig = JSON.stringify([v, remote.connected()]);
-  const mine = S.state.me.username === S.state.workspace.username;
-  const close = '<form method="dialog"><div class="line"><span style="flex:1"></span><button>Close</button></div></form>';
-  const head = `<h2>Connect your agent</h2>
-    <p class="muted">The thinking and the building happen on your computer, with your own model: your agent builds each Note
-    there and sends what it built. This page checks, shows and exports; it never runs a Note.</p>`;
-  if (!mine) return `${head}<p>This is ${esc(S.state.workspace.name)}'s workspace: their agent and its link are their own.</p>${close}`;
-  return `${head}
-    <h3>The short way: the Terminal</h3>
-    <p>Press <b>Terminal</b>, copy the one line it shows and paste it into a terminal on your computer. It keeps the
-      project in a folder there, builds what changes, and gives this page a terminal with Claude Code or Codex in it.</p>
-    <div class="line" style="margin-top:0"><span style="flex:1"></span><button class="primary" id="openTerm">Open the Terminal</button></div>
-    <h3>Your agent link</h3>
-    <p>Your agent cannot log in as you do, so it comes with a link that has your <b>agent key</b> in it.</p>
-    <p class="remote-warn"><b>This link is a password.</b> Whoever has it can work in your workspace as your agent, and see this
-      page while it is open, until you make a new key. It cannot change or remove a check, acknowledge a load check, or delete.</p>
-    <pre id="agentLink">${esc(agentLink)}</pre>
-    <div class="line" style="margin-top:0"><span class="muted" style="flex:1">It got out, or an agent should stop?</span><button id="newKey">New key</button></div>
-    <h3>Or: your skill, with your link in it</h3>
-    <p>One download: how to work in Monet, and the address to work at. <a href="${root}/skill.zip" download="monet-skill.zip">Download monet-skill.zip</a></p>
-    <p><b>Claude Code</b>: unzip it into <code>~/.claude/skills/</code>. It works through its own script, which builds with
-      <a href="https://docs.astral.sh/uv/getting-started/installation/" target="_blank" rel="noopener">uv</a>: install that once.
-      The first build fetches the CAD kernel (a few hundred MB); later ones start at once.<br>
-      <b>Claude Desktop</b>: Settings → Capabilities → Skills, upload it. Claude builds in its code sandbox only where that
-      sandbox may install packages and reach <code>${esc(new URL(S.state.origin).host)}</code>; the connector below lets it
-      look and point, not build.</p>
-    <p class="muted">The file holds your agent key, as the link does: keep it to yourself. After <i>New key</i>, download it again.</p>
-    <h3>Or as a connector, Claude Desktop</h3>
-    ${local ? `<p>This server runs on your own computer, which Claude's connectors cannot reach. Add it to
-      <code>claude_desktop_config.json</code> (Settings → Developer → Edit Config) instead, then restart Claude:</p>
-      <pre>{ "mcpServers": { "monet": { "command": "npx", "args": ["-y", "mcp-remote", "${esc(agentLink)}/mcp"] } } }</pre>`
-    : `<p>Settings → Connectors → Add custom connector. Name <code>Monet</code>, URL:</p><pre>${esc(agentLink)}/mcp</pre>`}
-    <p>And the skill above, so Claude knows how to work here.</p>
-    <h3>Or as a connector, Claude Code</h3>
-    <pre>claude mcp add --transport http monet ${esc(agentLink)}/mcp</pre>
-    <h3>Say what you want</h3>
-    <p>"Use Monet. Open the project mg400_rakis and show me the nest." Then point at faces here and describe the change.</p>
-    <h3>Now</h3>
-    <div class="remote-facts"><span>this page</span><b class="${remote.connected() ? 'ok' : 'warn'}">${remote.connected() ? 'can be seen by your agent' : 'not connected (trying again…)'}</b>
-      <span>pages open</span><b>${v?.tabs ?? 0}</b><span>your agent was last here</span><b>${ago(v?.seen)}</b></div>
-    <h3>What it changed lately</h3>
-    ${v?.recent?.length ? `<div class="remote-log">${v.recent.map((r) => `<div><span class="muted">${ago(r.at)}</span><span title="${esc(r.what)}">${esc(r.what)}</span></div>`).join('')}</div>`
-      : '<p class="muted">Nothing yet. What your agent changes and where it takes this page are listed here, and kept in the server\'s log.</p>'}
-    ${close}`;
-}
-function drawConnect() {
-  const dlg = $('#connectDialog');
-  dlg.innerHTML = connectBody();
-  if ($('#openTerm')) $('#openTerm').onclick = () => { dlg.close(); terminal.show(true); };
-  if ($('#newKey')) $('#newKey').onclick = async (e) => {
-    e.preventDefault();
-    if (!(await ask('Make a new agent key? The link above stops working at once: every agent you connected needs the new one, and the Terminal a new line.', { yes: 'New key', danger: true }))) return;
-    try { S.state.agent = (await api('/key', 'POST', {})).agent; drawConnect(); } catch (err) { tell(err.message); }
-  };
-}
-$('#connect').onclick = () => {
-  drawConnect();
-  $('#connectDialog').showModal();
-  remote.refresh();
-};
-remote.onChange(() => {
-  const dlg = $('#connectDialog');      // drawn again only when something it shows is another: a line being selected to copy stays put
-  if (dlg.open && JSON.stringify([remote.view(), remote.connected()]) !== connectSig) drawConnect();
-});
-// what the agent did lately, every five seconds while somebody is looking
-setInterval(() => { if ($('#connectDialog').open && !document.hidden) remote.refresh(); }, 5000);
-
 // what the page answers the agent with, through remote.js: where it is, its words, a picture, and going somewhere
 const hands = {
   where: () => ({ project: S.project, note: S.note, room: S.room, kind: kindOf(S.note) ?? null }),
@@ -2731,15 +2697,22 @@ const hands = {
     return { ...hands.where(), png: out.toDataURL('image/png') };
   },
 };
+// the brief: the project in words, for whoever picks it up next (brief.js; PROJECT.md)
+brief = createBrief($('#briefBtn'), { project: () => S.project, api, ask, tell });
 // the terminal: this page to Monet local on this computer, never through the server (terminal.js)
 terminal = createTerminal(view, $('#termBtn'), { project: () => S.project, link: () => S.state?.agent ?? '',
-  mine: () => !!S.state && S.state.me.username === S.state.workspace.username });
+  mine: () => !!S.state && S.state.me.username === S.state.workspace.username,
+  // the one thing that closes the agent's door: another key (the line with the old one in it stops working at once)
+  async newKey() {
+    if (!(await ask('Make a new agent key? The line you started Monet local with stops working at once: stop it (Ctrl+C) and start it again with the new line. Anyone else who had the old line is shut out.', { yes: 'New key', danger: true }))) return false;
+    try { S.state.agent = (await api('/key', 'POST', {})).agent; return true; } catch (err) { tell(err.message); return false; }
+  } });
 $('#logout').onclick = async (e) => { e.preventDefault(); await fetch('/api/logout', { method: 'POST' }); location.href = '/login'; };
 
 let dialled = false;
 async function start(project) {
   S.state = await api('/state');
-  if (!dialled) { dialled = true; remote.start(root, hands, S.state.remote); }
+  if (!dialled) { dialled = true; remote.start(root, hands, S.state.mine); }
   const mine = S.state.me.username === S.state.workspace.username;
   $('#wsName').textContent = mine ? S.state.me.name : `${S.state.workspace.name} (you are looking in as ${S.state.me.username})`;
   $('#usersLink').hidden = S.state.me.role !== 'admin';
@@ -2753,10 +2726,10 @@ async function start(project) {
 let beat = 0;
 setInterval(async () => {
   if (beat++ % 4) return;      // every two seconds
-  if (!S.project || document.hidden || waiting() || press) return;
+  if (!S.project || document.hidden || waiting() || press || opens) return;
   try {
     const { rev } = await api(`/p/${S.project}/rev`);
-    if (waiting()) return;
+    if (waiting() || opens) return;
     // the agent wrote a Note or uploaded a build: look again
     if (rev !== S.rev && !S.compare) await open(S.project, S.note);
   } catch { /* the server is away; try again */ }
@@ -2809,7 +2782,7 @@ versionNow().then((v) => {
 });
 document.addEventListener('visibilitychange', lookForNewer);
 
-window.monet = { S, terminal, groups, cube, lookAlong, controls, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom,
+window.monet = { S, terminal, brief, groups, cube, lookAlong, controls, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom,
   axes, setJoint, goHome, play, stopPlaying, timeline, partPose, lamps, setLevel, startFilm, watchFilm, get film() { return film; }, get pictures() { return pictures; }, reach, tipAt: (name) => tipAt(model(), name, S.pose),
   ghosts, snapAt, placeAt: (name) => { S.placeAt = name; showSnaps(); renderPanel(true); } };   // for looking in from the console, and from scripts/shot.mjs
 resize();

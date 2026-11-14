@@ -1,10 +1,10 @@
 """The web app: one process. The canvas and its API for the person, the agent's door
-(MCP and plain HTTP) for their own LLM harness, and the accounts.
+(plain HTTP) for their own LLM harness, and the accounts.
 
 People are let in by an admin (monet/auth.py): a username, a card, a password. Each has one
 workspace. In the browser it is /w/<username>, behind the login. Their agent, which cannot
-log in, comes through /w/<agent key>/agent and /w/<agent key>/mcp: the key is in the link the
-canvas shows them, and it opens only what an agent may do. The key alone opens it (the switch
+log in, comes through /w/<agent key>/agent: the key is in the line the canvas's Terminal
+shows them, and it opens only what an agent may do. The key alone opens it (the switch
 that used to stand before it, remote control, was taken out: monet/remote.py); a new key closes it.
 """
 import contextlib
@@ -36,7 +36,6 @@ from .workspace import EXPORTS, MAX_ARCHIVE, Problem, Workspaces
 
 ROOT = Path(__file__).resolve().parent.parent
 CANVAS = ROOT / "canvas"
-MCP_PATH = re.compile(r"^/w/([A-Za-z0-9_-]{24,48})/mcp/?$")
 NO_STORE = {"Cache-Control": "no-store"}
 
 
@@ -202,13 +201,14 @@ Monet is a CAD workspace for 3D-printed parts. You (an LLM agent) write each par
 them, measures, runs the user's checks, draws pictures, keeps saved versions and serves files for printing. It never
 runs a Note. The human watches in a browser canvas and clicks the faces they mean.
 
-You need MCP or a shell: building needs Python, with the same Monet and CAD kernel as this server, on the user's
+You need a shell: building needs Python, with the same Monet and CAD kernel as this server, on the user's
 computer. The user's agent key, in the address, is your access to their workspace.
 
 ## 1. Your address
 
-You need the user's **agent link**. It looks like {base}/w/AGENT-KEY and they find it in their canvas under
-"Connect your agent" (people are let into an instance by its admin; there is no way to sign up from here). If
+You need the user's **agent link**. It looks like {base}/w/AGENT-KEY and it is in the one line their canvas shows
+under "Terminal" (people are let into an instance by its admin; there is no way to sign up from here). Where that
+line was run, Monet local has it already: `MONET_URL` is set in its terminals, and kept in ~/.config/monet/link. If
 you were not given one, ask for it. Treat it as a password: it is theirs, do not show it to anyone else or put
 it where others can read it. Below, KEY stands for the agent key in that link: put the real one in its place.
 
@@ -216,12 +216,11 @@ it where others can read it. Below, KEY stands for the agent key in that link: p
 
     POST {base}/w/KEY/agent/TOOL          with a JSON object of arguments (Content-Type: application/json)
 
-or the same tools over MCP: `{base}/w/KEY/mcp`. Answers are JSON; a mistake of yours comes back with its HTTP
-status and {{"error": "what was wrong"}}.
+Answers are JSON; a mistake of yours comes back with its HTTP status and {{"error": "what was wrong"}}.
 
 ## 3. Building
 
-The skill (the user downloads it from "Connect your agent", with their link in it) has `scripts/monet.py`. It needs
+The skill ({base}/skill.zip; the canvas's one line fetches it by itself) has `scripts/monet.py`. It needs
 `uv` (https://docs.astral.sh/uv/), which fetches Python, Monet's builder and the CAD kernel, pinned to this server's:
 
     python scripts/monet.py push PROJECT note.py      send the Note, build it and what uses it here, upload: the report
@@ -258,7 +257,6 @@ successful save: the history is theirs.
 ## Also
 
 - `GET {base}/w/KEY/agent` lists the tools as JSON.
-- MCP (Claude Code, Claude Desktop and others): `{base}/w/KEY/mcp` (streamable HTTP). Building still needs the shell.
 - What only the person can do, logged in at their canvas: change or remove a check, acknowledge a load check,
   delete a Note. The agent key does not open those.
 - Source: {version()["source"]} ({version()["license"]}).
@@ -281,15 +279,10 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         return agent.Caller(ws, f"{base}/w/{owner['key']}", f"{base}/w/{owner['username']}", owner, remote, changed(owner))
 
     def changed(owner):
-        """What an agent changed, or tried in the canvas: in the audit log for the admin's eye, and in the list the
-        person sees under Connect your agent. By MCP and by HTTP alike."""
+        """What an agent changed, or tried in the canvas: in the audit log, for the admin's eye."""
         def told(tool, args, result):
-            where = "/".join(str(x) for x in (args.get("project") or args.get("name"), args.get("note")) if x)
-            what = (f"goto {where or 'here'}" + (f" ({args['room']})" if args.get("room") else "") if tool == "goto"
-                    else f"{tool} {where}" + (f" v{result['version']}" if tool == "save" and result.get("saved") else ""))
             store.log(type="agent", user=owner["username"], tool=tool, project=args.get("project") or args.get("name"), note=args.get("note"),
                       **({"version": result["version"]} if tool == "save" and result.get("saved") else {}))
-            remote.note(owner, what.strip())
         return told
 
     def me(request: Request) -> dict | None:
@@ -304,20 +297,6 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         if (owner.get("lastAgent") or "")[:16] != stamp[:16]:
             owner["lastAgent"] = stamp
             store.save_user(owner)
-
-    # ---- the agent's door, as MCP -------------------------------------------------
-    def caller_from_mcp(headers) -> agent.Caller:
-        owner = store.users.get(headers.get("x-monet-user", ""))
-        if owner is None:
-            raise ValueError("no such workspace")
-        seen(owner)
-        return caller(workspaces.of(owner["id"], owner["name"]), owner, headers)
-
-    from mcp.server.transport_security import TransportSecuritySettings
-    mcp = agent.mcp_server(caller_from_mcp)
-    # the agent key in the address is the secret, not an ambient cookie: nothing for a rebound DNS name to ride on
-    mcp_app = mcp.streamable_http_app(streamable_http_path="/mcp", json_response=True, stateless_http=True,
-                                      transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
 
     # ---- helpers ------------------------------------------------------------------
     async def body_of(request: Request):
@@ -371,7 +350,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         async def endpoint(request: Request):
             owner = auth.find_by_key(store, request.path_params["wid"])
             if owner is None:
-                return JSONResponse({"error": "this agent link is not valid (any more): ask the user for the one in their canvas, under Connect your agent"}, 404)
+                return JSONResponse({"error": "this agent link is not valid (any more): ask the user for the line their canvas shows now, under Terminal"}, 404)
             seen(owner)
             return await inside(request, owner, fn)
         return endpoint
@@ -413,10 +392,9 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
     async def get_version(_request: Request):
         return JSONResponse({**info, "templates": workspaces.template_names(), "coming": coming(store.dir, info["commit"])}, headers=NO_STORE)
 
-    def skill_archive(link: str = "") -> Response:
+    async def skill_zip(_request: Request):
         """The skill (skill/monet/), with the builder the agent builds with (this server's own Monet, and the kernel
-        pinned to this server's: builder_script()); and with a link: link.txt beside SKILL.md, so that it is the one
-        download an agent needs. That one holds the agent key: it is given only to the person, behind their login."""
+        pinned to this server's: builder_script()). For anyone: there is no key in it."""
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             for f in sorted((ROOT / "skill" / "monet").rglob("*")):
@@ -425,13 +403,8 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
             z.writestr("monet/scripts/builder.py", builder_script())
             for name in BUILDER_MODULES:
                 z.write(ROOT / "monet" / f"{name}.py", f"monet/lib/monet/{name}.py")
-            if link:
-                z.writestr("monet/link.txt", link + "\n")
         return Response(buf.getvalue(), media_type="application/zip",
                         headers={**NO_STORE, "Content-Disposition": 'attachment; filename="monet-skill.zip"'})
-
-    async def skill_zip(_request: Request):
-        return skill_archive()
 
     async def start_script(_request: Request):
         """What the canvas's one line runs on the person's computer (uv run https://host/start.py <agent link> <project>):
@@ -583,14 +556,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         return {"workspace": {"name": owner["name"], "username": owner["username"]}, "me": auth.public_user(user),
                 "projects": ws.projects(), "templates": ws.all.template_names(),
                 "base": f"{base}/w/{owner['username']}", "agent": f"{base}/w/{owner['key']}", "origin": base, "version": info,
-                "remote": remote.view(owner) if owner["id"] == user["id"] else None}
-
-    def remote_view(request, _ws, _body):
-        """When the person's agent was last here, how many of their pages it can see, and what it changed lately."""
-        owner = request.state.owner
-        if owner["id"] != request.state.me["id"]:
-            raise Problem("what an agent did is for the person whose workspace this is", 403)
-        return remote.view(owner)
+                "mine": owner["id"] == user["id"]}      # their own workspace: this page is the one their agent may look at
 
     async def remote_tab(websocket: WebSocket):
         """An open canvas of the person: their agent may look at it and take it somewhere."""
@@ -601,13 +567,6 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
             await websocket.close(code=4003)      # before it is accepted: refused
             return
         await remote.serve(websocket, user)
-
-    def own_skill(request, _ws, _body):
-        """The skill with the person's agent link in it: one download, and their agent knows how and where."""
-        owner = request.state.owner
-        if owner["id"] != request.state.me["id"]:
-            raise Problem("the skill with the link in it is the person's own: it holds their agent key", 403)
-        return skill_archive(f"{base_url(request.headers, request.url.scheme)}/w/{owner['key']}")
 
     def view_png(request, _ws, _body):
         png = remote.pictures.get(request.state.owner["id"])
@@ -672,6 +631,16 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
     def rev(request, ws, _body):
         p = ws.project(request.path_params["project"])
         return {"rev": p.rev}
+
+    def get_brief(request, ws, _body):
+        """The project's brief (PROJECT.md): the project in words, for whoever picks it up next. The agent reads and
+        writes the same file through its own door (the tools brief and write_brief)."""
+        name = request.path_params["project"]
+        page = f"{base_url(request.headers, request.url.scheme)}/w/{request.state.owner['username']}#{name}"
+        return ws.project(name).brief(page)
+
+    def put_brief(request, ws, body):
+        return ws.project(request.path_params["project"]).write_brief(body.get("text"))
 
     def get_note(request, ws, _body):
         p, name = note_of(request, ws)
@@ -991,8 +960,6 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route("/w/{wid}", canvas),
         Route("/w/{wid}/api/state", api(state)),
         Route("/w/{wid}/api/key", api(new_key), methods=["POST"]),
-        Route("/w/{wid}/api/remote", api(remote_view), methods=["GET"]),
-        Route("/w/{wid}/api/skill.zip", api(own_skill)),
         WebSocketRoute("/w/{wid}/api/remote/tab", remote_tab),
         Route("/w/{wid}/api/projects", api(list_projects)),
         Route("/w/{wid}/api/projects", api(new_project), methods=["POST"]),
@@ -1002,6 +969,8 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route("/w/{wid}/api/p/{project}/archive.zip", api(archive)),
         Route("/w/{wid}/api/p/{project}/project-of", api(project_of), methods=["POST"]),
         Route("/w/{wid}/api/p/{project}/rev", api(rev)),
+        Route("/w/{wid}/api/p/{project}/brief", api(get_brief)),
+        Route("/w/{wid}/api/p/{project}/brief", api(put_brief), methods=["PUT"]),
         Route("/w/{wid}/api/p/{project}/looks", api(looks), methods=["PUT"]),
         Route("/w/{wid}/api/p/{project}/profile", api(put_profile), methods=["PUT"]),
         Route("/w/{wid}/api/p/{project}/save", api(save), methods=["POST"]),
@@ -1043,31 +1012,9 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Mount("/static", Fresh(directory=CANVAS)),
     ]
 
-    @contextlib.asynccontextmanager
-    async def lifespan(_app):
-        async with mcp.session_manager.run():
-            yield
-
     # any origin may call: what opens a workspace is the id in the address, not a cookie a foreign page could ride on
-    site = Starlette(routes=routes, lifespan=lifespan,
+    site = Starlette(routes=routes,
                      middleware=[Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])])
     site.state.workspaces, site.state.store, site.state.admin, site.state.remote = workspaces, store, admin, remote
 
-    async def app(scope, receive, send):
-        """/w/<agent key>/mcp goes to the MCP app, with whose agent it is written where a tool can read it."""
-        if scope["type"] == "http":
-            m = MCP_PATH.match(scope["path"])
-            if m:
-                owner = auth.find_by_key(store, m.group(1))
-                if owner is None:
-                    await JSONResponse({"error": "this agent link is not valid (any more)"}, 404)(scope, receive, send)
-                    return
-                headers = [(k, v) for k, v in scope["headers"] if k != b"x-monet-user"]
-                headers.append((b"x-monet-user", owner["id"].encode()))
-                await mcp_app({**scope, "path": "/mcp", "raw_path": b"/mcp", "root_path": "", "headers": headers}, receive, send)
-                return
-        await site(scope, receive, send)
-
-    app.state = site.state
-    app.site = site
-    return app
+    return site

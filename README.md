@@ -11,7 +11,7 @@ small shops, where parts have to fit real plywood, real rods and real printers.
 Status: **bare bones, running**. Your own agent writes Notes and builds them on your computer;
 a Python server takes what it built, runs the checks, shows the part in a browser canvas where
 you click faces, keeps versions, diffs them and serves 3MF / STL / STEP. The server never runs a
-Note. Your agent connects to it with the skill's script (a shell with uv) and over MCP. The first real
+Note. Your agent connects to it with the skill's script (a shell with uv). The first real
 project, the MG400 work table, is ported from Fusion 360 and matches it to six digits.
 What is not built yet is listed under [What is missing](#what-is-missing).
 
@@ -35,21 +35,21 @@ foot below) and `mg400_rakis` (the sample).
 gives your agent structure (the Note format, tags, checks), a preview, an interface for
 pointing, and export. An agent cannot log in as a person does, so it comes with an **agent
 link** that has the user's agent key in it (`/w/<agent key>`): treat it as a password. Press
-**Connect your agent** in the canvas for the exact lines, and for a new key when one got out.
+**Terminal** in the canvas for the one line that starts everything, and for a new key when one got out.
 
 The key alone opens your agent's door, for as long as it is your current key: make a new one and
 the old link is dead at once. (There was a switch before it, remote control, with fifteen minutes on
 its clock. It was taken out when the agent moved onto your own computer, started by your own hand:
 one step too many.) Your agent also reaches the canvas you have open: what it shows (`screen`), a picture of your view (`view`) and taking it to a part
 or an area (`goto`). It runs no code in your page: every change goes through its tools, on the
-server, under the same rules. What it changes is listed under Connect your agent and kept in the
-server's log.
+server, under the same rules. What it changes is kept in the server's log.
+
+There is one way in for an agent: plain HTTPS, which the skill's script speaks. (There was a second,
+MCP, with connectors for Claude Desktop and Claude Code and a dialog to explain them. It was taken out:
+an agent needs a shell to build anyway, and one way is easier to keep than two.)
 
 | your harness | how it connects |
 |---|---|
-| one download | **your skill**, from Connect your agent: the skill with your agent link in it (`link.txt`, which its script reads). Claude Code: unzip it into `~/.claude/skills/` and that is all. Claude Desktop: upload it under Settings → Capabilities → Skills; it reaches Monet where Claude's code sandbox may reach your host, else add the connector too. It holds your key: after a new key, download it again. |
-| Claude Desktop | Settings → Connectors → Add custom connector → `https://<host>/w/<agent key>/mcp`, then add the skill under Settings → Capabilities → Skills. For a server on your own machine use `npx mcp-remote http://localhost:8000/w/<agent key>/mcp` in `claude_desktop_config.json`. |
-| Claude Code | `claude mcp add --transport http monet http://localhost:8000/w/<agent key>/mcp` |
 | a shell | `skill/monet/scripts/monet.py` (standard library only; building runs Monet's builder with [uv](https://docs.astral.sh/uv/)) |
 | the canvas's own terminal | press **Terminal** in the canvas, copy the one line it shows, paste it into a terminal on your computer: see below |
 
@@ -67,14 +67,23 @@ local answers only a page of the Monet it is linked to, with a token it knows (t
 puts it in the line), and starts
 only what is on its own short list. This is the first step of [docs/REWIRE.md](docs/REWIRE.md).
 
+**The brief: how a project is handed on.** Beside the Notes sits `PROJECT.md`: what the project is,
+where its repository and its issues are, what is done, the milestones, what to do next, and a log of
+who did what. Your agent reads it before anything else and brings it up to date before it stops; you
+read and write it under **Brief**, beside the project's name. It is in the folder Monet local keeps,
+in the archive and in every saved version. That is what lets a project be picked up on another
+computer, by you next week or by a friend with tokens left over: their agent starts from *Next*, and
+leaves the file so that the one after can. Add `--for=2h` to the one line and the sitting has an end:
+the agent is told when, and Monet local says so ten minutes before, in time to write the brief.
+(Checks, animations and looks are not in the folder yet: they travel in the archive.)
+
 **Your agent builds; the server never runs a Note.** Building needs a shell on your computer with
 uv: `monet.py push <project> <note>.py` sends a Note, builds it there with the same Monet and CAD
 kernel as the server (the skill pins them) and uploads what the build left; `monet.py build
 <project>` builds whatever is not built for its source. The server takes a build only if it is of
 the files it has, with its own Monet and kernel. Tags, joints and the ground you make in the canvas
 change no geometry: the server works them out from the last build. A Note your agent has not built
-since it changed is shown as its last build, marked *waiting for your agent*. MCP alone can look,
-point, add checks and save, not build.
+since it changed is shown as its last build, marked *waiting for your agent*.
 
 **History is your own git.** Make a folder for the project on your computer and let the
 agent keep the Notes there. It commits after every successful attempt (built, checks green,
@@ -101,7 +110,7 @@ assistant on top of that tree. Monet goes the other way:
 - **Make every change visible**: a colour-mapped diff between versions, so you trust
   the change by looking at it, not by trusting a history tree.
 - **Punk engineering.** Duct tape and chewing gum: build123d, git, a three.js
-  viewer, an MCP server and an LLM agent, tied together. Write as little new code as
+  viewer and an LLM agent, tied together. Write as little new code as
   possible.
 
 ## The pieces
@@ -275,8 +284,8 @@ selection, or a plain three.js page loading the GLB files.
 
 ### Chat: the agent
 
-The agent is the user's own: Claude Code, Claude Desktop or another harness with a shell. It
-connects over **MCP** or HTTPS (POST) to tools like: write a Note (which it then builds on the
+The agent is the user's own: Claude Code, Codex or another harness with a shell. It
+connects over HTTPS (POST, through the skill's script) to tools like: write a Note (which it then builds on the
 user's computer and uploads; the server runs the checks), look (a rendered picture), selection (what the user is pointing
 at), add a check, load check, diff two versions, save, export. The agent writes and edits
 Notes; the user describes and points. There is no chat pane and no model in Monet itself.
@@ -454,7 +463,7 @@ monet/        note.py        read a Note without running it; rewrite its TAGS an
               workspace.py   workspaces, projects, versions: the working files in a folder
               store.py       the accounts and the audit log, as files (from Adam Designer)
               auth.py        users, cards, passwords, the cookie, agent keys (from Adam Designer)
-              agent.py       the agent's tools, served over MCP and over HTTPS (POST); the upload
+              agent.py       the agent's tools, served over HTTPS (POST); the upload
               app.py         the web app (Starlette): logins, canvas API, agent door, /api for LLMs
 canvas/       the browser view (three.js), no build step:
               canvas.js      the page: the four areas, selection, panels, compare, Motion

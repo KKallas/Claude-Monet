@@ -327,3 +327,9 @@
 [data-skin="cyber"] .item small.main { color: var(--cyan); }
 [data-skin="cyber"] .twist[data-twig]:hover { color: var(--cyan); }
 [data-skin="cyber"] .twist { color: var(--red); }
+
+/* another Note on its way */
+[data-skin="cyber"] .arriving { border-radius: 0; border-color: var(--yellow); background: rgba(3, 6, 10, .9); box-shadow: 0 0 24px rgba(252, 238, 10, .18); clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px)); }
+[data-skin="cyber"] .arriving span { color: var(--cyan); }
+[data-skin="cyber"] .arriving b { color: var(--yellow); text-shadow: 0 0 12px rgba(252, 238, 10, .5); text-transform: uppercase; letter-spacing: .08em; }
+[data-skin="cyber"] .arriving i { background-image: linear-gradient(90deg, transparent, var(--yellow), transparent); }

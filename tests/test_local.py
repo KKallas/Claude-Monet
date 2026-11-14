@@ -20,8 +20,8 @@ class Server:
     """The script's side of a server, as Monet local uses it: the files it has, what was sent, what was built."""
     URL = "https://monet.example/w/KEY"
 
-    def __init__(self, files=None, off=False):
-        self.files, self.sent, self.builds, self.off = dict(files or {}), [], 0, off
+    def __init__(self, files=None, off=False, brief=""):
+        self.files, self.sent, self.builds, self.off, self.brief = dict(files or {}), [], 0, off, brief
 
     def _host(self):
         return "monet.example"
@@ -35,6 +35,12 @@ class Server:
             self.files[a["note"]] = a["source"]
             self.sent.append(a["note"])
             return {"note": a["note"]}
+        if tool == "brief":
+            return {"project": a["project"], "text": self.brief}
+        if tool == "write_brief":
+            self.brief = a["text"]
+            self.sent.append("PROJECT.md")
+            return {"project": a["project"], "text": self.brief}
         raise AssertionError(tool)
 
     def build_all(self, project):
@@ -204,3 +210,50 @@ async def test_a_port_another_program_has_is_passed_over(tmp_path, monkeypatch):
             while it.port != ports[1]:
                 await asyncio.sleep(0.05)
         task.cancel()
+
+
+def test_the_brief_is_kept_in_step_like_a_note_and_builds_nothing(tmp_path):
+    """PROJECT.md: the project in words, for whoever works on it next. Written here it is sent; written in the canvas
+    (or by another agent, elsewhere) it is taken; changed on both sides it is left alone and said."""
+    server = Server({"a": NOTE})
+    s = sync(tmp_path, server)
+    s.step()
+    assert not (tmp_path / "PROJECT.md").exists() and any("no PROJECT.md yet" in line for line in local.LOG)
+    builds = server.builds
+    (tmp_path / "PROJECT.md").write_text("# p\n\nA lamp.\n")
+    assert s.changed()                                              # seen at the next look, as a Note is
+    s.step()
+    assert server.brief == "# p\n\nA lamp.\n" and server.sent == ["PROJECT.md"] and server.builds == builds
+    server.brief = "# p\n\nA lamp.\n\n## Log\n\n- the person, in the canvas\n"
+    s.step()
+    assert (tmp_path / "PROJECT.md").read_text().endswith("- the person, in the canvas\n")
+    (tmp_path / "PROJECT.md").write_text("# p\n\nmine\n")
+    server.brief = "# p\n\ntheirs\n"
+    s.step()
+    assert (tmp_path / "PROJECT.md").read_text() == "# p\n\nmine\n" and server.brief == "# p\n\ntheirs\n"
+    assert any("PROJECT.md was changed here and on the server" in line for line in local.LOG)
+    sync(tmp_path, server, "mine").step()                            # --mine settles it
+    assert server.brief == "# p\n\nmine\n"
+    # one that is on the server comes into a fresh folder, with the Notes
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    sync(other, server).step()
+    assert (other / "PROJECT.md").read_text() == "# p\n\nmine\n" and (other / "a.py").exists()
+
+
+def test_a_sitting_with_an_end_is_told_to_the_agent_and_said_before_it_is_over(tmp_path):
+    import time
+
+    async def go():
+        one = local.Local(Server(), "p", tmp_path, "t" * 32, 0, until=time.time() + 300)
+        assert one.env()["MONET_UNTIL"] == time.strftime("%Y-%m-%dT%H:%M", time.localtime(one.until))
+        assert "MONET_UNTIL" not in local.Local(Server(), "p", tmp_path, "t" * 32, 0).env()      # no limit: nothing said
+        before = len(local.LOG)
+        one.clock()
+        one.clock()
+        assert [line for line in local.LOG[before:] if "minutes of this sitting are left" in line and "PROJECT.md" in line][1:] == []      # once
+        assert any("5 minutes of this sitting" in line for line in local.LOG[before:])
+        one.until = time.time() - 1
+        one.clock()
+        assert any("the time of this sitting is over" in line for line in local.LOG[before:])
+    asyncio.run(go())

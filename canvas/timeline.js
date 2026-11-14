@@ -443,6 +443,8 @@ export function createTimeline(root, hooks) {
     get frame() { return frame; },
     get anim() { return anim; },
     pause, play, stop, go,
+    /** The view was loaded again while the timeline stood somewhere: pose and lights as they are at that frame. */
+    settle() { if (!root.hidden && frame > 0) place(); },
     /** Shown or not; `k` names what it animates, `a` is the kept animation, `js` the joints. */
     show(on, k, a, js) {
       root.hidden = !on;
