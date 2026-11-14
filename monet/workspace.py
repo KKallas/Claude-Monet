@@ -776,6 +776,71 @@ class Project:
     def is_note(self, name: str) -> bool:
         return notes.parse(self.read(name))["is_note"]
 
+    # ---- what a folder keeps beside the Notes ---------------------------------------
+    def kept(self) -> dict:
+        """The files a project keeps beside its Notes and its brief, as an archive carries them: each Note's checks
+        (<note>.checks.json) and the settings (monet.json: printer, material, looks, animations). With these in the
+        folder, the folder is the whole project: a git repository of it can be worked on anywhere."""
+        files = sorted(self.dir.glob("*.checks.json")) + [self.dir / "monet.json"]
+        return {f.name: f.read_text(encoding="utf-8") for f in files if f.is_file() and not f.is_symlink() and ARCHIVED.match(f.name)}
+
+    def keep(self, files: dict, by: str = "agent") -> dict:
+        """What a folder keeps (as kept() gives it), brought in: **only what the agent's door may do anyway.** A check
+        the project does not have is added. A check it has is never changed and never removed, whatever the folder
+        says: that is the person's, in the canvas, and is answered under `left`. Printer, material, looks and
+        animations are set as the folder has them (an agent may set those); none is taken away."""
+        if not isinstance(files, dict) or len(files) > MAX_ARCHIVE_FILES or sum(len(str(v)) for v in files.values()) > 2_000_000:
+            raise Problem("files is {name: text}: the checks and the settings of one project")
+        added, did, left = {}, [], {}
+        same = lambda a, b: all(a.get(k) == b.get(k) for k in ("what", "min", "max", "equals", "bed"))
+        for name, text in sorted(files.items()):
+            say = left.setdefault(name, [])
+            try:
+                doc = json.loads(text)
+            except (TypeError, ValueError):
+                say.append("cannot be read as JSON")
+                continue
+            if name == "monet.json" and isinstance(doc, dict):
+                now = self.settings
+                try:
+                    if (doc.get("printer"), doc.get("material")) != (now.get("printer"), now.get("material")) and (doc.get("printer") or doc.get("material")):
+                        self.set_profile(doc.get("printer") or None, doc.get("material") or None)
+                        did.append("printer and material")
+                    for note, anim in (doc.get("animations") or {}).items() if isinstance(doc.get("animations"), dict) else ():
+                        if anim != (now.get("animations") or {}).get(note):
+                            self.set_animation(note, anim)
+                            did.append(f"the animation of {note}")
+                    for part, look in (doc.get("looks") or {}).items() if isinstance(doc.get("looks"), dict) else ():
+                        if isinstance(look, dict) and look != (now.get("looks") or {}).get(part):
+                            self.set_look([part], look.get("material"), look.get("color"))
+                            did.append(f"the look of {part}")
+                except Problem as e:
+                    say.append(str(e))
+                say += [f"{k}: not a setting Monet keeps" for k in doc if k not in ("printer", "material", "looks", "animations")]
+            elif (m := re.fullmatch(rf"({_NOTE})\.checks\.json", name)) and isinstance(doc, dict) and isinstance(doc.get("checks"), list):
+                note = m.group(1)
+                if note not in self.files():
+                    say.append(f"there is no Note {note} here")
+                    continue
+                with self.lock:
+                    have = {c["id"]: c for c in self.checks(note)}
+                    for c in doc["checks"]:
+                        try:
+                            new = feynman.clean(c if isinstance(c, dict) else {}, by)
+                        except (TypeError, ValueError) as e:
+                            say.append(f"a check that cannot be kept: {e}")
+                            continue
+                        if new["id"] not in have:
+                            self.add_check(note, c, by)
+                            added.setdefault(note, []).append(new["id"])
+                        elif not same(new, have[new["id"]]):
+                            say.append(f"{new['id']}: another check here by that name; only the person changes a check, in the canvas")
+                    gone = sorted(set(have) - {str(c.get("id")) for c in doc["checks"] if isinstance(c, dict)})
+                    say += [f"{i}: here and not in the folder; only the person removes a check, in the canvas" for i in gone]
+            else:
+                say.append("not a file a project keeps (<note>.checks.json, monet.json)")
+        return {"project": self.name, "added": added, "set": did, "left": {k: v for k, v in left.items() if v}}
+
     # ---- the brief (PROJECT.md) ----------------------------------------------------
     def brief(self, where: str = "") -> dict:
         """The project in words, for whoever picks it up next. Before one is written: empty, with a start to fill in."""

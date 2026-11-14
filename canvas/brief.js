@@ -50,7 +50,8 @@ export function markdown(text) {
   return out.join('\n');
 }
 
-/** hooks: { project(): the one the canvas shows, api(path, method, body), ask(text, {yes, danger}), tell(text) } */
+/** hooks: { project(): the one the canvas shows, api(path, method, body), ask(text, {yes, danger}), tell(text),
+ *  help(): the address of the page on repositories (docs/REPOSITORY.md), or '' } */
 export function createBrief(button, hooks) {
   const dlg = document.body.appendChild(Object.assign(document.createElement('dialog'), { id: 'briefDialog', className: 'brief' }));
   let got = null, editing = false;
@@ -65,7 +66,8 @@ export function createBrief(button, hooks) {
     const head = `<h2>${esc(got.project)} · the brief</h2>
       <p class="muted">PROJECT.md: what this is, where its repository and its issues are, what is done, what comes next. Your agent reads it
         first and brings it up to date before it stops, so anybody (you next week, a friend with tokens to spare, another agent on
-        another computer) can go on from here. It travels with the project's folder, its archive and every saved version.</p>`;
+        another computer) can go on from here. It travels with the project's folder, its archive and every saved version.
+        ${hooks.help?.() ? `<a href="${esc(hooks.help())}" target="_blank" rel="noopener noreferrer">How a project gets a git repository, and what to say to your agent</a>` : ''}</p>`;
     if (editing) {
       dlg.innerHTML = `${head}<textarea id="briefText" spellcheck="false"></textarea>
         <div class="line"><span class="muted" style="flex:1">Markdown. No keys or passwords in it: it is shared with the project.</span>

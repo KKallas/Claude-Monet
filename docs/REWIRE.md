@@ -44,10 +44,13 @@ against a server on localhost.
   sitting ends (`MONET_UNTIL`), Monet local says so ten minutes before, and the skill tells the agent to have the
   brief written by then. Nothing is stopped. A limit in tokens is the harness's own to keep; the skill says the same
   for it: stop at a whole step with enough left to write the brief.
-- **Not carried by the folder yet**: checks, the animation, looks and the printer (`monet.json`, `*.checks.json`)
-  live on the server and in its archive, not in the folder Monet local keeps. A friend who starts from the git
-  repository alone gets the Notes and the brief, builds them, and has no checks. That is the next piece of "the
-  home is a git repository": the folder holds everything an archive does.
+- **The folder is the whole project** (the same day, later): Monet local writes each Note's checks
+  (`<note>.checks.json`) and the settings (`monet.json`) into the folder as the person changes them in the canvas,
+  and brings a cloned folder's into a server that lacks them: the project is made there if there is none, and the
+  folder's checks are added. Added only: "the server's checks rule" (decided above) holds, a check is never changed
+  or removed from a folder. Git itself is the agent's to do with `git` and `gh` on the person's computer (the
+  skill's `references/repository.md`; for the person, `docs/REPOSITORY.md`). Saved versions are not in the folder:
+  git is the history, and a save is a tag.
 - **MCP is out** (Kaspar, 2026-11-14), with the Connect dialog and the skill download that carried the link. One
   way in for an agent: HTTPS, through the skill's script. *New key* moved to the Terminal panel.
 - **Going between rooms** while Monet local uploads no longer leaves the frame on the Note before: one `open()`

@@ -142,25 +142,38 @@ These look and show; none of them changes the project. Every change goes through
 (`write_note`, `add_check`, `save` …), on the server and under its rules. Where you go and what
 you change is kept in the server's log.
 
-## The user's own folder, with git
+## The project's repository: git is yours to do
 
-History lives with the user, not on the server. If you can write files and run commands on the
-user's computer (Claude Code, Cowork, a harness with file and shell tools), set this up before
-the first edit and tell the user where it is:
+History lives with the user, not on the server: **the project's folder is a git repository**, and
+the user never has to type a git command. They say what they want ("put it in a repository",
+"what is open?", "pick up the lamp", "share it with Mari") and you do it with `git` and `gh` in
+their shell. The whole recipe is in [references/repository.md](references/repository.md): read it
+before the first git command in a project. In short:
+
+- **The folder is the whole project**, `~/monet/<project>`: the Notes, the brief (`PROJECT.md`),
+  each Note's checks (`<note>.checks.json`) and the settings (`monet.json`). Monet local writes
+  the last two as the person changes them in the canvas (without it: `monet.py pull <project>`).
+  Commit all of them. **Never edit a `.checks.json`**: a check is the person's, changed in the
+  canvas; from a folder a check can only be added to a server that lacks it.
+- **Is the computer ready?** `git --version && gh --version && gh auth status`. What is missing,
+  tell the user in one message with the one command for their system. Logging in to GitHub
+  (`gh auth login`) is theirs to do, in their browser: never ask for a token or a password.
+- **No repository yet**: `git init -b main`, a `.gitignore` (`.monet/`, `__pycache__/`), a first
+  commit; then `gh repo create <owner>/<project> --private --source . --push`, after asking the
+  user whether private or public (private unless they say so) and under which account. Named as
+  the project. Write its address and its issues' address into the brief.
+- **Every sitting**: `git pull --rebase` and `gh issue list` at the start; a commit when a step
+  is whole; after the brief is brought up to date, commit and `git push`. Close or comment the
+  issues you worked on.
+- **Somebody else's project**: `gh repo clone <owner>/<project> ~/monet/<project>`, then the user
+  pastes the one line of their own canvas's Terminal with that project's name. Monet local makes
+  the project on their Monet, builds it and adds the folder's checks. Without write access: a
+  fork, a branch, a pull request.
+
+**Commit after every successful save**, meaning after `save` answered `saved: true`:
 
 ```bash
-mkdir -p ~/monet/<project> && cd ~/monet/<project>
-git init                       # only if it is not a repository yet
-```
-
-Keep every Note there as `<note>.py`, exactly as you send it to the server. For a project that
-already exists on the server, fetch each Note first (`read_note`, or `monet.py pull <project>`)
-and commit that as the starting point.
-
-**Commit after every successful attempt**, meaning after `save` answered `saved: true`:
-
-```bash
-git add -A && git commit -m "v<version>: <the message you gave save>"
+git add -A && git commit -m "v<version>: <the message you gave save>" && git tag v<version>
 ```
 
 Do not commit red attempts; the point of the history is that every commit is a part that built
@@ -192,6 +205,8 @@ nothing else**:
 - It never deletes: a Note removed from the folder stays on the server until the user deletes it
   in the canvas.
 - `PROJECT.md` in the folder is the brief (above), kept in step with the server the same way.
+- `<note>.checks.json` and `monet.json` appear in the folder too: the checks and the settings, as the
+  person has them in the canvas. They are there to be committed, not edited (see the repository, above).
 - Saving and committing stay yours, as below.
 
 Without it, everything is as this skill says: `pull`, edit, `push`.

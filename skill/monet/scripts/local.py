@@ -9,8 +9,13 @@
 or, with nothing set up, the one line the canvas gives (its Terminal panel): uv run https://<host>/start.py <agent
 link> <project>, which fetches this and starts it in ~/monet/<project> (scripts/start.py).
 
-It does three things, for one project in one folder:
+It does four things, for one project in one folder:
 
+0. **The folder is the whole project.** Beside the Notes it holds the brief (PROJECT.md), each Note's checks
+   (<note>.checks.json) and the settings (monet.json: printer, material, looks, animations), written here as the
+   person changes them in the canvas. So a git repository of the folder can be cloned on another computer and worked
+   on there: where the server has no such project yet it is made, and the folder's checks are added to it (added
+   only: a check is never changed or removed from here; that is the person's, in the canvas).
 1. **The canvas shows the working copy.** A Python file changed in the folder is sent to Monet, built here with
    Monet's builder and uploaded, as `monet.py push` does. A file changed on the server (the person tagged a face in
    the canvas) is written into the folder. A file changed in both since they last agreed is left alone on both sides
@@ -53,6 +58,7 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")      # a Note's name, as monet/n
 PORTS = (47821, 47822, 47823, 47824)      # where it listens: the first that is free; the canvas tries the same ones (terminal.js)
 EVERY = 4               # seconds between two looks at the server, when nothing happened here
 BRIEF = "PROJECT.md"    # the project in words, for whoever works on it next: kept in step with the server, as the Notes are
+KEPT_RE = re.compile(r"^(?:[a-z][a-z0-9_]{0,47}\.checks\.json|monet\.json)$")      # what a project keeps beside those: checks, settings
 KEEP = 256_000          # bytes of a terminal's output kept, for a page that comes (back) to it
 CONFIG = Path(os.environ.get("MONET_CONFIG") or Path.home() / ".config" / "monet")
 
@@ -112,6 +118,26 @@ def whole(text: str) -> str:
     return text if text.endswith("\n") else text + "\n"      # as the server keeps a file
 
 
+def meaning(text: str) -> str:
+    """What a kept file says, whoever wrote it down and however: its checks in the order of their names and without
+    who added them, its numbers as numbers (1 is 1.0). Two files that mean the same are the same here."""
+    def canon(x):
+        if isinstance(x, bool) or x is None or isinstance(x, str):
+            return x
+        if isinstance(x, (int, float)):
+            return float(x)
+        if isinstance(x, dict):
+            return {k: canon(v) for k, v in sorted(x.items())}
+        return [canon(v) for v in x]
+    try:
+        doc = json.loads(text)
+        if isinstance(doc, dict) and isinstance(doc.get("checks"), list):
+            doc = {"checks": sorted(({k: v for k, v in c.items() if k != "by"} for c in doc["checks"] if isinstance(c, dict)), key=lambda c: str(c.get("id")))}
+        return json.dumps(canon(doc), sort_keys=True)
+    except (TypeError, ValueError):
+        return text
+
+
 # ---- the working copy ------------------------------------------------------------------------------------------
 class Sync:
     """One project, one folder. `known` is each file as both sides last agreed on it (a hash), kept in
@@ -129,6 +155,7 @@ class Sync:
             pass
         self.said: set = set()
         self.seen: dict = {}        # name: (mtime, size) as last looked at
+        self.sent: dict = {}        # a kept file that was offered to the server as it stands: (what it means here, there)
 
     def once(self, text: str) -> None:
         if text not in self.said:
@@ -148,8 +175,9 @@ class Sync:
     def changed(self) -> bool:
         """Did a Python file here (or the brief) change since the last look? By time and size: cheap enough to ask every second."""
         now = {f.stem: (f.stat().st_mtime_ns, f.stat().st_size) for f in self.folder.glob("*.py") if NAME_RE.match(f.stem) and f.is_file()}
-        if (self.folder / BRIEF).is_file():
-            now[BRIEF] = ((self.folder / BRIEF).stat().st_mtime_ns, (self.folder / BRIEF).stat().st_size)
+        for f in [self.folder / BRIEF, *self.folder.glob("*.json")]:
+            if f.is_file() and (f.name == BRIEF or KEPT_RE.match(f.name)):
+                now[f.name] = (f.stat().st_mtime_ns, f.stat().st_size)
         if now == self.seen:
             return False
         self.seen = now
@@ -165,6 +193,12 @@ class Sync:
     def step(self) -> bool:
         """Bring the two sides together once. True when it could ask the server."""
         got, why = self.ask("sources", project=self.project)
+        if got is None and "no project" in why and self.local():
+            # a folder that is a project (a repository just cloned) and none by that name on the server yet: made
+            made, why = self.ask("new_project", name=self.project)
+            if made is not None:
+                say(f"{self.project}: there was no such project on the server yet; made, from this folder")
+                got, why = self.ask("sources", project=self.project)
         if got is None:
             self.once(why)
             return False
@@ -203,6 +237,7 @@ class Sync:
                 say(f"{name}.py: sent" + (f" ({r['error']})" if r.get("error") else ""))
             moved = True
         self.brief()
+        self.keeping()
         self.prefer = ""        # --mine and --theirs settle what differed at the start, nothing later
         self.seen = {}
         self.changed()
@@ -259,6 +294,64 @@ class Sync:
                 return
             self.known[BRIEF] = sha(mine)
             say(f"{BRIEF}: sent")
+
+    def keeping(self) -> None:
+        """What the project keeps beside its Notes (each Note's checks, and monet.json: printer, material, looks,
+        animations), in the folder too: so the folder is the whole project, and a git repository of it can be worked
+        on anywhere. What the person changes in the canvas is written here. What comes with the folder (a clone, a
+        pull) is brought in as far as an agent may: a check the server lacks is added, never one changed or removed."""
+        got, why = self.ask("kept", project=self.project)
+        if got is None:
+            return      # a server from before: nothing to keep
+        server, local = got["files"], {}
+        for f in self.folder.glob("*.json"):
+            if f.is_file() and KEPT_RE.match(f.name):
+                try:
+                    local[f.name] = f.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    self.once(f"{f.name} cannot be read as text: left alone")
+        send = {}
+        for name in sorted(set(server) | set(local)):
+            mine, theirs, k = local.get(name), server.get(name), self.known.get(name)
+            a, b = (meaning(mine) if mine is not None else None), (meaning(theirs) if theirs is not None else None)
+            if a == b:
+                self.known[name] = sha(a)
+                continue
+            if mine is None:
+                take = "theirs"
+            elif theirs is None:
+                take = "mine"
+            else:
+                i_changed, they_changed = sha(a) != k, sha(b) != k
+                take = "mine" if i_changed and not they_changed else "theirs" if they_changed and not i_changed else self.prefer
+            if not take:
+                self.once(f"{name} was changed here and on the server since they last agreed: left as it is on both sides. "
+                          f"Start again with --mine to bring this folder's in, or --theirs to take the server's")
+            elif take == "theirs":
+                (self.folder / name).write_text(theirs, encoding="utf-8")
+                self.known[name] = sha(b)
+                say(f"{name}: taken from the server" + (" (it was not here yet)" if mine is None else " (changed in the canvas)"))
+            elif self.sent.get(name) != (a, b):      # asked once for what stands: not again every few seconds
+                send[name] = mine
+                self.sent[name] = (a, b)
+        if not send:
+            return
+        r, why = self.ask("keep", project=self.project, files=send)
+        if r is None:
+            self.once(f"checks and settings not brought in: {why}")
+            for name in send:
+                self.sent.pop(name, None)      # not heard: asked again at the next look
+            return
+        for note, ids in r.get("added", {}).items():
+            say(f"{note}: {len(ids)} check{'' if len(ids) == 1 else 's'} of the folder's added on the server ({', '.join(ids[:6])}{'…' if len(ids) > 6 else ''})")
+        for what in r.get("set", []):
+            say(f"{what}: set on the server as the folder has it")
+        for name, reasons in r.get("left", {}).items():
+            for reason in reasons:
+                self.once(f"{name}: {reason}")
+        for name, text in send.items():
+            if name not in r.get("left", {}):
+                self.known[name] = sha(meaning(text))
 
     built = False
 

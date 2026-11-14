@@ -155,6 +155,14 @@ wrong:
   check, so the agent may write it; it is in `ARCHIVED` and copied into every saved version; Monet local keeps it in
   step with the folder. Its words tell an agent what to work on and never loosen a rule (the skill says so). `--for=2h`
   on Monet local gives a sitting an end (`MONET_UNTIL` in its terminals): said, never enforced.
+- **The folder is the whole project** (Kaspar, 2026-11-14: "the agent would use local command tools for git"): Monet
+  local keeps `<note>.checks.json` and `monet.json` in the folder beside the Notes and the brief (the tools `kept` and
+  `keep`), so a git repository of the folder can be cloned and worked on anywhere; where the server has no such project
+  Monet local makes it. **`keep` only adds**: a check the server lacks is added, one it has is never changed or removed
+  from a folder (`Project.keep`), which is why it may stand at the agent's door when an archive may not. Two kept files
+  that mean the same are the same (`meaning()` in local.py: checks by name, without `by`, 1 as 1.0). Git itself is done
+  by the user's agent with `git` and `gh` (skill: `references/repository.md`; for the person: `docs/REPOSITORY.md`,
+  linked from the Brief). No git on the server, and no token of anybody's in Monet.
 - **Opening a Note in the canvas** (`open()`/`openNow()` in `canvas.js`): one rules at a time. A later one takes over
   (`late()` after every await), the page's own poll waits while one runs (`opens`), and `held` is the project/Note whose
   build the frame holds, which is what decides whether the camera refits and the frame says "loading" (`arriving()`).

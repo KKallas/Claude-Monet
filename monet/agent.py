@@ -138,6 +138,24 @@ def write_brief(c: Caller, project: str, text: str) -> dict:
     return {**out, "written": True, "canvas": c.canvas(project)}
 
 
+def kept(c: Caller, project: str) -> dict:
+    """What the project keeps beside its Notes and its brief, as files: each Note's checks (`NOTE.checks.json`)
+    and the settings (`monet.json`: printer, material, looks, animations). Monet local writes them into the project's
+    folder, so the folder, and a git repository of it, is the whole project. They are the person's record: read
+    them, commit them, do not edit them by hand (a check is changed in the canvas, by the person)."""
+    return {"project": project, "files": c.ws.project(project).kept()}
+
+
+def keep(c: Caller, project: str, files: dict) -> dict:
+    """Bring into the project what a folder keeps beside its Notes (`files`: {name: text}, as `kept` gives them),
+    for a repository that was cloned or pulled: Monet local does this by itself. Only what you may do anyway: a check
+    the project does not have yet is **added**; a check it has is never changed and never removed, whatever the
+    folder says (answered under `left`: tell the user, who decides in the canvas); printer, material, looks and
+    animations are set as the folder has them."""
+    out = c.ws.project(project).keep(files)
+    return {**out, "written": bool(out["added"] or out["set"])}
+
+
 def sources(c: Caller, project: str, version: int = 0) -> dict:
     """Every Python file of a project as the server has it (version 0), or as saved version `version` has it: what
     a build is made from. `monet.py build` fetches these into a folder of its own and builds there."""
@@ -453,10 +471,10 @@ def export(c: Caller, project: str, note: str, format: str = "3mf", version: str
             "bytes": path.stat().st_size, "format": format, "mime": EXPORTS[format]}
 
 
-TOOLS = {f.__name__: f for f in (guide, status, new_project, set_profile, brief, write_brief, read_note, write_note, sources, check, look, pose, reach,
+TOOLS = {f.__name__: f for f in (guide, status, new_project, set_profile, brief, write_brief, kept, keep, read_note, write_note, sources, check, look, pose, reach,
                                  animate, render_animation, bom, selection, add_check, load_check, save, versions, diff, export,
                                  screen, goto, view)}
-READ_ONLY = {"guide", "status", "brief", "read_note", "sources", "check", "look", "pose", "reach", "render_animation", "bom", "selection",
+READ_ONLY = {"guide", "status", "brief", "kept", "read_note", "sources", "check", "look", "pose", "reach", "render_animation", "bom", "selection",
              "load_check", "versions", "diff", "export", "screen", "view"}
 TRIED = {"goto"}     # written down before it runs: the person saw the page move, whether or not it got there
 

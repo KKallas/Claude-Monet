@@ -664,3 +664,38 @@ def test_the_brief_is_the_projects_and_both_doors_read_and_write_it(admin, clien
     assert client.post(f"{door}/status", json={"project": "handed"}).json()["brief"] is None
     for name in ("handed", "handed_on"):
         assert client.delete(f"/w/mari/api/p/{name}").status_code == 200
+
+
+def test_a_folder_keeps_the_checks_and_the_agent_brings_in_only_what_is_missing(admin, client, reg):
+    """kept: each Note's checks and the settings, as files, for the project's folder (and its repository). keep: the
+    way back, for a folder that was cloned: a check the project lacks is added; one it has is never changed and never
+    removed through the agent's door, whatever the folder says."""
+    door = f"/w/{reg['id']}/agent"
+    files = client.post(f"{door}/kept", json={"project": "starter"}).json()["files"]
+    assert {"rod_foot.checks.json", "monet.json"} <= set(files)
+    files = {name: files[name] for name in ("rod_foot.checks.json", "monet.json")}      # (other tests leave Notes of their own in starter)
+    ids = [c["id"] for c in json.loads(files["rod_foot.checks.json"])["checks"]]
+    assert client.post("/w/mari/api/projects", json={"name": "cloned"}).status_code == 200
+    source = client.post(f"{door}/read_note", json={"project": "starter", "note": "rod_foot"}).json()["source"]
+    client.post(f"{door}/write_note", json={"project": "cloned", "note": "rod_foot", "source": source})
+    got = client.post(f"{door}/keep", json={"project": "cloned", "files": files}).json()
+    assert got["added"] == {"rod_foot": ids} and got["left"] == {} and got["written"]
+    assert client.post(f"{door}/keep", json={"project": "cloned", "files": files}).json()["added"] == {}       # once
+    mine = json.loads(files["rod_foot.checks.json"])
+    mine["checks"][0] = {**mine["checks"][0], "max": 1e9, "min": None}                     # loosened in the folder
+    dropped = mine["checks"].pop(1)["id"]                                                  # and one taken out of it
+    mine["checks"].append({"id": "new-one", "what": "volume_cm3", "min": 1, "why": "there is something"})
+    got = client.post(f"{door}/keep", json={"project": "cloned", "files": {
+        "rod_foot.checks.json": json.dumps(mine), "nope.checks.json": '{"checks": []}', "rod_foot.py": "x = 1",
+        "monet.json": json.dumps({"printer": "bambu_x1c", "material": "petg", "owner": "somebody"})}}).json()
+    assert got["added"] == {"rod_foot": ["new-one"]} and got["set"] == ["printer and material"]
+    left = got["left"]
+    assert any(ids[0] in why and "only the person changes a check" in why for why in left["rod_foot.checks.json"])
+    assert any(dropped in why and "only the person removes a check" in why for why in left["rod_foot.checks.json"])
+    assert "no Note nope" in left["nope.checks.json"][0] and "rod_foot.py" in left and "owner" in left["monet.json"][0]
+    now = json.loads(client.post(f"{door}/kept", json={"project": "cloned"}).json()["files"]["rod_foot.checks.json"])["checks"]
+    was = {c["id"]: c for c in json.loads(files["rod_foot.checks.json"])["checks"]}
+    assert [c["id"] for c in now] == ids + ["new-one"]                                     # none gone
+    assert all({k: v for k, v in c.items() if k != "by"} == {k: v for k, v in was[c["id"]].items() if k != "by"} for c in now[:-1])   # none changed
+    assert json.loads(client.post(f"{door}/kept", json={"project": "cloned"}).json()["files"]["monet.json"])["material"] == "petg"
+    assert client.delete("/w/mari/api/p/cloned").status_code == 200

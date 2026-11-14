@@ -20,8 +20,9 @@ class Server:
     """The script's side of a server, as Monet local uses it: the files it has, what was sent, what was built."""
     URL = "https://monet.example/w/KEY"
 
-    def __init__(self, files=None, off=False, brief=""):
+    def __init__(self, files=None, off=False, brief="", kept=None, there=True):
         self.files, self.sent, self.builds, self.off, self.brief = dict(files or {}), [], 0, off, brief
+        self.kept, self.asked, self.there = dict(kept or {}), [], there      # checks and settings; what keep was asked; is there a project
 
     def _host(self):
         return "monet.example"
@@ -29,6 +30,32 @@ class Server:
     def call(self, tool, **a):
         if self.off:
             raise SystemExit("monet: remote control is off")
+        if not self.there and tool != "new_project":
+            raise SystemExit(f"monet: no project {a.get('project')!r}; there are: none yet")
+        if tool == "new_project":
+            self.there = True
+            return {"project": a["name"]}
+        if tool == "kept":
+            return {"files": dict(self.kept)}
+        if tool == "keep":      # as the server does: a check it lacks is added, one it has is never changed or removed
+            self.asked.append(sorted(a["files"]))
+            added, left = {}, {}
+            for name, text in a["files"].items():
+                want, have = json.loads(text), json.loads(self.kept.get(name, '{"checks": []}'))
+                if name == "monet.json":
+                    self.kept[name] = text
+                    continue
+                ids = {c["id"]: c for c in have["checks"]}
+                for c in want["checks"]:
+                    if c["id"] not in ids:
+                        have["checks"].append({**c, "by": "agent"})
+                        added.setdefault(name[:-12], []).append(c["id"])
+                    elif {k: v for k, v in c.items() if k != "by"} != {k: v for k, v in ids[c["id"]].items() if k != "by"}:
+                        left.setdefault(name, []).append(f"{c['id']}: another check here by that name; only the person changes a check, in the canvas")
+                left.setdefault(name, []).extend(f"{i}: here and not in the folder; only the person removes a check, in the canvas"
+                                                 for i in ids if i not in {c["id"] for c in want["checks"]})
+                self.kept[name] = json.dumps(have)
+            return {"added": added, "set": [], "left": {k: v for k, v in left.items() if v}}
         if tool == "sources":
             return {"files": {f"{n}.py": t for n, t in self.files.items()}}
         if tool == "write_note":
@@ -257,3 +284,50 @@ def test_a_sitting_with_an_end_is_told_to_the_agent_and_said_before_it_is_over(t
         one.clock()
         assert any("the time of this sitting is over" in line for line in local.LOG[before:])
     asyncio.run(go())
+
+
+CHECKS = {"checks": [{"id": "size", "what": "size_x", "max": 40.0, "why": "fits the slot", "by": "user"}]}
+
+
+def test_the_folder_holds_the_checks_and_settings_and_a_cloned_one_brings_them_in(tmp_path):
+    """The folder is the whole project: what the person does to a check in the canvas is written into it, and a
+    folder that came from a repository brings its checks to a server that has none. Added only: a check the server
+    has is never changed or removed from a folder."""
+    server = Server({"a": NOTE}, kept={"a.checks.json": json.dumps(CHECKS, indent=1) + "\n", "monet.json": '{"printer": "bambu_x1c", "material": "pla"}\n'})
+    s = sync(tmp_path, server)
+    s.step()
+    assert json.loads((tmp_path / "a.checks.json").read_text()) == CHECKS and (tmp_path / "monet.json").exists()
+    assert server.asked == []                                          # taken, nothing brought
+    # the person changes a check in the canvas: it is in the folder at the next look, for git to see
+    server.kept["a.checks.json"] = json.dumps({"checks": [{**CHECKS["checks"][0], "max": 42.0}]})
+    s.step()
+    assert json.loads((tmp_path / "a.checks.json").read_text())["checks"][0]["max"] == 42.0
+    # written another way round (who added it, 42 for 42.0) it is the same file: nothing moves
+    (tmp_path / "a.checks.json").write_text(json.dumps({"checks": [{"what": "size_x", "id": "size", "max": 42, "why": "fits the slot", "by": "agent"}]}))
+    s.step()
+    assert server.asked == []
+    # the folder changes a check (somebody edited the file, or pulled it): not from here. Said once, asked once
+    (tmp_path / "a.checks.json").write_text(json.dumps({"checks": [{**CHECKS["checks"][0], "max": 99.0}]}))
+    s.step()
+    s.step()
+    assert server.asked == [["a.checks.json"]] and json.loads(server.kept["a.checks.json"])["checks"][0]["max"] == 42.0
+    assert [line for line in local.LOG if "only the person changes a check" in line][1:] == []
+
+    # the same folder on another computer, with another person's Monet that has no such project
+    other = Server(there=False)
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    (clone / "a.py").write_text(NOTE)
+    (clone / "a.checks.json").write_text(json.dumps(CHECKS))
+    (clone / "PROJECT.md").write_text("# p\n\nFrom the repository.\n")
+    c = sync(clone, other)
+    assert c.step() and other.there and other.files == {"a": NOTE}       # made, and the Notes sent
+    assert json.loads(other.kept["a.checks.json"])["checks"][0]["id"] == "size" and other.brief.startswith("# p")
+    assert any("1 check of the folder's added on the server (size)" in line for line in local.LOG)
+    c.step()
+    assert other.asked == [["a.checks.json"]]                           # agreed: not asked again
+    # an empty folder makes no project by a mistyped name
+    nothing = tmp_path / "nothing"
+    nothing.mkdir()
+    gone = Server(there=False)
+    assert not sync(nothing, gone).step() and not gone.there

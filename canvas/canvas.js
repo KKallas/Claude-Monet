@@ -2698,7 +2698,8 @@ const hands = {
   },
 };
 // the brief: the project in words, for whoever picks it up next (brief.js; PROJECT.md)
-brief = createBrief($('#briefBtn'), { project: () => S.project, api, ask, tell });
+brief = createBrief($('#briefBtn'), { project: () => S.project, api, ask, tell,
+  help: () => (/^https:\/\/github\.com\//.test(S.state?.version?.source ?? '') ? `${S.state.version.source}/blob/main/docs/REPOSITORY.md` : '') });
 // the terminal: this page to Monet local on this computer, never through the server (terminal.js)
 terminal = createTerminal(view, $('#termBtn'), { project: () => S.project, link: () => S.state?.agent ?? '',
   mine: () => !!S.state && S.state.me.username === S.state.workspace.username,

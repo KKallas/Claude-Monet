@@ -14,7 +14,8 @@ builder with uv: https://docs.astral.sh/uv/).
     monet.py brief <project> [out.md]        the project's brief (PROJECT.md): read it first; before one is written,
                                              a start to fill in
     monet.py write-brief <project> <file.md> send the brief, the whole of it: before you stop, every sitting
-    monet.py pull <project> [dir]            every Note, with the saved .glb and .fingerprint.json, into dir (default .)
+    monet.py pull <project> [dir]            every Note, the brief, the checks and settings, and the saved .glb and
+                                             .fingerprint.json, into dir (default .)
     monet.py push <project> <file.py>...     send Notes, build them and what uses them here, upload; prints each
                                              report, exit 1 if any is red
     monet.py build <project> [note...] [--export stl,3mf,step] [--version N]
@@ -281,6 +282,10 @@ def main(argv):
         if said:
             (target / "PROJECT.md").write_text(said, encoding="utf-8")
             print("PROJECT.md")
+        for name, text in call("kept", project=project)["files"].items():      # checks and settings: the folder is the whole project
+            if re.fullmatch(r"(?:[a-z][a-z0-9_]{0,47}\.checks\.json|monet\.json)", name):
+                (target / name).write_text(text, encoding="utf-8")
+                print(name)
         versions = call("versions", project=project)["versions"]
         head = versions[-1]["version"] if versions else None
         for n in call("status", project=project)["notes"]:

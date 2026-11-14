@@ -75,7 +75,14 @@ in the archive and in every saved version. That is what lets a project be picked
 computer, by you next week or by a friend with tokens left over: their agent starts from *Next*, and
 leaves the file so that the one after can. Add `--for=2h` to the one line and the sitting has an end:
 the agent is told when, and Monet local says so ten minutes before, in time to write the brief.
-(Checks, animations and looks are not in the folder yet: they travel in the archive.)
+
+**The folder is the whole project, and a git repository of it is its home.** Monet local also keeps each
+Note's checks (`<note>.checks.json`) and the settings (`monet.json`) in the folder, as you change them in the
+canvas. You do not type git: you tell your agent ("put this in a repository", "what is open?", "bring the
+brief up to date, commit and push") and it uses `git` and `gh` on your computer. A friend clones the
+repository, pastes the one line of their own canvas, and their Monet local makes the project on their Monet,
+builds it and brings the checks along (added only: a check is changed or removed by the person, in the canvas,
+never from a file). What to install and what to say: [docs/REPOSITORY.md](docs/REPOSITORY.md).
 
 **Your agent builds; the server never runs a Note.** Building needs a shell on your computer with
 uv: `monet.py push <project> <note>.py` sends a Note, builds it there with the same Monet and CAD
