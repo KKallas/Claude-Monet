@@ -32,6 +32,9 @@ test('a named pose: what overlaps, what clashes, and every keep-out clear or not
     clear: { keepout_beam: 11283.627 }, keepout_hits: { keepout_beam: [['leaf_left', 5641.813], ['leaf_right', 5641.813]] } };
   assert.deepEqual(poseLines(ajar), [['nothing overlaps · no clash', 'ok'], ['keepout_beam: 11283.6 mm³ in it, leaf_left 5641.8 mm³, leaf_right 5641.8 mm³', 'err']]);
   assert.deepEqual(poseLines({ ...ajar, clear: { keepout_beam: 0 } })[1], ['keepout_beam: clear', 'ok']);
+  // red only where a check holds the keep-out clear in that pose; elsewhere being in it is said, not an error
+  assert.equal(poseLines(ajar, new Set(['keepout_beam']))[1][1], 'err');
+  assert.deepEqual(poseLines(ajar, new Set())[1], ['keepout_beam: 11283.6 mm³ in it, leaf_left 5641.8 mm³, leaf_right 5641.8 mm³ (no check holds it clear in this pose)', '']);
   assert.deepEqual(poseLines({ resolved: false, why: 'leaf_left = 200 is outside its range [0, 90]' }), [['leaf_left = 200 is outside its range [0, 90]', 'err']]);
   const joints = { leaf_left: { kind: 'revolute', unit: '°' }, leaf_right: { kind: 'revolute', unit: '°' }, arm: { kind: 'revolute', unit: '°' } };
   assert.equal(poseValues(ajar.values, joints), 'leaf_left 20°, leaf_right -20°');

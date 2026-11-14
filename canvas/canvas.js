@@ -1808,10 +1808,12 @@ function motionCards() {
     <p class="muted">Drag a part in the view: it moves as its joint lets it. A joint that follows others moves with them.</p>`)];
   if (S.edit) cards.push(editCard(mo));
   const poses = Object.entries(mo.poses ?? {});
+  // the keep-outs a check holds clear in a pose: only there is something in one an error
+  const heldClear = (name) => new Set((S.data?.report?.checks ?? []).filter((c) => c.what.startsWith(`pose.${name}.clear.`)).map((c) => c.what.slice(`pose.${name}.clear.`.length)));
   if (poses.length) cards.push(card('poses', `Poses · ${poses.length}`, `${poses.map(([name, p]) => `<div class="check pose ${atPose(name) ? 'on' : ''}" data-posename="${esc(name)}">
       <div class="row"><span><b>${esc(name)}</b> <span class="muted">${p.resolved ? esc(poseValues(p.values, mo.joints)) : ''}</span></span>
         <button data-act="posego" data-name="${esc(name)}" ${p.resolved ? '' : 'disabled'} title="put the joints where this pose has them">Go</button></div>
-      ${poseLines(p).map(fact).join('')}</div>`).join('')}
+      ${poseLines(p, heldClear(name)).map(fact).join('')}</div>`).join('')}
     <p class="muted">The Note's POSES, worked out from the build. A check can hold pose.NAME.clear.KEEPOUT, interference_mm3 and clash_mm3.</p>`));
   const inter = mo.interference ?? { pairs: [] };
   cards.push(card('clash', `Clashes${S.clash.length ? ` · ${S.clash.length}` : ''}`, `<div id="poseClashes">${clashWords()}</div>

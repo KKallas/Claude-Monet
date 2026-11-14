@@ -48,7 +48,11 @@ export function torqueWords(t, unit = '') {
 }
 
 /** A named pose (report.motion.poses[name]): its lines, [text, level]. */
-export function poseLines(p) {
+/** What a named pose hits: overlap, clash, and each keep-out. `held`: the keep-outs a check of the Note holds clear in
+ *  this pose (pose.NAME.clear.KEEPOUT). A keep-out with something in it is red only there: in another pose it is
+ *  only said, since being in it is often the point of that pose (the hands over the board while soldering). Without
+ *  `held`, every keep-out counts. */
+export function poseLines(p, held = null) {
   if (!p) return [];
   if (!p.resolved) return [[p.why || 'this pose cannot be taken', 'err']];
   const over = p.interference_mm3 > 0, hit = p.clash_mm3 > 0;
@@ -56,7 +60,9 @@ export function poseLines(p) {
     + `${hit ? `clash ${mm3(p.clash_mm3)}: ${(p.clashes ?? []).slice(0, 3).map(([a, b]) => `${a} × ${b}`).join(', ')}` : 'no clash'}`, hit ? 'err' : over ? 'warn' : 'ok']];
   for (const [k, v] of Object.entries(p.clear ?? {})) {
     const hits = (p.keepout_hits?.[k] ?? []).map(([part, vol]) => `${part} ${mm3(vol)}`);
-    out.push(v > 1e-3 ? [`${k}: ${mm3(v)} in it${hits.length ? `, ${hits.join(', ')}` : ''}`, 'err'] : [`${k}: clear`, 'ok']);
+    const counts = !held || held.has(k);
+    out.push(v > 1e-3 ? [`${k}: ${mm3(v)} in it${hits.length ? `, ${hits.join(', ')}` : ''}${counts ? '' : ' (no check holds it clear in this pose)'}`, counts ? 'err' : '']
+      : [`${k}: clear`, 'ok']);
   }
   return out;
 }
