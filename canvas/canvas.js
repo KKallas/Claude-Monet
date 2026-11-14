@@ -344,6 +344,45 @@ function lookFrom(name) {
   controls.update();
 }
 
+/** Where the selection is, as the view shows it now (an exploded or posed part where it has gone): a box around the
+ *  objects, faces, lines and points selected, or null when nothing is. */
+function selectionBox() {
+  const out = new THREE.Box3(), p = new THREE.Vector3(), at = (i) => groups.part.children[i]?.matrixWorld;
+  const add = (part, x, y, z) => { p.set(x, y, z); const m = at(part); if (m) p.applyMatrix4(m); out.expandByPoint(p); };
+  for (const i of S.sel.part) {
+    const b = S.parts[i]?.bbox;
+    if (b) for (const x of [b[0], b[3]]) for (const y of [b[1], b[4]]) for (const z of [b[2], b[5]]) add(i, x, y, z);
+  }
+  if (shared) for (const id of S.sel.face) {
+    const f = S.faces[id];
+    if (!f) continue;
+    const part = Math.max(0, partOfFace(id)), pos = shared.position, idx = shared.index;
+    for (let k = f.tris[0] * 3; k < (f.tris[0] + f.tris[1]) * 3; k++) add(part, pos[idx[k] * 3], pos[idx[k] * 3 + 1], pos[idx[k] * 3 + 2]);
+  }
+  for (const id of S.sel.edge) {
+    const e = S.edges[id];
+    if (e?.a) { add(e.p, ...e.a); add(e.p, ...e.b); }
+    else if (e?.c) for (const d of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) add(e.p, e.c[0] + d[0] * e.r, e.c[1] + d[1] * e.r, e.c[2] + d[2] * e.r);
+  }
+  for (const id of S.sel.vertex) { const v = S.points[id]; if (v) add(v.p, ...v.at); }
+  return out.isEmpty() ? null : out;
+}
+/** Zoom to what is selected: it fills the part of the view still seen, from the side the camera is on. The scene's
+ *  own size (radius, which the clipping planes follow) stays as it is. */
+function zoomToSelection() {
+  const b = selectionBox();
+  if (!b) { notice('select something first: then this brings it to the middle and fills the view with it'); return; }
+  // not closer than the near plane allows: a point is shown with what is around it
+  const c = b.getCenter(new THREE.Vector3()), r = Math.max(radius / 40, b.getSize(new THREE.Vector3()).length() / 2);
+  const dir = camera.position.clone().sub(controls.target).normalize();
+  controls.target.copy(c);
+  if (camera.isPerspectiveCamera) { camera.zoom = 1; camera.position.copy(c).addScaledVector(dir, fitDistance() * r / radius); }
+  else { camera.zoom = radius / r; camera.position.copy(c).addScaledVector(dir, radius * 8); }
+  resize();
+  controls.update();
+  wake();
+}
+
 function frame(object, keepCamera) {
   if (object === groups.part) {      // measured put together and as built; spread() follows
     for (const one of object.children) { one.position.set(0, 0, 0); one.quaternion.identity(); one.updateMatrix(); }
@@ -1200,6 +1239,54 @@ controls.addEventListener('change', wake);
 
 // ---- toolbar ---------------------------------------------------------------------------------------------
 document.querySelectorAll('[data-cam]').forEach((b) => { b.onclick = () => lookFrom(b.dataset.cam); });
+$('#zoomSel').onclick = () => zoomToSelection();
+
+// ---- a picture of the view (issue #11): as it is, bigger than the screen, saved as a PNG --------------------------
+// Drawn here, like the video: the view's own camera, style, section, pose and lights, with the drawing buffer made
+// bigger for one frame. What is there only to work with is left out: the selection, the measurement, the cube.
+// the time on this computer's clock, for a file's name: 2026-11-14-20-15
+const stamp = (d = new Date()) => [d.getFullYear(), d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes()].map((n) => String(n).padStart(2, '0')).join('-');
+async function renderImage(width) {
+  const w = view.clientWidth, h = view.clientHeight;
+  if (!S.data?.report?.built || !w || !h) { notice('open a Note that builds first'); return; }
+  const gl = renderer.getContext(), most = Math.min(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), gl.getParameter(gl.MAX_TEXTURE_SIZE), 8192);
+  const k = Math.min(width / w, most / w, most / h), ratio = renderer.getPixelRatio();
+  const sel = S.sel, hot = [S.hot, S.hotPart], seen = [selLines, selDots, dimLine, dimDots].map((o) => o.visible);
+  busy('drawing the picture…');
+  await new Promise((r) => requestAnimationFrame(r));
+  let pad;
+  try {
+    S.sel = nothing(); S.hot = null; S.hotPart = null; paint();
+    for (const o of [selLines, selDots, dimLine, dimDots]) o.visible = false;
+    renderer.setPixelRatio(k); renderer.setSize(w, h, false);
+    lamps.quality(true);
+    if (lamps.on) { lamps.update(smokeTime / 1000); lamps.render(camera); } else renderer.render(scene, camera);
+    // read at once, before the next frame of the view clears it
+    pad = Object.assign(document.createElement('canvas'), { width: canvas.width, height: canvas.height });
+    const g = pad.getContext('2d'), bg = getComputedStyle(view).backgroundColor;
+    g.fillStyle = /rgba\(.*, 0\)$|transparent/.test(bg) ? getComputedStyle(document.body).backgroundColor : bg;
+    g.fillRect(0, 0, pad.width, pad.height);
+    g.drawImage(canvas, 0, 0);
+  } finally {
+    S.sel = sel; [S.hot, S.hotPart] = hot; paint();
+    [selLines, selDots, dimLine, dimDots].forEach((o, i) => { o.visible = seen[i]; });
+    renderer.setPixelRatio(ratio); lamps.quality(false); resize(); wake();
+  }
+  const blob = await new Promise((r) => pad.toBlob(r, 'image/png'));
+  busy();
+  if (!blob) { tell('The picture was not made: it is too big for this browser. Try a smaller one.'); return; }
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `${S.note}-${stamp()}.png` });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+  notice(`the picture is saved: ${pad.width} × ${pad.height} px`);
+}
+$('#shot').onclick = (e) => { const pop = $('#shotPop'); pop.hidden = !pop.hidden; e.currentTarget.classList.toggle('on', !pop.hidden); };
+$('#shotGo').onclick = () => renderImage(Number($('#shotSize').value));
+window.addEventListener('keydown', (e) => {      // F: frame what is selected (not while typing or drawing)
+  if (e.key !== 'f' || e.ctrlKey || e.metaKey || e.altKey || /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName ?? '') || (S.room === 'sketch' && sketch.state.active)) return;
+  e.preventDefault();
+  zoomToSelection();
+});
 $('#edges').onclick = (e) => { edgesOn = !edgesOn; e.currentTarget.classList.toggle('on', edgesOn); styleAll(); };
 $('#style').innerHTML = Object.entries(STYLES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
 $('#style').value = look.style;
@@ -2399,6 +2486,7 @@ function renderPanel(force) {
         <span><span class="swatch" style="background:${PARTS[i % PARTS.length]}"></span><b class="${S.hidden.has(i) ? 'muted' : ''}">${esc(q.name)}</b></span>
         <span class="v muted">${isKeepout(i) ? 'keep-out' : `${fmt(q.volume / 1000)} cm³`}</span>
         ${known.has(q.name) ? `<button class="x" data-act="opennote" data-name="${esc(q.name)}" title="open this part's Note">↗</button>` : ''}
+        <button class="x" data-act="zoompart" data-i="${i}" title="select this part and zoom to it (F zooms to whatever is selected)">⌖</button>
         <button class="x" data-act="solo" data-i="${i}" title="show only this part">◎</button>
         <button class="x" data-act="eye" data-i="${i}" title="${S.hidden.has(i) ? 'show' : 'hide'}">${S.hidden.has(i) ? '○' : '●'}</button></div>
         <div class="why mono">${[0, 1, 2].map((k) => fmt(q.bbox[k + 3] - q.bbox[k])).join(' × ')} mm${partFact(q.name) ? ` · ${esc(partWords(partFact(q.name), mats))}` : ''}</div></div>`).join('')}
@@ -2620,6 +2708,7 @@ $('#panel').addEventListener('click', (e) => {
     return;
   }
   if (a === 'opennote') { open(S.project, b.dataset.name); return; }
+  if (a === 'zoompart') { const i = Number(b.dataset.i); if (S.hidden.has(i)) { S.hidden.delete(i); spread(); } select([{ kind: 'part', i }], {}); zoomToSelection(); return; }
   const n = `/p/${S.project}/n/${S.note}`, num = (id) => ($(id).value.trim() === '' ? null : Number($(id).value.replace(',', '.')));
   if (a === 'tag') act(async () => {
     const name = $('#tagName').value.trim();

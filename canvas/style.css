@@ -422,9 +422,9 @@ dialog.brief textarea { flex: 1; min-height: 46vh; margin-top: 10px; padding: 10
 @keyframes term-pulse { 50% { opacity: .2; } }
 @media (prefers-reduced-motion: reduce) { .term-wait i { animation: none; } }
 
-/* Find (find.js): the box at the top of the side panel; every list keeps what matches */
-aside .find { position: sticky; top: -10px; z-index: 2; display: flex; align-items: center; gap: 6px; margin: -10px 0 10px; padding: 10px 10px 8px; background: var(--bg-surface); border-bottom: 1px solid var(--border); }
-aside .find input { flex: 1; }
+/* Find (find.js): the box at the top of the panel beside the view; every list keeps what matches */
+.panel > .find { position: sticky; top: -10px; z-index: 3; display: flex; align-items: center; gap: 6px; margin: -10px -10px 10px; padding: 10px 10px 8px; background: var(--bg-surface); border-bottom: 1px solid var(--border); }
+.panel > .find input { flex: 1; }
 .find-n { flex: none; color: var(--accent); font-size: 11px; white-space: nowrap; }
 .find-n:empty { display: none; }
 .item.twig.way { color: var(--text-muted); }
@@ -435,7 +435,7 @@ small.hits, .fold .hits { color: var(--accent); }
 .card.found > .fold .chev::before { content: '▾'; }
 .card.missed > .body { display: none; }
 .card.missed > .fold .chev::before { content: '▸'; }
-.card .body > [hidden], aside .body > [hidden] { display: none !important; }
+.card .body > [hidden], aside .body > [hidden], aside .item[hidden] { display: none !important; }
 .check.editing { padding-left: 8px; box-shadow: inset 2px 0 var(--accent); }
 .check.editing .line { margin-top: 6px; }
 /* the Claude plan's usage over the terminal (terminal.js plan(), from Monet local's usage.py) */
@@ -449,3 +449,6 @@ small.hits, .fold .hits { color: var(--accent); }
 .term-usage .hot { color: #ff6b81; } .term-usage .hot s { background: #ff6b81; box-shadow: 0 0 6px #ff6b81; }
 .term-usage .old { opacity: .55; }
 @media (max-width: 900px) { .term-usage b { display: none; } .term-usage i { width: 30px; } }
+
+/* a pop-up of the right rail opens to its left (the Picture's size) */
+.rail.right .rail-pop { left: auto; right: calc(100% + 6px); }

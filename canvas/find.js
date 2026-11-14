@@ -1,6 +1,6 @@
-// Find: a few words in the box at the top of the side panel, and every list of the canvas keeps what they name: the
-// Notes' tree (by a Note's name, or by one of its checks: "pieces" finds the Note that holds that check, among hundreds),
-// the versions and sketches beside it, and the lists beside the view (checks, tags, parts, joints, poses, the BOM).
+// Find: a few words in the box at the top of the panel beside the view, and every list keeps what they name: that
+// panel's lists (objects, checks, tags, joints, poses, the BOM), and the Notes' tree on the left with the versions and
+// sketches (a Note by its name, or by one of its checks: "pieces" finds the Note that holds that check, among hundreds).
 // The person types it; their agent can fill it for them (goto with `find`), which is data, never code.
 //
 // Every word must be in the row, in any case. `is:<state>` picks by state instead of by words: `is:red` (a failing check,

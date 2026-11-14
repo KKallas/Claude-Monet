@@ -22,6 +22,7 @@ builder with uv: https://docs.astral.sh/uv/).
                                              build here what is not built for its source as it is (or these Notes),
                                              first any saved version the load check waits for, and upload it
     monet.py look <project> <note> [out.png] [views]
+    monet.py view [out.png]                   what the user sees: their open canvas, as it is on their screen
     monet.py pose <project> <note> "j1=30, j2=-10" [out.png]   an assembly moved: what it hits, and its picture
     monet.py animate <project> <note> <keys.json>    keyframes on the timeline: {"fps", "length", "tracks": {joint: [[frame, value], …]}}
                                              ("none" takes the animation away)
@@ -335,6 +336,12 @@ def main(argv):
         out = Path(a[2] if len(a) > 2 else f"{a[1]}.png")
         r = call("look", project=a[0], note=a[1], **({"views": a[3]} if len(a) > 3 else {}))
         get(r["image"], out, "fetching the picture")
+        print(out)
+    elif cmd == "view":      # a picture of the person's open canvas: their camera, pose, selection (the address holds the key: never printed)
+        out = Path(a[0] if a else "view.png")
+        r = call("view")
+        get(r.pop("image"), out, "fetching the picture")
+        show({k: v for k, v in r.items() if k != "png"})
         print(out)
     elif cmd == "pose":
         out = Path(a[3] if len(a) > 3 else f"{a[1]}-pose.png")

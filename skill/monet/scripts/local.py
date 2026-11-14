@@ -21,7 +21,8 @@ It does four things, for one project in one folder:
    the canvas) is written into the folder. A file changed in both since they last agreed is left alone on both sides
    and said: nothing is merged here yet.
 2. **A terminal for the canvas.** A websocket on 127.0.0.1 gives the person's own page a terminal in the folder,
-   running one of a short list (claude, codex, a shell). The server is not in between and never sees it. Over it go
+   running one of a short list (claude, codex, a shell) as the person, with their PATH and logins (gh, git), Claude
+   Code with Claude in Chrome (--chrome). The server is not in between and never sees it. Over it go
    also the bars of the Claude plan's usage (session, week, a model's week: scripts/usage.py, from what Claude Code
    knows on this computer; Claude Code is started with it as its status line).
 
@@ -376,7 +377,23 @@ class Sync:
 def runs() -> dict:
     """What a terminal may run, by name. The page picks a name: this list is the whole of what it can start."""
     shell = os.environ.get("SHELL") or "/bin/sh"
-    return {"claude": ["claude", *status_line()], "codex": ["codex"], "shell": [shell, "-l"]}
+    return {"claude": ["claude", *chrome(), *status_line()], "codex": ["codex"], "shell": [shell, "-l"]}
+
+
+_chrome: list = []
+
+
+def chrome() -> list:
+    """Claude Code with Claude in Chrome: the person's own Chrome, with their sign-ins, through the extension (their
+    agent opens a tab, reads a page, looks at it). Asked of this Claude Code once, so an older one still starts."""
+    if not _chrome:
+        import subprocess
+        try:
+            knows = "--chrome" in subprocess.run(["claude", "--help"], capture_output=True, text=True, timeout=20).stdout
+        except (OSError, subprocess.SubprocessError):
+            knows = False
+        _chrome.append(["--chrome"] if knows else [])
+    return _chrome[0]
 
 
 def status_line() -> list:
@@ -390,6 +407,24 @@ def status_line() -> list:
         return []
     import shlex
     return ["--settings", json.dumps({"statusLine": {"type": "command", "command": f"{shlex.quote(sys.executable)} {shlex.quote(str(HERE / 'usage.py'))}"}})]
+
+
+def own_env(environ=None) -> dict:
+    """The environment this was started in, without what `uv run` put in it for this script: its environment's bin
+    first on PATH (and VIRTUAL_ENV). What the person's terminal had is what their agent and shell get."""
+    env = dict(os.environ if environ is None else environ)
+    ours = {str(Path(sys.executable).parent)}
+    if env.get("VIRTUAL_ENV"):
+        ours.add(str(Path(env["VIRTUAL_ENV"]) / "bin"))
+    for k in ("VIRTUAL_ENV", "UV_RUN_RECURSION_DEPTH", "PYTHONHOME", "PYTHONPATH"):
+        env.pop(k, None)
+    seen, path = set(), []
+    for d in env.get("PATH", "").split(os.pathsep):
+        if d and d.rstrip("/") not in ours and "/.cache/uv/environments" not in d and d not in seen:
+            seen.add(d)
+            path.append(d)
+    env["PATH"] = os.pathsep.join(path)
+    return env
 
 
 def usage():
@@ -492,9 +527,11 @@ class Local:
         return [self.origin]
 
     def env(self) -> dict:
-        """What a program in the terminal is told: where Monet is, which project, and when the sitting ends."""
+        """What a program in the terminal is told: where Monet is, which project, and when the sitting ends. Otherwise
+        it is the person's own: their user, their PATH (`gh`, `git` and the rest with their own logins), never this
+        program's: the Python uv runs this in is taken out of PATH, so `python3` there is theirs."""
         ends = {"MONET_UNTIL": time.strftime("%Y-%m-%dT%H:%M", time.localtime(self.until))} if self.until else {}
-        return {**os.environ, "MONET_URL": self.ms.URL, "MONET_PROJECT": self.project, "TERM": "xterm-256color", "COLORTERM": "truecolor", **ends}
+        return {**own_env(), "MONET_URL": self.ms.URL, "MONET_PROJECT": self.project, "TERM": "xterm-256color", "COLORTERM": "truecolor", **ends}
 
     def clock(self) -> None:
         """A sitting with an end (--for): said ten minutes before it and when it is over. Nothing is stopped."""

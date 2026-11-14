@@ -135,11 +135,20 @@ wrong:
   taken out (they were most of the test suite's time). An agent sees a moment of a motion with `pose`. Do not render in
   a request, and do not bring a renderer back to the server without him.
 - **Find** (Kaspar, 2026-11-14: "if I am looking for a certain check to manually change"): one box at the top of the
-  side panel (`canvas/find.js`, `/` goes there). The Notes' tree keeps the Notes whose name or *kept checks* match
+  panel beside the view (`canvas/find.js`, `/` goes there). The Notes' tree keeps the Notes whose name or *kept checks* match
   (`GET …/p/<project>/checks`, `Project.all_checks`, the person's door), and `sift()` narrows every list card of the
   panel after it is drawn (`putPanel` in `renderPanel`); `is:red`/`is:agent`/`is:waiting` read `data-is` and the status
   rows. The agent fills it with `goto(..., find=…)`: words, never code, so the page still answers only `screen`, `goto`
   and `view`. A check is changed with ✎ in the Checks card (PUT `…/checks/<id>`, the person's door only).
+- **The view's own tools** (Kaspar, 2026-11-14): **Sel** and F zoom to what is selected (`zoomToSelection`: the
+  selection's box where explode or a pose has put it; the scene's `radius` stays, so the clipping planes do), ⌖ on an
+  object's row selects it and zooms. **Picture** (issue #11, `renderImage`) draws the view as it is, bigger than the
+  screen, by raising the renderer's pixel ratio for one frame, with the selection and the measurement left out, and
+  saves a PNG: in the browser, like the video; the server draws neither.
+- **The agent in the Terminal panel is the person at their computer** (Kaspar, 2026-11-14: "the commandline should be
+  via my user so gh would have the correct credentials"): Monet local starts it as them, with their PATH (`own_env`
+  in local.py takes out what `uv run` put in front), Claude Code with `--chrome` (Claude in Chrome: their own browser),
+  and `monet.py view [out.png]` saves the picture of their open canvas for it, the key never printed.
 - **The plan's usage over the terminal** (Kaspar, 2026-11-14): Session, Week and a model's week (Fable) as bars in the
   Terminal panel's bar. `skill/monet/scripts/usage.py` reads only what Claude Code knows on that computer: the
   `rate_limits` its status line is given (Monet local starts `claude --settings` with usage.py as the status line,

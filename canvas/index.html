@@ -35,10 +35,6 @@
   </header>
 
   <aside>
-    <div class="find"><input id="find" type="search" placeholder="Find: a Note, a check, a tag…   /" autocomplete="off" spellcheck="false"
-      title="every word must be in what is kept, in any case: the Notes (by name, or by their checks) and every list beside the view.
-is:red failing checks and Notes that do not build · is:agent checks an agent added · is:waiting Notes not built yet
-/ comes here from anywhere, Esc clears it. Your agent can fill it in for you."><span class="find-n" id="findCount"></span></div>
     <section data-card="side-planes" data-rooms="sketch">
       <div class="fold" data-fold="side-planes"><span class="chev"></span><span class="head">Planes</span></div>
       <div class="body" id="planesList"></div>
@@ -107,6 +103,11 @@ is:red failing checks and Notes that do not build · is:agent checks an agent ad
         <select id="style" title="how the part is drawn: with its materials, plainly shaded, or as lines with the hidden ones left out"></select>
         <button id="edges" class="on" title="draw the edges of the part over it"><span class="ico">▦</span><span class="txt">Edges</span></button>
         <button id="xray" title="see through the part"><span class="ico">◌</span><span class="txt">X-ray</span></button>
+        <button id="shot" title="a picture of the view as it is (style, section, pose, lights), bigger than the screen, saved as a PNG"><span class="ico">◫</span><span class="txt">Picture</span></button>
+        <div class="rail-pop" id="shotPop" hidden>
+          <select id="shotSize" title="how many pixels wide the picture is"><option value="1920">1920 px</option><option value="2560">2560 px</option><option value="3840" selected>3840 px (4K)</option><option value="7680">7680 px</option></select>
+          <button class="primary" id="shotGo" title="draw it and save it">Save PNG</button>
+        </div>
       </div>
       <div class="rail-sec select">
         <div class="rail-title">Select</div>
@@ -124,7 +125,7 @@ is:red failing checks and Notes that do not build · is:agent checks an agent ad
       </div>
     </div>
     <div class="view-tools" id="viewTools" data-rooms="part assembly motion">
-      <div class="row"><button data-cam="iso" title="home: from the front right, a little above">⌂</button><button data-cam="fit" title="fit to view">Fit</button></div>
+      <div class="row"><button data-cam="iso" title="home: from the front right, a little above">⌂</button><button data-cam="fit" title="fit to view">Fit</button><button id="zoomSel" title="zoom to what is selected (F): objects, faces, lines or points">Sel</button></div>
       <select id="projection" title="orthographic: sizes stay true across the part, as in a drawing; perspective: near is bigger, as the eye sees it"><option value="ortho">Orthographic</option><option value="perspective">Perspective</option></select>
       <select id="lens" title="the camera's angle of view: narrow is a long lens, wide shows the depth strongly" hidden><option value="15">15°</option><option value="25">25°</option><option value="35" selected>35°</option><option value="50">50°</option><option value="70">70°</option></select>
     </div>
@@ -147,7 +148,13 @@ is:red failing checks and Notes that do not build · is:agent checks an agent ad
     <div class="hint">drag: orbit · right-drag: pan · wheel: zoom<br>click: select · Shift: add · Ctrl: take away · Shift- or Ctrl-drag: box</div>
   </div>
 
-  <div class="panel" id="panel"></div>
+  <div class="panel">
+    <div class="find"><input id="find" type="search" placeholder="Find: an object, a check, a joint, a tag…   /" autocomplete="off" spellcheck="false"
+      title="every word must be in what is kept, in any case: every list here (objects, checks, tags, joints, poses, the BOM), and the Notes on the left (by name, or by their checks).
+is:red failing checks and Notes that do not build · is:agent checks an agent added · is:waiting Notes not built yet
+/ comes here from anywhere, Esc clears it, Enter opens the first Note found. Your agent can fill it in for you."><span class="find-n" id="findCount"></span></div>
+    <div id="panel"></div>
+  </div>
 </div>
 
 <dialog id="projectsDialog"></dialog>

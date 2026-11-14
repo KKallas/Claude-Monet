@@ -143,6 +143,19 @@ is, the answer says so: ask them to open their canvas, or carry on with the othe
   something to change by hand ("where is the check that says 268 pieces?"), find it with `kept`,
   then `goto(project, note, find="pieces")`: they change the check, with ✎ beside it.
 
+**What they see, as a file**: `python scripts/monet.py view [out.png]` saves the picture of their
+open canvas (as `view`, with its address fetched for you: it holds the key, never print it) and says
+where. Read the PNG. Do this whenever they say "look", "see this", "what I have here": it is their
+screenshot of Monet. `look` and `pose` are pictures the server draws from fixed views; on a big
+assembly they can take long, and `view` cannot.
+
+**Your tools on their computer.** Started from the canvas's Terminal panel you run *as the person*,
+in their own shell, with their PATH: `git` and `gh` use their logins (never ask for a token: `gh
+auth status` says whether they are logged in), and anything they installed is yours to use. Claude
+Code there is started with Claude in Chrome (`--chrome`): their own Chrome, with their sign-ins, to
+open a page, read it or look at it (a datasheet, a supplier's part, the canvas itself). Their
+browser is theirs: open a tab of your own, and ask before you send, buy, post or sign in anywhere.
+
 These look and show; none of them changes the project. Every change goes through the other tools
 (`write_note`, `add_check`, `save` …), on the server and under its rules. Where you go and what
 you change is kept in the server's log.

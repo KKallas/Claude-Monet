@@ -378,3 +378,15 @@ async def test_the_page_is_told_the_plans_usage_now_and_when_it_changes(running)
                         for q in it.watchers:
                             q.put_nowait({"fable": {"label": "Fable", "pct": 30.0, "resets": 1, "at": 1}})
     assert got[0]["week"]["pct"] == 9.0 and got[1]["fable"]["pct"] == 30.0
+
+
+def test_the_terminal_runs_as_the_person_with_their_own_path():
+    import sys
+    from pathlib import Path
+    here = str(Path(sys.executable).parent)
+    env = local.own_env({"PATH": f"{here}:/Users/k/.cache/uv/environments-v2/abc/bin:/opt/homebrew/bin:/usr/bin:/opt/homebrew/bin",
+                         "VIRTUAL_ENV": "/Users/k/.cache/uv/environments-v2/abc", "HOME": "/Users/k", "GH_CONFIG_DIR": "/Users/k/.gh"})
+    assert env["PATH"] == "/opt/homebrew/bin:/usr/bin" and "VIRTUAL_ENV" not in env      # theirs: gh and python3 as they have them
+    assert env["HOME"] == "/Users/k" and env["GH_CONFIG_DIR"] == "/Users/k/.gh"
+    it = local.Local(Server(), "p", Path("."), "t", 0)
+    assert it.env()["MONET_PROJECT"] == "p" and here not in it.env()["PATH"].split(":")
