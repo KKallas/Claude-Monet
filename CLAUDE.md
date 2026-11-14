@@ -190,6 +190,8 @@ wrong:
   when the checks passed, `gone` when one failed: the job `called-off`); `coming()` in `monet/app.py` answers it in
   `/api/version` with a stage and how long whole runs took lately (`deploys-whole.json`; a note without `whole` is the
   building alone, timed apart), and the canvas counts down to it (it asks every 20 s).
+- **The right edge of the view is one column** (Kaspar, 2026-11-14): the navigation cube in the corner, the camera
+  (home, Fit, Sel, projection, lens) under it, the right toolbar under that (`placeCube` in canvas.js sets their tops).
 - **What lies over the view** (the timeline, the terminal): `covered()` and `fitHalf()` in `canvas.js`. Both cameras
   get a view offset so the middle of what is looked at stands in the middle of what is still seen, and Fit fits that.
   A panel that covers the view tells `under` its height and calls `resize()`.

@@ -920,13 +920,18 @@ function selectionChanged() {
 }
 
 // the navigation cube, in the top right corner of the view: a click looks from that side, a drag turns the view like
-// a ball (half a turn across the cube), as in Adam Designer
+// a ball (half a turn across the cube), as in Adam Designer. Under it the camera (home, Fit, Sel, the projection),
+// and under that the right toolbar: one column along the right edge (Kaspar, 2026-11-14)
 const cube = createNavCube();
 function placeCube() {
-  const rail = $('#railRight');
-  cube.rightInset = rail.offsetWidth ? rail.offsetWidth + 8 : 0;
-  $('#viewTools').style.right = `${cube.margin + cube.rightInset}px`;
+  const rail = $('#railRight'), tools = $('#viewTools');
+  cube.rightInset = 0;
+  const below = cube.top + cube.size + 6;
+  Object.assign(tools.style, { right: `${cube.margin}px`, top: `${below}px`, width: `${Math.max(cube.size, rail.offsetWidth)}px` });
+  const seen = !tools.hidden && tools.offsetHeight > 0;
+  rail.style.top = `${seen ? below + tools.offsetHeight + 10 : below}px`;
 }
+new ResizeObserver(() => placeCube()).observe($('#viewTools'));      // the lens appears with perspective: what is under it moves down
 // the rails can be sized, after Adam Designer: wide they show their labels, narrow only icons
 railWidth([...document.querySelectorAll('.view .rail')], placeCube);
 function lookAlong(dir) {
