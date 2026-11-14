@@ -134,6 +134,18 @@ wrong:
   draws no video** (Kaspar, 2026-11-14): `render_animation`, `monet/jobs.py`, the animation routes and ffmpeg were
   taken out (they were most of the test suite's time). An agent sees a moment of a motion with `pose`. Do not render in
   a request, and do not bring a renderer back to the server without him.
+- **Find** (Kaspar, 2026-11-14: "if I am looking for a certain check to manually change"): one box at the top of the
+  side panel (`canvas/find.js`, `/` goes there). The Notes' tree keeps the Notes whose name or *kept checks* match
+  (`GET …/p/<project>/checks`, `Project.all_checks`, the person's door), and `sift()` narrows every list card of the
+  panel after it is drawn (`putPanel` in `renderPanel`); `is:red`/`is:agent`/`is:waiting` read `data-is` and the status
+  rows. The agent fills it with `goto(..., find=…)`: words, never code, so the page still answers only `screen`, `goto`
+  and `view`. A check is changed with ✎ in the Checks card (PUT `…/checks/<id>`, the person's door only).
+- **The plan's usage over the terminal** (Kaspar, 2026-11-14): Session, Week and a model's week (Fable) as bars in the
+  Terminal panel's bar. `skill/monet/scripts/usage.py` reads only what Claude Code knows on that computer: the
+  `rate_limits` its status line is given (Monet local starts `claude --settings` with usage.py as the status line,
+  unless the person has their own) and `cachedUsageUtilization` in `~/.claude.json` (the only place a model's own week
+  is; as fresh as Claude Code's last fetch, shown faded when old). Monet local sends it as `{t: usage}` on the
+  127.0.0.1 line; nothing of it reaches the server, and nothing asks Anthropic for it.
 - **Pixels** (0.11.0, issue #10): a `pixels` light's pixels are solids of the parts it names, found by the build
   (`runner.pixels_of`, with the LEDs of the Note's `leds()`), in faces.json `pixels` and the report's `pixels`.
   `canvas/pixels.js` patches the parts' materials (onBeforeCompile, chained); colours are kept as shown (sRGB) and made

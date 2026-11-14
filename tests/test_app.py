@@ -386,6 +386,10 @@ def test_checks_are_the_persons_to_change(client, reg):
     n = f"/w/{reg['name']}/api/p/starter/n/rod_foot"
     assert client.post(f"{n}/checks", json={"what": "size_x", "max": 40, "why": "fits the drawer"}).json()["report"]["green"] is False
     assert client.put(f"{n}/checks/size-x", json={"what": "size_x", "max": 50}).json()["report"]["green"]
+    # Find looks through every Note's checks as kept, and the canvas changes one from there
+    kept = client.get(f"/w/{reg['name']}/api/p/starter/checks").json()["checks"]
+    assert {"id": "size-x", "what": "size_x", "max": 50.0, "why": "", "by": "user", "expect": "≤ 50.0"} in kept["rod_foot"]
+    assert client.get(f"/w/{reg['id']}/api/p/starter/checks").status_code in (401, 403, 404)      # the person's door only
     assert client.delete(f"{n}/checks/size-x").json()["report"]["green"]
     assert client.delete(f"{n}/checks/size-x").status_code == 404
     # the agent's door has no such tools

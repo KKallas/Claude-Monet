@@ -334,3 +334,47 @@ def test_the_folder_holds_the_checks_and_settings_and_a_cloned_one_brings_them_i
     nothing.mkdir()
     gone = Server(there=False)
     assert not sync(nothing, gone).step() and not gone.there
+
+
+def test_the_plans_usage_from_what_claude_code_knows(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("monet_usage", ROOT / "skill/monet/scripts/usage.py")
+    usage = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(usage)
+    monkeypatch.setattr(usage, "KEPT", tmp_path / "cache" / "usage.json")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    now = 1_799_990_000      # 2027-01-15, 05:13 UTC
+    # what Claude Code fetched for /usage: older, but the only one that knows a model's own week
+    (tmp_path / ".claude.json").write_text(json.dumps({"oauthAccount": {"x": 1}, "cachedUsageUtilization": {"fetchedAtMs": (now - 3600) * 1000, "utilization": {"limits": [
+        {"kind": "session", "percent": 15, "resets_at": "2027-01-15T08:00:00+00:00"},
+        {"kind": "weekly_all", "percent": 9, "resets_at": "2027-01-17T08:00:00+00:00"},
+        {"kind": "weekly_scoped", "percent": 30, "resets_at": "2027-01-17T08:00:00+00:00", "scope": {"model": {"display_name": "Fable"}}},
+        {"kind": "weekly_scoped", "percent": 99, "resets_at": "2020-01-01T00:00:00+00:00", "scope": {"model": {"display_name": "Gone"}}}]}}}))
+    assert [(k, b["pct"]) for k, b in usage.read(now).items()] == [("session", 15), ("week", 9), ("fable", 30)]      # a reset that passed is left out
+    # the status line, after a reply: fresher, so it wins; the line Claude Code shows says all three
+    line = usage.keep({"rate_limits": {"five_hour": {"used_percentage": 23.5, "resets_at": now + 600}, "seven_day": {"used_percentage": 41.2, "resets_at": now + 9000}}}, now)
+    assert line == "Session 24% · Week 41% · Fable 30%"
+    assert usage.read(now)["session"] == {"label": "Session", "pct": 23.5, "resets": now + 600, "at": now}
+    assert usage.read(now + 601).get("session", {}).get("pct") == 15      # its window reset: what /usage knew is all there is
+    # Claude Code is started with it as its status line, unless the person has their own
+    monkeypatch.setattr(local.Path, "home", lambda: tmp_path)
+    (tmp_path / ".claude").mkdir()
+    assert local.status_line()[0] == "--settings" and "usage.py" in json.loads(local.status_line()[1])["statusLine"]["command"]
+    (tmp_path / ".claude" / "settings.json").write_text(json.dumps({"statusLine": {"type": "command", "command": "mine"}}))
+    assert local.status_line() == []
+
+
+async def test_the_page_is_told_the_plans_usage_now_and_when_it_changes(running):
+    it, url = running
+    it.usage = {"week": {"label": "Week", "pct": 9.0, "resets": 1, "at": 1}}
+    async with websockets.connect(url, origin="https://monet.example") as ws:
+        await ws.send(json.dumps({"token": "the-token-of-this-computer", "run": "log"}))
+        got = []
+        async with asyncio.timeout(10):
+            while len(got) < 2:
+                m = await ws.recv()
+                if isinstance(m, str) and json.loads(m).get("t") == "usage":
+                    got.append(json.loads(m)["bars"])
+                    if len(got) == 1:
+                        for q in it.watchers:
+                            q.put_nowait({"fable": {"label": "Fable", "pct": 30.0, "resets": 1, "at": 1}})
+    assert got[0]["week"]["pct"] == 9.0 and got[1]["fable"]["pct"] == 30.0

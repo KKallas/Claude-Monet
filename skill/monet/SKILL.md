@@ -137,6 +137,11 @@ is, the answer says so: ask them to open their canvas, or carry on with the othe
   draws a Note on the server from fixed views; `view` is what they are looking at.
 - `goto(project, note, room)`: take their canvas somewhere, to show them what you made or
   changed. They see it happen. Prefer this to describing where to click.
+- `goto(..., find="words")`: fill their Find box. The Notes' tree keeps the Notes whose name or
+  checks match; the lists beside the view (checks, tags, parts, joints, BOM) keep the rows that
+  match. `is:red`, `is:agent`, `is:waiting` pick by state; `find=""` clears it. When they look for
+  something to change by hand ("where is the check that says 268 pieces?"), find it with `kept`,
+  then `goto(project, note, find="pieces")`: they change the check, with ✎ beside it.
 
 These look and show; none of them changes the project. Every change goes through the other tools
 (`write_note`, `add_check`, `save` …), on the server and under its rules. Where you go and what

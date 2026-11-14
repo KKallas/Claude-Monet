@@ -21,7 +21,9 @@ It does four things, for one project in one folder:
    the canvas) is written into the folder. A file changed in both since they last agreed is left alone on both sides
    and said: nothing is merged here yet.
 2. **A terminal for the canvas.** A websocket on 127.0.0.1 gives the person's own page a terminal in the folder,
-   running one of a short list (claude, codex, a shell). The server is not in between and never sees it.
+   running one of a short list (claude, codex, a shell). The server is not in between and never sees it. Over it go
+   also the bars of the Claude plan's usage (session, week, a model's week: scripts/usage.py, from what Claude Code
+   knows on this computer; Claude Code is started with it as its status line).
 
 3. **The brief, and how long.** PROJECT.md (the project in words: what it is, where its repository and issues are,
    what is done, what comes next) is kept in step with the server like a Note. With `--for=90m` or `--for=2h` the
@@ -374,7 +376,28 @@ class Sync:
 def runs() -> dict:
     """What a terminal may run, by name. The page picks a name: this list is the whole of what it can start."""
     shell = os.environ.get("SHELL") or "/bin/sh"
-    return {"claude": ["claude"], "codex": ["codex"], "shell": [shell, "-l"]}
+    return {"claude": ["claude", *status_line()], "codex": ["codex"], "shell": [shell, "-l"]}
+
+
+def status_line() -> list:
+    """Claude Code with usage.py as its status line, which keeps the plan's usage for the bars over the canvas's
+    terminal: unless the person has a status line of their own, which is theirs and stays."""
+    try:
+        own = json.loads((Path.home() / ".claude" / "settings.json").read_text()).get("statusLine")
+    except (OSError, ValueError, AttributeError):
+        own = None
+    if own:
+        return []
+    import shlex
+    return ["--settings", json.dumps({"statusLine": {"type": "command", "command": f"{shlex.quote(sys.executable)} {shlex.quote(str(HERE / 'usage.py'))}"}})]
+
+
+def usage():
+    """scripts/usage.py beside this file: what is known of the plan's usage (read(), never asked of anybody)."""
+    spec = importlib.util.spec_from_file_location("monet_usage", HERE / "usage.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class Session:
@@ -455,6 +478,7 @@ class Local:
         self.sync = Sync(ms, project, folder, prefer)
         self.sessions: dict = {}
         self.poked = asyncio.Event()
+        self.usage, self.watchers, self.plan = {}, set(), usage()      # the plan's usage, the pages told of it
         u = urllib.parse.urlsplit(ms.URL)
         self.origin = f"{u.scheme}://{u.netloc}"
 
@@ -488,9 +512,16 @@ class Local:
         """The working copy, looked at every second; the server every EVERY seconds, and at once when something
         happened here (a file changed, the page poked)."""
         self.poked.set()
-        asked = 0.0
+        asked = looked = 0.0
         while True:
             self.clock()
+            if time.time() - looked >= 5:      # the plan's usage: to the pages, when it changed
+                looked = time.time()
+                now = await asyncio.to_thread(self.plan.read)
+                if now != self.usage:
+                    self.usage = now
+                    for q in self.watchers:
+                        q.put_nowait(now)
             if self.sync.changed() or time.time() - asked >= EVERY:
                 self.poked.set()
             if self.poked.is_set():
@@ -498,6 +529,18 @@ class Local:
                 asked = time.time()
                 await asyncio.to_thread(self.sync.step)
             await asyncio.sleep(1)
+
+    async def tell_usage(self, ws) -> None:
+        """The plan's usage, to one page: what is known now, and again whenever it changes."""
+        q: asyncio.Queue = asyncio.Queue()
+        self.watchers.add(q)
+        try:
+            if self.usage:
+                await ws.send(json.dumps({"t": "usage", "bars": self.usage}))
+            while True:
+                await ws.send(json.dumps({"t": "usage", "bars": await q.get()}))
+        finally:
+            self.watchers.discard(q)
 
     async def serve(self, ws) -> None:
         """One page. Its first words are the token and what it wants to see; anything else and it is hung up on."""
@@ -557,11 +600,12 @@ class Local:
                     s.stop()
 
         tasks = [asyncio.create_task(out()), asyncio.create_task(keys())]
+        told = asyncio.create_task(self.tell_usage(ws))
         try:
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         finally:
             s.clients.discard(q)
-            for t in tasks:
+            for t in (*tasks, told):
                 t.cancel()
 
     async def log(self, ws, about: dict) -> None:
@@ -584,11 +628,12 @@ class Local:
                     self.poked.set()
 
         tasks = [asyncio.create_task(lines()), asyncio.create_task(heard())]
+        told = asyncio.create_task(self.tell_usage(ws))
         try:
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         finally:
             LISTENERS.discard(tell)
-            for t in tasks:
+            for t in (*tasks, told):
                 t.cancel()
 
     async def run(self) -> None:

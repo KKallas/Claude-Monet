@@ -367,14 +367,23 @@ def screen(c: Caller) -> dict:
     return _ask(c, "screen")
 
 
-def goto(c: Caller, project: str = "", note: str = "", room: str = "") -> dict:
+def goto(c: Caller, project: str = "", note: str = "", room: str = "", find: str | None = None) -> dict:
     """Take the user's open canvas to a project, a Note in it, and/or an area: sketch, part, assembly or motion. They
-    see it happen. Use it to show them what you made or changed. Answers where the canvas is now."""
+    see it happen. Use it to show them what you made or changed. Answers where the canvas is now.
+
+    `find` fills the canvas's Find box for them, as if they had typed it: the Notes' tree keeps the Notes whose name
+    or checks match, and every list beside the view (checks, tags, parts, joints, the BOM) keeps the rows that match.
+    Words all have to match, in any case; `is:red` keeps failing checks and Notes that are not green, `is:agent` checks an
+    agent added, `is:waiting` Notes not built for their source. "" clears it; left out, it stays as it is. Use it when
+    they look for something to change by hand ("where is the check on the bed?": find the Note with `kept`, then
+    goto(project, note, find="fits_bed")): a check is theirs to change, in the canvas, never yours."""
     if room and room not in ("sketch", "part", "assembly", "motion"):
         raise Problem("room is sketch, part, assembly or motion")
+    if find is not None and len(str(find)) > 200:
+        raise Problem("find is a few words, not more than 200 characters")
     if project:
         c.ws.project(project)
-    return _ask(c, "goto", {"project": project, "note": note, "room": room}, 60)
+    return _ask(c, "goto", {"project": project, "note": note, "room": room, **({} if find is None else {"find": str(find)})}, 60)
 
 
 def view(c: Caller):

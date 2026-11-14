@@ -109,9 +109,11 @@ def test_the_agent_sees_the_open_canvas_and_takes_it_somewhere(app, live, admin,
         if m["what"] == "screen":
             return True, {"project": "starter", "note": "rod_foot", "room": "part", "panel": "Part 45 × 22.4 × 22.4 mm"}
         if m["what"] == "goto":
+            assert "find" not in m["args"] or m["args"]["find"] == "fits_bed is:red"
             if m["args"]["note"] == "gone":
                 return False, "Error: there is no Note \"gone\" in starter"
-            return True, {"project": m["args"]["project"] or "starter", "note": m["args"]["note"] or "rod_foot", "room": m["args"]["room"] or "part"}
+            return True, {"project": m["args"]["project"] or "starter", "note": m["args"]["note"] or "rod_foot", "room": m["args"]["room"] or "part",
+                          **({"find": m["args"]["find"]} if "find" in m["args"] else {})}
         if m["what"] == "view":
             return True, {"project": "starter", "note": "rod_foot", "room": "part", "png": "data:image/png;base64," + base64.b64encode(PNG).decode()}
         return False, f'the canvas does not know "{m["what"]}"'
@@ -126,13 +128,16 @@ def test_the_agent_sees_the_open_canvas_and_takes_it_somewhere(app, live, admin,
         refused = c.post(f"{link}/agent/goto", json={"note": "gone"})
         assert refused.status_code == 422 and "no Note" in refused.json()["error"]
         assert c.post(f"{link}/agent/goto", json={"room": "motion"}).json()["room"] == "motion"
+        # Find, filled for the person: words, and only when given ("" clears it, left out it stays)
+        assert c.post(f"{link}/agent/goto", json={"note": "rod_foot", "find": "fits_bed is:red"}).json()["find"] == "fits_bed is:red"
+        assert "200 characters" in c.post(f"{link}/agent/goto", json={"find": "x" * 201}).json()["error"]
         # there is no tool that runs code in the page
         assert "no tool 'page'" in c.post(f"{link}/agent/page", json={"code": "monet.S.note"}).json()["error"]
         # a picture of the canvas as it is on the screen: its address
         seen = c.post(f"{link}/agent/view", json={}).json()
         assert seen["bytes"] == len(PNG) and "png" not in seen
         assert c.get(seen["image"].split("testserver", 1)[1]).content == PNG
-        assert [a["what"] for a in asked] == ["screen", "goto", "goto", "goto", "view"]
+        assert [a["what"] for a in asked] == ["screen", "goto", "goto", "goto", "goto", "view"]
     # where it took the page is kept in the audit log; looking is not written down
     log = [e for e in admin.get("/api/users").json()["log"] if e["type"] == "agent" and e["user"] == "mari"]
     assert {("goto", "mg400_rakis", "rakis"), ("goto", None, "gone"), ("goto", None, None)} <= {(e["tool"], e.get("project"), e.get("note")) for e in log}

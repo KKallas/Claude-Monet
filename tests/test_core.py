@@ -399,3 +399,14 @@ def test_an_instance_rides_the_body_its_snap_point_is_on():
     assert got["bin_1_placed"] == {"kind": "rigid", "parts": ["bin_1/mount", "bin_1/lid"]}
     assert got["bin_1_on"] == {"kind": "rigid", "moves": "bin_1_placed", "on": "top"}       # the group the tile is in
     assert "lost_on" not in got and spec == {"top": {"kind": "rigid", "parts": ["tile", "frame"]}}      # not changed in place
+
+
+def test_find_in_the_canvas():
+    import shutil
+    import subprocess
+    from pathlib import Path
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on this machine")
+    done = subprocess.run([node, "--test", str(Path(__file__).parent / "find.test.mjs")], capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stdout[-2000:]

@@ -5,7 +5,8 @@
 // local answers only a page of the Monet it is linked to, and only with a token it knows. This page makes one, keeps it
 // in this browser and puts it in the one line it gives the person to start Monet local with (--pair: it goes from the
 // page to the person's own terminal by their hand, never to the server). The page picks what runs by name, from Monet
-// local's own list; it sends keys, never a command line. What is typed here is the person; the agent it starts reaches Monet through the agent's door,
+// local's own list; it sends keys, never a command line. Monet local also says how much of the Claude plan is used (the
+// bars at the top: session, week, a model's week), from what Claude Code knows on that computer. What is typed here is the person; the agent it starts reaches Monet through the agent's door,
 // like any other.
 
 const KEEP = 'monet.local', PORTS = [47821, 47822, 47823, 47824],      // where Monet local listens: the first that was free (local.py)
@@ -38,7 +39,7 @@ export function createTerminal(view, button, hooks) {
   root.className = 'term';
   root.hidden = true;
   root.innerHTML = `<div class="term-grip" title="drag: how tall the terminal is"></div>
-    <div class="term-bar"><span class="term-tabs"></span><span class="term-where"></span><span class="sp"></span>
+    <div class="term-bar"><span class="term-tabs"></span><span class="term-where"></span><span class="sp"></span><span class="term-usage"></span>
       <button data-term="key" title="another agent key: the line with the old one in it stops working, for you and for anyone who got hold of it" hidden>New key</button>
       <button data-term="end" title="end what runs here (it keeps running when this panel is only closed)" hidden>End</button>
       <button data-term="close" title="close the panel: what runs in it runs on">×</button></div>
@@ -103,6 +104,20 @@ export function createTerminal(view, button, hooks) {
         ${why === 'key' ? '<br><b>The key is new: stop Monet local (Ctrl+C) and start it with this line.</b>' : ''}</p>`}`;
   }
 
+  /** The Claude plan's usage, as Monet local reads it from what Claude Code knows on this computer (usage.py): the
+   *  session, the week, a model's own week. A figure older than half an hour is shown faded, with how old it is. */
+  function plan(bars) {
+    const box = $('.term-usage'), now = Date.now() / 1000;
+    const when = (t) => { const d = new Date(t * 1000); return d.toLocaleString([], { weekday: d.toDateString() === new Date().toDateString() ? undefined : 'short', hour: '2-digit', minute: '2-digit' }); };
+    const ago = (t) => { const m = Math.round((now - t) / 60); return m < 2 ? 'just now' : m < 90 ? `${m} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`; };
+    box.innerHTML = Object.values(bars ?? {}).map((b) => {
+      const pct = Math.min(100, Math.max(0, b.pct)), level = pct >= 90 ? 'hot' : pct >= 70 ? 'warm' : '';
+      const old = now - b.at > 1800;
+      return `<span class="use ${level} ${old ? 'old' : ''}" title="${esc(b.label)}: ${Math.round(pct)} % used, resets ${esc(when(b.resets))}
+as of ${esc(ago(b.at))}${old ? ' (it is new after a reply of Claude Code in this panel, or /usage in any Claude Code)' : ''}"><b>${esc(b.label)}</b><i><s style="width:${pct.toFixed(1)}%"></s></i>${Math.round(pct)}%</span>`;
+    }).join('');
+  }
+
   function hangUp() {
     clearTimeout(again);
     const old = ws;
@@ -136,6 +151,8 @@ export function createTerminal(view, button, hooks) {
         if (m.run !== 'log') about.running = [...new Set([...(about.running ?? []), m.run])];
         tabs();
         term.focus();
+      } else if (m.t === 'usage') {
+        plan(m.bars);
       } else if (m.t === 'exit') {
         term.write(`\r\n\x1b[2m${NAMES[run]} ended${m.code ? ` (${m.code})` : ''}. Press Enter to start it again.\x1b[0m\r\n`);
         about.running = (about.running ?? []).filter((n) => n !== run);

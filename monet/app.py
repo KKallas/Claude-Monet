@@ -638,6 +638,11 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         p = ws.project(request.path_params["project"])
         return {"rev": p.rev}
 
+    def all_checks(request, ws, _body):
+        """Every Note's checks, as kept: what the canvas's Find looks through, and what a check is changed from."""
+        p = ws.project(request.path_params["project"])
+        return {"rev": p.rev, "checks": p.all_checks()}
+
     def get_brief(request, ws, _body):
         """The project's brief (PROJECT.md): the project in words, for whoever picks it up next. The agent reads and
         writes the same file through its own door (the tools brief and write_brief)."""
@@ -960,6 +965,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route("/w/{wid}/api/p/{project}/archive.zip", api(archive)),
         Route("/w/{wid}/api/p/{project}/project-of", api(project_of), methods=["POST"]),
         Route("/w/{wid}/api/p/{project}/rev", api(rev)),
+        Route("/w/{wid}/api/p/{project}/checks", api(all_checks)),
         Route("/w/{wid}/api/p/{project}/brief", api(get_brief)),
         Route("/w/{wid}/api/p/{project}/brief", api(put_brief), methods=["PUT"]),
         Route("/w/{wid}/api/p/{project}/looks", api(looks), methods=["PUT"]),

@@ -1128,6 +1128,16 @@ class Project:
     def checks(self, name: str) -> list:
         return feynman.load(self._checks_file(name))
 
+    def all_checks(self) -> dict:
+        """Every Note's checks as they are kept (not run): what the canvas's Find looks through, so that a check is
+        found in a project of hundreds of Notes without opening each. Notes without a check are left out."""
+        out = {}
+        for name in self.files():
+            got = self.checks(name)
+            if got:
+                out[name] = [{**c, "expect": feynman._expect(c) if c.get("what") != "fits_bed" else "fits the bed"} for c in got]
+        return out
+
     def add_check(self, name: str, check: dict, by: str) -> dict:
         with self.lock:
             self.read(name)

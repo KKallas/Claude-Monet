@@ -19,6 +19,7 @@ import { createTimeline, played, poseAt } from './timeline.js';
 import { videoWriter, canWrite } from './video.js';
 import { createLights } from './lights.js';
 import { noteTree, pathsTo } from './tree.js';
+import { found as foundNotes, noteStates, prune, query, sift } from './find.js';
 import { remote } from './remote.js';
 import { createTerminal } from './terminal.js';
 import { createBrief } from './brief.js';
@@ -69,7 +70,9 @@ const S = { state: null, project: null, proj: null, note: null, data: null, face
   room: 'part', lastPart: null, lastAssembly: null, sketchName: '', sketchRole: '',
   mode: 'face', sel: nothing(), boxTool: false, measuring: false, inspect: null, point: null, hot: null, tagSel: null, rev: null, compare: null, message: '', saveResult: null,
   // Motion: the joints moved by hand and their values, free parts dragged somewhere, what that hits, the joint being made or changed
-  pose: {}, freePose: {}, clash: [], edit: null, hotJoint: null, playing: null };
+  pose: {}, freePose: {}, clash: [], edit: null, hotJoint: null, playing: null,
+  // Find (find.js): the words every list is narrowed to; the check being changed, and what is typed into it so far
+  find: '', editCheck: null, checkDraft: {} };
 
 // ---- the 3D view -------------------------------------------------------------------------------------
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);   // millimetres, Z up, as in the Notes
@@ -1905,7 +1908,8 @@ const folded = (key) => folds[key] ?? !!FOLDED_AT_FIRST[key];
 function fold(key) {
   folds[key] = !folded(key);
   try { localStorage.setItem('monet.folds', JSON.stringify(folds)); } catch { /* as above */ }
-  document.querySelectorAll(`[data-card="${key}"]`).forEach((c) => c.classList.toggle('folded', folds[key]));
+  // (a card Find opened or shut goes back to being folded or not by hand)
+  document.querySelectorAll(`[data-card="${key}"]`).forEach((c) => { c.classList.toggle('folded', folds[key]); c.classList.remove('found', 'missed'); });
 }
 // a card of the panel: a head that folds it (with something to its right) and a body
 const card = (key, head, body, right = '') => `<div class="card ${folded(key) ? 'folded' : ''}" data-card="${key}">
@@ -1991,32 +1995,77 @@ function loadTwigs() {
 function renderSide() {
   loadTwigs();
   renderSketchSide();
-  // the project as a tree, the same in every room: its main assembly open, the other top designs below, the modules apart
-  const tree = noteTree(S.proj?.notes, S.proj?.main);
-  if (twigNote !== `${S.project}/${S.note}`) { twigNote = `${S.project}/${S.note}`; for (const p of pathsTo(tree, S.note)) twigs.add(p); }      // a Note opened: its branch opens
+  const q = query(S.find);
+  if (q.on) keptChecks();
+  // the project as a tree, the same in every room: its main assembly open, the other top designs below, the modules apart;
+  // while something is to be found, only the Notes that match (by name or by a check) and the branches to them, open
+  const whole = noteTree(S.proj?.notes, S.proj?.main), tree = prune(whole, q, kept.checks);
+  if (twigNote !== `${S.project}/${S.note}`) { twigNote = `${S.project}/${S.note}`; for (const p of pathsTo(whole, S.note)) twigs.add(p); }      // a Note opened: its branch opens
   const row = (t, depth) => {
-    const n = t.row, kids = t.children.length, open = twigs.has(t.path);
+    const n = t.row, kids = t.children.length, open = q.on || twigs.has(t.path);
     const tip = n.state === 'stale' || n.state === 'unbuilt' ? 'waiting for your agent to build it' : n.state === 'error' ? 'does not build'
       : n.kind === 'assembly' ? 'an assembly: Notes put together' : n.changed ? 'changed since the last save' : 'saved';
     const apart = depth === 0 && t !== tree.main && tree.main;      // another design: it can be a project of its own
-    return `<div class="item twig ${n.name === S.note ? 'sel' : ''}" data-note="${esc(n.name)}" style="padding-left:${8 + depth * 14}px" title="${tip}">
-      <span class="twist" ${kids ? `data-twig="${esc(t.path)}"` : ''}>${kids ? (open ? '▾' : '▸') : ''}</span><span class="dot ${state(n)}"></span><span class="grow">${esc(n.name)}${n.kind === 'assembly' ? ' <small>assembly</small>' : ''}${depth === 0 && t === tree.main ? ` <small class="main">${tree.named ? 'main' : 'main?'}</small>` : ''}</span>${apart ? `<button class="x" data-apart="${esc(n.name)}" title="make a project of ${esc(n.name)}: it, what it uses, their checks and builds (this project stays as it is)">⇱</button>` : ''}</div>`
+    return `<div class="item twig ${n.name === S.note ? 'sel' : ''} ${q.on && !t.hit ? 'way' : ''}" data-note="${esc(n.name)}" style="padding-left:${8 + depth * 14}px" title="${q.on && !t.hit ? 'on the way to what is found' : tip}">
+      <span class="twist" ${kids && !q.on ? `data-twig="${esc(t.path)}"` : ''}>${kids ? (open ? '▾' : '▸') : ''}</span><span class="dot ${state(n)}"></span><span class="grow">${esc(n.name)}${n.kind === 'assembly' ? ' <small>assembly</small>' : ''}${depth === 0 && t === tree.main ? ` <small class="main">${tree.named ? 'main' : 'main?'}</small>` : ''}${t.hits ? ` <small class="hits" title="checks of this Note that match">${t.hits} check${t.hits === 1 ? '' : 's'}</small>` : ''}</span>${apart && !q.on ? `<button class="x" data-apart="${esc(n.name)}" title="make a project of ${esc(n.name)}: it, what it uses, their checks and builds (this project stays as it is)">⇱</button>` : ''}</div>`
       + (open ? t.children.map((c) => row(c, depth + 1)).join('') : '');
   };
   const parts = [];
   if (tree.main) {
     parts.push(row(tree.main, 0));
-    if (!tree.named) parts.push(`<div class="item muted guess"><span>no Note named <b>${esc(S.project.replace(/-/g, '_'))}</b>, as the project is: this is the biggest design. Make each design a project of its own (⇱)</span></div>`);
+    if (!tree.named && !q.on) parts.push(`<div class="item muted guess"><span>no Note named <b>${esc(S.project.replace(/-/g, '_'))}</b>, as the project is: this is the biggest design. Make each design a project of its own (⇱)</span></div>`);
   }
   if (tree.others.length) parts.push(`<div class="twig-head">${tree.main ? 'Other designs' : 'Notes'}</div>`, ...tree.others.map((t) => row(t, 0)));
   if (tree.shared.length) parts.push('<div class="twig-head">Shared</div>', `<div class="item muted shared" title="helper modules: imported by Notes, never built on their own">${tree.shared.map(esc).join(' · ')}</div>`);
-  $('#notes').innerHTML = parts.join('') || `<div class="item muted">${!S.proj ? 'no project open' : 'no parts yet: ask your agent for one'}</div>`;
+  $('#notes').innerHTML = parts.join('') || `<div class="item muted">${!S.proj ? 'no project open' : q.on ? (kept.key ? `no Note and no check matches “${esc(q.text)}”` : 'looking through the checks…') : 'no parts yet: ask your agent for one'}</div>`;
   $('#versions').innerHTML = [...(S.proj?.versions ?? [])].reverse().map((v) => {
     const mine = v.notes[S.note]?.v === v.n;
     return `<div class="item" data-version="${v.n}" title="${esc(v.message)}\n${new Date(v.at).toLocaleString()}${v.commit ? '\ngit ' + esc(v.commit) : ''}\nclick: compare with the draft">
       <span class="dot ${mine ? 'green' : ''}"></span>v${v.n} <small>${esc(v.message || '')}</small></div>`;
   }).join('') || '<div class="item muted">nothing saved yet</div>';
+  // versions, planes and sketches by their words
+  for (const el of document.querySelectorAll('#versions [data-version], #planesList [data-plane], #sketchList [data-sketch]')) el.hidden = q.on && !q.test(`${el.textContent} ${el.title}`);
+  const n = q.on ? foundNotes(tree) : 0;
+  $('#findCount').textContent = q.on ? `${n} Note${n === 1 ? '' : 's'}` : '';
 }
+
+// ---- Find (find.js): one box, every list ---------------------------------------------------------------------
+// Every Note's checks as kept, for finding a Note by one of its checks and for changing one: fetched once a revision,
+// and only while something is being found or changed.
+const kept = { key: '', asking: '', checks: {} };
+function keptChecks() {
+  const key = `${S.project}/${S.rev}`;
+  if (!S.project || kept.key === key || kept.asking === key) return;
+  kept.asking = key;
+  api(`/p/${S.project}/checks`).then((r) => {
+    if (kept.asking !== key) return;
+    Object.assign(kept, { key, asking: '', checks: r.checks ?? {} });
+    renderSide();
+    if (S.editCheck) renderPanel();
+  }, () => { kept.asking = ''; });
+}
+/** The words to find, from the box or from the agent (goto with find): every list follows at once. */
+function setFind(text) {
+  S.find = String(text ?? '').slice(0, 200);
+  if ($('#find').value !== S.find) $('#find').value = S.find;
+  renderSide();
+  sift($('#panel'), query(S.find));
+}
+let findSoon = 0;
+$('#find').addEventListener('input', (e) => { clearTimeout(findSoon); findSoon = setTimeout(() => setFind(e.target.value), 120); });
+$('#find').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.target.value = ''; setFind(''); e.target.blur(); }
+  if (e.key === 'Enter') {      // the first Note found opens
+    const first = document.querySelector('#notes .item.twig:not(.way)');
+    if (first) open(S.project, first.dataset.note);
+  }
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName ?? '') || document.activeElement?.closest?.('.term')) return;
+  e.preventDefault();
+  $('#find').focus();
+  $('#find').select();
+});
 $('#notes').onclick = async (e) => {
   const ap = e.target.closest('[data-apart]');
   if (ap) {
@@ -2094,6 +2143,7 @@ async function openNow(project, note, late) {
   $('#projectName').textContent = project;
   if (changedNote) {
     S.sel = nothing(); S.inspect = null; S.tagSel = null; S.saveResult = null; S.hotPart = null; S.hidden = new Set(); explode = 0; sketch.end();
+    S.editCheck = null; S.checkDraft = {};
     stopPlaying(); Object.assign(S, { pose: {}, freePose: {}, clash: [], edit: null, hotJoint: null });
     $('#filmPlayer')?.remove();      // a video of the Note that was
   }
@@ -2299,22 +2349,36 @@ function sketchCards() {
     <p class="muted">Saved as a tag in the Note. In Part its lines can be selected one by one (Lines) and named, to tell your agent what to do with each.</p>`);
 }
 
+/** A check being changed, in its own row: from the check as it is kept (not as the report words it), so what is
+ *  not changed stays exactly as it was. The person's door only: the agent has no way to change a check. */
+function checkEditor(c) {
+  const k = (kept.checks[S.note] ?? []).find((x) => x.id === c.id);
+  if (!k) { keptChecks(); return `<div class="check editing"><p class="muted">reading the check ${esc(c.id)}…</p></div>`; }
+  const d = S.checkDraft, v = (f, from) => esc(d[f] ?? (from == null ? '' : String(from)));
+  return `<div class="check editing" data-is="check ${c.ok ? 'ok' : 'red'} ${esc(c.by)}"><div class="row"><span class="mono">✎ ${esc(c.id)}</span><span class="v muted">now ${fmt(c.value)} (${esc(c.expect)})</span></div>
+    <div class="line"><input id="ceWhat" list="measures" value="${v('what', k.what)}" placeholder="what: size_x, tag.bore.width…" title="what it measures"></div>
+    ${k.what === 'fits_bed' && (d.what ?? k.what) === 'fits_bed' ? '<p class="muted">Every piece fits the bed of the project\'s printer.</p>'
+      : `<div class="line"><input id="ceMin" placeholder="min" inputmode="decimal" value="${v('min', k.min)}"><input id="ceMax" placeholder="max" inputmode="decimal" value="${v('max', k.max)}"><input id="ceEq" placeholder="or equals" value="${v('equals', k.equals)}"></div>`}
+    <div class="line"><input id="ceWhy" placeholder="why: the rule in your words" value="${v('why', k.why)}"></div>
+    <div class="line"><span class="muted" style="flex:1">${k.by === 'agent' ? 'An agent added it: changed, it is yours.' : ''}</span><button data-act="checkcancel">Cancel</button><button class="primary" data-act="checkput" data-id="${esc(c.id)}">Save</button></div></div>`;
+}
+
 function renderPanel(force) {
   showTimeline();
-  const panel = $('#panel');
+  const panel = $('#panel'), putPanel = (html) => { panel.innerHTML = html; sift(panel, query(S.find)); };
   if (!force && panel.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) { S.stale = true; return; }
   S.stale = false;
   const d = S.data;
   if (!d) { panel.innerHTML = S.project ? '<div class="card"><h2>No Note open</h2><p class="muted">Open the Terminal, start your agent there and ask it for a part. It appears here as soon as it is written.</p></div>'
     : '<div class="card"><h2>No project open</h2><p class="muted">Start one, or upload an archive of one, under the name at the top left.</p></div>'; return; }
-  if (d.error) { panel.innerHTML = `<div class="card"><h2>${esc(S.note)}</h2><p class="err">${esc(d.error)}</p></div>`; return; }
+  if (d.error) { putPanel(`<div class="card"><h2>${esc(S.note)}</h2><p class="err">${esc(d.error)}</p></div>`); return; }
   const r = d.report, cards = [], mats = S.proj?.profiles?.materials;
   const pill = !d.is_note ? '<span class="pill muted">module</span>' : notBuilt(r) ? '<span class="pill warn">waiting for your agent</span>'
     : !r.built ? '<span class="pill err">does not build</span>' : r.green ? '<span class="pill ok">green</span>' : '<span class="pill err">red</span>';
   const why = notBuilt(r) ? `<p class="warn">${r.state === 'stale' ? 'This is its last build: the Note changed since.' : 'Not built yet.'} Your agent builds Notes on its own computer and uploads them: ask it to build ${esc(S.note)} (<code>monet.py build ${esc(S.project)} ${esc(S.note)}</code>).</p>`
     : r && !r.built ? `<p class="err mono">${esc(r.error)}</p>` : '';
   cards.push(card('note', `<h2>${esc(S.note)}</h2>`, `${why}${d.doc ? `<pre class="doc">${esc(d.doc)}</pre>` : '<p class="muted">No description.</p>'}`, pill));
-  if (S.room === 'sketch') { panel.innerHTML = cards.join('') + (d.is_note && r.built ? sketchCards() : `<div class="card"><p class="muted">${notBuilt(r) ? 'Your agent has not built this Note for its source yet' : 'This Note does not build'}: there is nothing to draw on.</p></div>`); return; }
+  if (S.room === 'sketch') { putPanel(cards.join('') + (d.is_note && r.built ? sketchCards() : `<div class="card"><p class="muted">${notBuilt(r) ? 'Your agent has not built this Note for its source yet' : 'This Note does not build'}: there is nothing to draw on.</p></div>`)); return; }
 
   if (S.compare) {
     const s = S.compare.summary;
@@ -2364,7 +2428,7 @@ function renderPanel(force) {
     const tags = Object.entries(d.tags);
     cards.push(card('tags', `Tags · ${tags.length}`, tags.map(([name, t], n) => {
       const res = r.tags[name];
-      return `<div class="check tag ${S.tagSel === name ? 'sel' : ''}" data-tag="${esc(name)}"><div class="row"><span><span class="swatch" style="background:${PALETTE[n % PALETTE.length]}"></span><b>${esc(name)}</b>
+      return `<div class="check tag ${S.tagSel === name ? 'sel' : ''}" data-tag="${esc(name)}" data-is="tag ${res?.resolved ? 'ok' : 'red'}"><div class="row"><span><span class="swatch" style="background:${PALETTE[n % PALETTE.length]}"></span><b>${esc(name)}</b>
         ${res?.resolved ? '' : '<span class="err"> not found</span>'}</span><span class="v muted">${esc(t.kind)}</span>
         ${t.kind === 'sketch' ? `<button class="x" data-act="editsketch" data-name="${esc(name)}" title="open this sketch">✎</button>` : ''}<button class="x" data-act="untag" data-name="${esc(name)}" title="remove this tag">×</button></div>
         <div class="why">${esc(t.role ?? '')}${res?.why ? ` · ${esc(res.why)}` : ''}</div>
@@ -2375,9 +2439,9 @@ function renderPanel(force) {
       ...(r.motion ? ['interference_mm3', ...Object.keys(r.motion.joints).flatMap((k) => ['resolved', 'stop_min', 'stop_max', 'clash_mm3'].map((x) => `joint.${k}.${x}`))] : [])];
     const failing = r.checks.filter((c) => !c.ok).length;
     cards.push(card('checks', `Checks · ${r.checks.length}`, `<p class="muted" style="margin-top:0">Yours: the agent can add one, never change or remove one.</p>
-      ${r.checks.map((c) => `<div class="check"><div class="row"><span class="${c.ok ? 'ok' : 'err'}">${c.ok ? '✓' : '✗'} <span class="mono">${esc(c.what)}</span></span>
-        <span class="v">${fmt(c.value)} <span class="muted">(${esc(c.expect)})</span></span>${c.by === 'monet' ? '' : `<button class="x" data-act="uncheck" data-id="${esc(c.id)}" title="remove this check">×</button>`}</div>
-        <div class="why">${esc(c.why || '')}${c.by === 'agent' ? ' · added by the agent' : ''}${c.note ? ` · ${esc(c.note)}` : ''}</div></div>`).join('')}
+      ${r.checks.map((c) => (S.editCheck === c.id && c.by !== 'monet' ? checkEditor(c) : `<div class="check" data-is="check ${c.ok ? 'ok' : 'red'} ${esc(c.by)}"><div class="row"><span class="${c.ok ? 'ok' : 'err'}">${c.ok ? '✓' : '✗'} <span class="mono">${esc(c.what)}</span></span>
+        <span class="v">${fmt(c.value)} <span class="muted">(${esc(c.expect)})</span></span>${c.by === 'monet' ? '' : `<button class="x" data-act="editcheck" data-id="${esc(c.id)}" title="change this check: what it measures, its limits, why">✎</button><button class="x" data-act="uncheck" data-id="${esc(c.id)}" title="remove this check">×</button>`}</div>
+        <div class="why">${esc(c.why || '')}${c.by === 'agent' ? ' · added by the agent' : ''}${c.note ? ` · ${esc(c.note)}` : ''} <span class="muted mono">${esc(c.id)}</span></div></div>`)).join('')}
       <div class="line"><input id="ckWhat" list="measures" placeholder="what: size_x, tag.bore.width…"><datalist id="measures">${names.map((x) => `<option value="${esc(x)}">`).join('')}</datalist></div>
       <div class="line"><input id="ckMin" placeholder="min" inputmode="decimal"><input id="ckMax" placeholder="max" inputmode="decimal"><input id="ckEq" placeholder="or equals"></div>
       <div class="line"><input id="ckWhy" placeholder="why: the rule in your words"><button data-act="check">Add</button></div>`,
@@ -2405,7 +2469,7 @@ function renderPanel(force) {
       ${['3mf', 'stl', 'step', 'glb'].map((f) => `<a href="${root}/p/${S.project}/n/${S.note}/export.${f}${v}" download><button>${f.toUpperCase()}</button></a>`).join('')}</div>`));
   }
   cards.push(card('source', `The Note: ${esc(S.note)}.py`, `<pre class="src mono">${esc(d.source)}</pre>`));
-  panel.innerHTML = cards.join('');
+  putPanel(cards.join(''));
 }
 
 // every slider is a number and an icon (dial.js): those of the page now, those of the panel as it is drawn
@@ -2415,6 +2479,8 @@ const act = async (fn) => { try { await fn(); await open(S.project, S.note); } c
 $('#panel').addEventListener('focusout', () => { if (S.stale) setTimeout(() => renderPanel(), 50); });
 $('#panel').addEventListener('input', (e) => {
   if (e.target.id === 'saveMsg') S.message = e.target.value;
+  const ce = { ceWhat: 'what', ceMin: 'min', ceMax: 'max', ceEq: 'equals', ceWhy: 'why' }[e.target.id];      // a check being changed: kept through a redraw
+  if (ce) S.checkDraft[ce] = e.target.value;
   if (e.target.id === 'sketchName') S.sketchName = e.target.value;
   if (e.target.id === 'sketchRole') S.sketchRole = e.target.value;
 });
@@ -2562,6 +2628,15 @@ $('#panel').addEventListener('click', (e) => {
     S.tagSel = name;      // show what was just named
   });
   if (a === 'untag') ask(`Remove the tag "${b.dataset.name}" from the Note? Checks about it will fail.`, { yes: 'Remove', danger: true }).then((yes) => yes && act(() => api(`${n}/tags/${b.dataset.name}`, 'DELETE')));
+  if (a === 'editcheck') { S.editCheck = b.dataset.id; S.checkDraft = {}; renderPanel(true); $('#ceMin')?.focus() ?? $('#ceWhat')?.focus(); return; }
+  if (a === 'checkcancel') { S.editCheck = null; S.checkDraft = {}; renderPanel(true); return; }
+  if (a === 'checkput') {
+    const k = (kept.checks[S.note] ?? []).find((x) => x.id === b.dataset.id) ?? {}, eq = ($('#ceEq')?.value ?? '').trim().toLowerCase();
+    const body = { what: $('#ceWhat').value.trim(), why: $('#ceWhy').value, ...(k.bed ? { bed: k.bed } : {}) };
+    if ($('#ceMin')) Object.assign(body, { min: num('#ceMin'), max: num('#ceMax'), equals: eq === '' ? null : eq === 'true' ? true : eq === 'false' ? false : Number(eq) });
+    act(async () => { await api(`${n}/checks/${b.dataset.id}`, 'PUT', body); S.editCheck = null; S.checkDraft = {}; kept.key = ''; });
+    return;
+  }
   if (a === 'uncheck') ask(`Remove the check "${b.dataset.id}"?`, { yes: 'Remove', danger: true }).then((yes) => yes && act(() => api(`${n}/checks/${b.dataset.id}`, 'DELETE')));
   if (a === 'check') act(() => {
     const eq = $('#ckEq').value.trim().toLowerCase();
@@ -2654,7 +2729,7 @@ sheet.addEventListener('submit', async (e) => {
 });
 // what the page answers the agent with, through remote.js: where it is, its words, a picture, and going somewhere
 const hands = {
-  where: () => ({ project: S.project, note: S.note, room: S.room, kind: kindOf(S.note) ?? null }),
+  where: () => ({ project: S.project, note: S.note, room: S.room, kind: kindOf(S.note) ?? null, ...(S.find ? { find: S.find } : {}) }),
   screen() {
     const words = (el) => (el?.innerText ?? '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
     const panel = words($('#panel'));
@@ -2663,7 +2738,8 @@ const hands = {
       hidden: [...S.hidden], ...(S.room === 'motion' ? { pose: S.pose } : {}), busy: B.text || null, compare: S.compare ? true : undefined,
       panel: panel.slice(0, 8000), ...(panel.length > 8000 ? { cut: true } : {}) };
   },
-  async goto({ project = '', note = '', room = '' } = {}) {
+  async goto({ project = '', note = '', room = '', find } = {}) {
+    if (typeof find === 'string') setFind(find);      // Find, filled for the person: words, never code
     const other = project && project !== S.project;
     if (other || (note && note !== S.note)) await open(project || S.project, note || null);
     if (note && S.note !== note) throw new Error(`there is no Note "${note}" in ${S.project}: the canvas shows ${S.note ?? 'nothing'}`);
