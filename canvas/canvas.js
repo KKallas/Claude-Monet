@@ -198,6 +198,7 @@ function planes() {
 }
 let shown = [];      // the planes as drawn: with where their sheet is, for clicking on it and for its label
 function showPlanes(lit = null) {
+  wake();
   for (const o of sheets.children) { o.geometry.dispose(); o.material.dispose(); }
   sheets.clear();
   shown = [];
@@ -565,6 +566,7 @@ function setSection() {
 
 // colour the faces: the parts of an assembly, tagged faces on hover, what is selected
 function paint() {
+  wake();
   if (!shared) return;
   const colour = shared.colour, index = shared.index;
   const bare = look.base();
@@ -1208,14 +1210,20 @@ $('#sketchValue').oninput = (e) => sketch.setValue(Number(e.target.value.replace
 $('#sketchUndo').onclick = () => sketch.undo();
 
 // the view is drawn while it is used (a pointer, a key, a timeline or a joint playing, a pose changing) and for two
-// seconds after; left alone, twice a second, and the smoke of the lights stands still: a laptop stays cool
-for (const e of ['pointerdown', 'pointermove', 'wheel', 'keydown']) window.addEventListener(e, wake, { passive: true });
+// seconds after; left alone, twice a second, and the smoke of the lights stands still: a laptop stays cool.
+// A pointer moving over the panel, a toolbar or the terminal is no use of the view (what a hover there changes wakes it
+// itself: paint, showAxes, showPlanes), nor are keys typed into the terminal; a drag anywhere is
+window.addEventListener('pointerdown', wake, { passive: true });
+window.addEventListener('pointermove', (e) => { if (e.buttons || e.target === canvas) wake(); }, { passive: true });
+window.addEventListener('wheel', (e) => { if (e.target === canvas) wake(); }, { passive: true });
+window.addEventListener('keydown', (e) => { if (!e.target.closest?.('.term')) wake(); }, { passive: true });
 controls.addEventListener('change', wake);
 (function loop() {
   requestAnimationFrame(loop);
   const now = performance.now(), shooting = !!film && !film.done, awake = now - lastUse < 2000 || timeline.playing || !!playing || shooting || !!drag || !!blink
     || (lamps.on && Object.values(previews).some((p) => p.kind !== 'solid' && p.kind !== 'off'));      // pixels playing a pattern
   if (!awake && now - lastDraw < 500) return;
+  if (awake && !shooting && now - lastDraw < 12) return;      // at most 60 a second: a 120 Hz screen would draw twice as many for nothing
   if (awake) smokeTime += Math.min(100, now - lastTick);
   lastTick = now; lastDraw = now; pictures++;
   if (ready) slowness(now);
@@ -1614,6 +1622,7 @@ function axisNow() {
   return { origin: apply(f, row.origin), dir: turn(f, row.dir), kind: row.kind };
 }
 function showAxes() {
+  wake();
   for (const o of axes.children) { o.geometry.dispose(); o.material.dispose(); }
   axes.clear();
   const a = moving() ? axisNow() : null;
