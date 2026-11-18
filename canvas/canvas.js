@@ -2123,7 +2123,7 @@ function editRange(name, anchor) {
       body.range = range;
     }
     closePop();
-    act(async () => { building([S.note]); await api(`/p/${S.project}/n/${S.note}/joints/${name}`, 'PUT', body); });
+    changeJoint(name, body);
   };
   el.addEventListener('click', (e) => { const a = e.target.closest('[data-act]')?.dataset.act; if (a === 'close') closePop(); if (a === 'save') save(); });
   el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
@@ -2184,11 +2184,58 @@ function saveJoint() {
       if (e.locked) body.locked = true;
     }
   }
-  act(async () => {
-    building([S.note]);
-    await api(`/p/${S.project}/n/${S.note}/joints/${name}`, 'PUT', body);
-    closePop();
-  });
+  changeJoint(name, body, { sheet: true });
+}
+/** A joint changed in the canvas (its range, its lock, the sheet of all of it). What the page can show by itself
+(the range: how far the slider goes; the lock) it shows at once; the server takes the joint in a moment, and then
+works out again where it hits (a sweep: seconds of a big assembly, a minute on a slow server), a bar showing how far.
+Refused: put back as it is kept, and said. From the sheet nothing is shown before it is taken: refused, the sheet
+stays as it was typed. */
+async function changeJoint(name, body, { sheet = false } = {}) {
+  const project = S.project, note = S.note, mo = model(), row = mo?.joints?.[name];
+  const show = () => {
+    S.data.joints = { ...S.data.joints, [name]: body };
+    if (row) {
+      const ranged = JSON.stringify(row.range ?? null) !== JSON.stringify(body.range ?? null);
+      mo.joints[name] = { ...row, range: body.range ?? null, locked: !!body.locked };
+      if (ranged && mo.sweeps?.[name]) mo.sweeps[name] = { skipped: 'looking where it hits in this range…' };
+    }
+    renderPanel(true);
+  };
+  if (!sheet) show();
+  try {
+    await api(`/p/${project}/n/${note}/joints/${name}?answer=saved`, 'PUT', body);
+  } catch (e) {
+    tell(e.message);
+    if (!sheet) await open(project, note);      // back to what is kept
+    return;
+  }
+  if (sheet) { closePop(); show(); }
+  await checking(project, note, name);
+}
+/** The Note loaded again after a change of its joints, a bar meanwhile of how far the server has got with them. */
+async function checking(project, note, name) {
+  let on = true;
+  (async () => {
+    while (on) {
+      try {
+        const c = await api(`/p/${project}/n/${note}/checking`);
+        if (on && c.done != null) progress(`looking where ${name} hits…`, c.done);
+      } catch { /* asked again */ }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  })();
+  try { await open(project, note); } finally { on = false; busy(); }
+}
+/** The bar under the view's corner at a known fraction (busy's own clock guesses one from the time last time). */
+function progress(text, f) {
+  clearInterval(B.timer);
+  Object.assign(B, { text, clocked: false, timer: 0, eta: null });
+  $('#busy').hidden = false;
+  $('#busyText').textContent = `${text} ${Math.round(100 * f)} %`;
+  const track = $('#busyTrack');
+  track.hidden = false; track.classList.remove('unknown', 'over');
+  $('#busyBar').style.width = `${(100 * f).toFixed(1)}%`;
 }
 /** A direction as the sheet takes it: X, -Z … or three numbers. Null where it is neither. */
 function parseDir(text) {
@@ -2451,6 +2498,10 @@ $('#versions').onclick = (e) => { const el = e.target.closest('[data-version]');
 // One open() rules at a time: a later one (a click on another Note or room) takes over, and the one before it stops
 // where it is, so two loads never paint over each other; the page's own look every two seconds waits while one runs.
 let opening = 0, opens = 0, held = '';      // held: the project/Note whose build the frame holds
+// …and which build of it: a joint, tag or lock changed in the canvas leaves the build as it was, so its model (megabytes
+// of an assembly) is not fetched again: only what the server worked out from it is new
+const buildOf = (data) => JSON.stringify([data?.report?.state, data?.report?.took, data?.report?.measure]);
+let heldBuild = '';
 async function open(project, note) {
   const turn = ++opening, late = () => turn !== opening;
   opens++;
@@ -2497,7 +2548,7 @@ async function openNow(project, note, late) {
   document.querySelectorAll('[data-sel]').forEach((b) => b.classList.toggle('on', b.dataset.sel === S.mode));
   roomBar();
   renderSide();
-  if (!S.note) { arriving(); held = ''; S.data = null; S.parts = []; assemble({}); assemblyBar(); showSelection(); renderPanel(true); showLast(); return; }
+  if (!S.note) { arriving(); held = ''; heldBuild = ''; S.data = null; S.parts = []; assemble({}); assemblyBar(); showSelection(); renderPanel(true); showLast(); return; }
   busy('loading…', {});
   // (not changedNote: an open() that took over from one that had already named the Note still brings another build in)
   const other = held !== `${project}/${S.note}`;
@@ -2512,7 +2563,9 @@ async function openNow(project, note, late) {
     S.rev = rev;
     // stale: the agent has not built it since its source changed; its last build is shown meanwhile
     const last = S.data.report?.state === 'stale';
-    if (S.data.report?.built || last) {
+    if ((S.data.report?.built || last) && !other && heldBuild === buildOf(S.data)) {
+      // the same build: faces, parts, the model and the pixels as they are; the joints and tags in S.data are new
+    } else if (S.data.report?.built || last) {
       const stamp = `r=${S.rev}${last ? '&last=1' : ''}`;
       const [loaded, described] = await Promise.all([loadInto(new THREE.Group(), `${root}/p/${project}/n/${S.note}/model.glb?${stamp}`, true),
         fetch(`${root}/p/${project}/n/${S.note}/faces.json?${stamp}`).then((r) => r.json())]);
@@ -2524,10 +2577,10 @@ async function openNow(project, note, late) {
       S.faces = described.faces; S.parts = described.parts ?? []; S.edges = described.edges ?? []; S.points = described.points ?? [];
       lamps.described(described);      // a pixels light's pixels and LEDs, as the build found them
       assemble(loaded);
-      held = `${project}/${S.note}`;
+      held = `${project}/${S.note}`; heldBuild = buildOf(S.data);
       frame(groups.part, !other);
       spread();
-    } else { held = ''; S.faces = []; S.parts = []; S.edges = []; S.points = []; S.sel = nothing(); assemble({}); showSelection(); }
+    } else { held = ''; heldBuild = ''; S.faces = []; S.parts = []; S.edges = []; S.points = []; S.sel = nothing(); assemble({}); showSelection(); }
     assemblyBar();
     const after = await api(`/p/${project}`);
     if (late()) return;
@@ -2541,7 +2594,7 @@ async function openNow(project, note, late) {
     if (late()) return;
     S.data = { error: e.message }; lamps.set([]);
     // the Note asked for did not come: the one before it does not stay in the frame under this one's name
-    if (other) { held = ''; S.faces = []; S.parts = []; S.edges = []; S.points = []; S.sel = nothing(); assemble({}); showSelection(); }
+    if (other) { held = ''; heldBuild = ''; S.faces = []; S.parts = []; S.edges = []; S.points = []; S.sel = nothing(); assemble({}); showSelection(); }
   }
   busy(); arriving();
   styleAll(); paint(); showTag(); renderPanel(true); showLast(); assemblyBar(); showSnaps(); showGhosts(); syncLights(); showTimeline();
@@ -2853,7 +2906,16 @@ $('#panel').addEventListener('change', (e) => {
   if (e.target.id === 'studyCut') timeline.key(['@section']);
   if (e.target.id === 'placeNote') { S.placeNote = e.target.value; $('#placeName').value = placeName(e.target.value); }
   if (e.target.id === 'groundSel' && e.target.value) act(async () => { building([S.note]); await api(`/p/${S.project}/n/${S.note}/ground`, 'PUT', { ground: e.target.value }); });
-  if (e.target.dataset.posenum) setJoint(e.target.dataset.posenum, Number(e.target.value.replace(',', '.')));
+  if (e.target.dataset.posenum) {
+    // kept within its range: the box (which keeps the focus, so syncSliders leaves it) shows where the joint went
+    const name = e.target.dataset.posenum, typed = Number(e.target.value.replace(',', '.')), row = model()?.joints[name];
+    setJoint(name, typed);
+    e.target.value = fmt(S.pose[name] ?? 0);
+    if (row && Number.isFinite(typed) && Math.abs((S.pose[name] ?? 0) - typed) > 0.01) {
+      const [lo, hi] = span(row);
+      notice(`${name} goes from ${fmt(lo)} to ${fmt(hi)}${row.unit}: its range, under the slider, is where to widen it`);
+    }
+  }
 });
 // Motion: a joint's slider moves it as it is dragged; what is typed into the joint being made is kept as it is typed
 $('#panel').addEventListener('input', (e) => {
@@ -2949,7 +3011,7 @@ $('#panel').addEventListener('click', (e) => {
   }
   if (a === 'lock') {      // locked is written into the Note: the joint holds where it is
     const spec = S.data.joints?.[b.dataset.name];
-    if (spec) act(async () => { building([S.note]); await api(`/p/${S.project}/n/${S.note}/joints/${b.dataset.name}`, 'PUT', { ...spec, locked: !spec.locked }); });
+    if (spec) changeJoint(b.dataset.name, { ...spec, locked: !spec.locked });
     return;
   }
   if (a === 'lookreset') { setLook({ color: null }); return; }

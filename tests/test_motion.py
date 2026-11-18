@@ -42,6 +42,50 @@ def test_a_tree_of_bodies_from_the_ground():
     assert np.allclose(turn(pf["wheel"], (1, 0, 0)), (math.cos(math.pi), math.sin(math.pi), 0), atol=1e-9)
 
 
+def test_a_sweep_is_kept_while_its_joint_is_as_it_was(monkeypatch):
+    """A range typed in the canvas works the motion out again from the same build: a sweep is seconds of a big
+    assembly, so one is kept from before where its joint, and how the bodies hang, are as they were. Another
+    joint's range or a lock is no change to it; its own range, an axis or a keep-out is."""
+    swept = []
+    monkeypatch.setattr(joints, "sweep", lambda model, shapes, name, home=None, tick=None: swept.append(name) or {"of": name, "range": model["joints"][name]["range"]})
+    spec = {"hinge": {"kind": "revolute", "moves": "lid", "on": "frame", "axis": {"origin": [10, 0, 0], "dir": "Y"}, "range": [0, 90]},
+            "slide": {"kind": "slider", "moves": "knob", "on": "lid", "axis": "X", "range": [-5, 5]}}
+    parts = ["frame", "lid", "knob"]
+
+    def analysed(spec, before=None, keep=()):
+        swept.clear()
+        m = joints.resolve(spec, "frame", parts)
+        m.update(joints.analyse(m, {}, keep, None, before))
+        return m, sorted(swept)
+    first, again = analysed(spec)
+    assert again == ["hinge", "slide"]
+    assert analysed(spec, first)[1] == []                                            # nothing changed: nothing swept
+    wider = {**spec, "slide": {**spec["slide"], "range": [-5, 9]}}
+    m, again = analysed(wider, first)
+    assert again == ["slide"] and m["sweeps"]["slide"]["range"] == [-5, 9] and m["sweeps"]["hinge"] == first["sweeps"]["hinge"]
+    assert analysed({**spec, "hinge": {**spec["hinge"], "range": [0, 45]}}, first)[1] == ["hinge"]
+    assert analysed({**spec, "hinge": {**spec["hinge"], "locked": True}}, first)[1] == []
+    assert analysed({**spec, "hinge": {**spec["hinge"], "axis": {"origin": [12, 0, 0], "dir": "Y"}}}, first)[1] == ["hinge", "slide"]
+    assert analysed(spec, first, keep=["knob"])[1] == ["hinge", "slide"]
+
+
+def test_how_far_the_sweeps_are_is_told_while_they_run():
+    """The canvas shows a bar while a big assembly is swept again: told in fractions that only grow, and never 1
+    before it is done (the Note loaded is the end)."""
+    import manifold3d as mf
+    spec = {"hinge": {"kind": "revolute", "moves": "lid", "on": "frame", "axis": {"origin": [0, 0, 0], "dir": "Y"}, "range": [0, 90]},
+            "slide": {"kind": "slider", "moves": "knob", "on": "frame", "axis": "X", "range": [-5, 5]}}
+    shapes = {"frame": mf.Manifold.cube([10, 10, 2]), "lid": mf.Manifold.cube([10, 10, 2]).translate([0, 0, 5]),
+              "knob": mf.Manifold.cube([2, 2, 2]).translate([20, 0, 0])}
+    m = joints.resolve(spec, "frame", list(shapes))
+    told = []
+    first = joints.analyse(m, shapes, (), None, None, told.append)
+    assert told and told == sorted(told) and 0 < told[-1] < 1
+    told.clear()
+    joints.analyse(m, shapes, (), None, {**m, **first}, told.append)
+    assert set(told) <= {0.0}      # nothing to sweep again: nothing to wait for
+
+
 def test_what_is_wrong_is_told_not_thrown():
     m = joints.resolve({"g": {"kind": "rigid", "parts": ["a", "nope"]},
                         "two": {"kind": "revolute", "moves": "b", "on": "g", "axis": "X"},

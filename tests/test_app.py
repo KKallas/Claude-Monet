@@ -526,6 +526,14 @@ def test_a_joint_made_in_the_canvas_and_a_pose_for_the_agent(client, reg):
     assert png.status_code == 200 and png.content[:4] == b"\x89PNG"
     assert client.post(f"{w}/agent/check", json={"project": "starter", "note": "lidbox"}).json()["motion"]["sweeps"]["hinge"]["clash_mm3"] >= 0
 
+    # the canvas's way: the joint taken at once (the sweep is worked out when the Note is loaded again, a bar of how
+    # far meanwhile); a joint that is no joint refused the same way
+    spec = client.get(n).json()["joints"]["hinge"]
+    assert client.put(f"{n}/joints/hinge?answer=saved", json={**spec, "range": [0, 100]}).json() == {"note": "lidbox", "saved": True}
+    assert client.get(f"{n}/checking").json() == {}                                      # nothing being worked out
+    assert client.get(n).json()["report"]["motion"]["joints"]["hinge"]["range"] == [0.0, 100.0]
+    assert client.put(f"{n}/joints/hinge?answer=saved", json={**spec, "range": [9, 1]}).status_code == 400
+
     # and the person takes it away again
     assert "hinge" not in client.delete(f"{n}/joints/hinge").json()["motion"]["joints"]
     assert client.put(f"{n}/joints/bad name", json={"kind": "rigid", "moves": "lid", "on": "base"}).status_code == 400

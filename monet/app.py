@@ -787,8 +787,13 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
             current[which] = joint_rules.clean(body)
         except ValueError as e:
             raise Problem(f"that is not a joint: {e}")
-        with p.lock:
-            return p.write(name, notes.set_joints(source, current))
+        with p.lock:      # ?answer=saved: the canvas, which loads the Note again (the sweeps are worked out then)
+            return p.write(name, notes.set_joints(source, current), report=request.query_params.get("answer") != "saved")
+
+    def checking(request, ws, _body):
+        """How far a Note's joints are being worked out again: the canvas's bar while it waits for the Note."""
+        p, name = note_of(request, ws)
+        return p.checking(name)
 
     def put_animation(request, ws, body):
         """The keyframes of the timeline in Motion: kept in the project, nothing built from them."""
@@ -987,6 +992,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route(n + "/tags/{tag}", api(delete_tag), methods=["DELETE"]),
         Route(n + "/planes/{plane}", api(move_plane), methods=["PUT"]),
         Route(n + "/joints/{joint}", api(put_joint), methods=["PUT", "DELETE"]),
+        Route(n + "/checking", api(checking)),
         Route(n + "/ground", api(put_ground), methods=["PUT"]),
         Route(n + "/placed/{instance}", api(put_placed), methods=["PUT", "DELETE"]),
         Route(n + "/animation", api(put_animation), methods=["PUT"]),

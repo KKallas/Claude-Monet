@@ -32,6 +32,8 @@ A tip is a point on a part (`at`: where it is as built) that can be led somewher
 values of the joints moved by hand that put it there, within their ranges (inverse kinematics). The
 canvas does the same, live, when the tip is dragged (canvas/motion.js).
 """
+import hashlib
+import json
 import math
 import re
 
@@ -463,7 +465,7 @@ def interference(shapes: dict) -> dict:
     return {"total_mm3": round(sum(r[2] for r in pairs), 3), "pairs": pairs}
 
 
-def sweep(model: dict, shapes: dict, joint: str, home: dict | None = None) -> dict:
+def sweep(model: dict, shapes: dict, joint: str, home: dict | None = None, tick=None) -> dict:
     """Move one joint (and what follows it) through its range and a little past both ends, the others as built.
     A clash is new overlap between two parts that move against each other (what overlapped as built already is
     the interference's to report). Gives where it first hits each way (stop_min, stop_max), the worst overlap
@@ -499,9 +501,13 @@ def sweep(model: dict, shapes: dict, joint: str, home: dict | None = None) -> di
     else:
         step = STEP
     looked = [0]
+    # how many looks it will take, about (the stops are found by halving, a few more): for a bar while one waits
+    planned = 1.1 * sum(min(MAX_SAMPLES, max(1, math.ceil(abs(end) / step))) for sign, end in ((1, b), (-1, a)) if sign * end > 0) or 1
 
     def at(x):
         looked[0] += 1
+        if tick:
+            tick(min(0.99, looked[0] / planned))
         who = _excess(overlaps(_moved(shapes, part_frames(model, {joint: x})), pairs), home)
         return (who[0][2] if who else 0.0), who
 
@@ -548,14 +554,58 @@ def sweep(model: dict, shapes: dict, joint: str, home: dict | None = None) -> di
     return out
 
 
-def analyse(model: dict, shapes: dict, keepouts=(), poses: dict | None = None) -> dict:
+def swept_key(model: dict, joint: str, keep) -> str:
+    """What a sweep of `joint` depends on, besides the build's shapes: how the bodies hang together and where every
+    joint turns or slides, its own range, and the keep-outs left out. Not the other joints' ranges or locks: a sweep
+    moves this joint alone, the others as built (`frames` reads neither)."""
+    rows = {n: {k: v for k, v in r.items() if k not in ("locked", "why") and not (k == "range" and n != joint)}
+            for n, r in model["joints"].items()}
+    return hashlib.sha256(json.dumps([model["bodies"], model.get("ground"), rows, joint, sorted(keep)], sort_keys=True,
+                                     default=str).encode()).hexdigest()[:20]
+
+
+def analyse(model: dict, shapes: dict, keepouts=(), poses: dict | None = None, before: dict | None = None,
+            progress=None) -> dict:
     """Interference as built, a sweep of every joint moved by hand, and every named pose. Keep-outs (room to keep
-    clear: a beam, an airflow, a hand) are no material: they count only against the others at the named poses."""
+    clear: a beam, an airflow, a hand) are no material: they count only against the others at the named poses.
+    `before`: what was worked out for these same shapes last time (a joint's range typed in the canvas): a sweep
+    whose joint and frame are as they were is taken from it (`swept_key` of both), and so is the interference, which
+    no joint changes: of a big assembly they are most of the time (seconds a sweep), while the person waits.
+    `progress(fraction)`: told now and then how far it has got, for the bar the canvas shows meanwhile."""
     keep = set(keepouts or ())
     real = {n: m for n, m in shapes.items() if n not in keep}
-    out = {"interference": interference(real), "unchecked": sorted(n for n, m in shapes.items() if m is None), "sweeps": {}}
+    before = before or {}
+    kept_before = before.get("keepouts", [])
+    same_keep = kept_before == sorted(keep) and "interference" in before
+    todo = {}      # the joints to sweep again, each weighed by how many looks it took last time (else a guess)
     for name in drivers(model):
-        out["sweeps"][name] = sweep(model, real, name)
+        old = (before.get("sweeps") or {}).get(name)
+        # the motion before holds its joints as they were swept: the key is worked out from it, so a result of any
+        # Monet that sweeps the same way is good for this (sweeps of a bad joint, or none, are not kept)
+        same = old is not None and name in (before.get("joints") or {}) and "bodies" in before \
+            and swept_key(before, name, kept_before) == swept_key(model, name, keep)
+        todo[name] = None if same else max(20, (old or {}).get("looked") or 150)
+    weights = {"interference": 0 if same_keep else 20, **{k: w for k, w in todo.items() if w}, "poses": 3 * len(poses or {})}
+    total, done = sum(weights.values()) or 1, [0.0]
+
+    def part(what):
+        """Tell `progress` how far, with `what` (a weight's name) that far through itself."""
+        def tick(f):
+            if progress:
+                progress(min(0.99, (done[0] + weights[what] * f) / total))
+        return tick
+
+    def finished(what):
+        done[0] += weights.get(what, 0)
+        part(what)(0)
+
+    out = {"interference": before["interference"] if same_keep else interference(real),
+           "unchecked": sorted(n for n, m in shapes.items() if m is None), "sweeps": {}}
+    finished("interference")
+    for name, w in todo.items():
+        out["sweeps"][name] = before["sweeps"][name] if w is None else sweep(model, real, name, tick=part(name))
+        if w:
+            finished(name)
     if keep:
         out["keepouts"] = sorted(keep)
     if poses:

@@ -116,6 +116,12 @@ wrong:
   overlap as a joint moves; what overlaps as built is the interference, reported apart. The
   server answers what a pose hits from the build's preview mesh (`Project.pose`), never by
   running the Note.
+- **A joint changed in the canvas shows at once** (Kaspar, 2026-11-18: a range saved took 153 s on the droplet, and
+  the slider held the old one): `changeJoint` in canvas.js shows the range and the lock before the server answers,
+  PUTs with `?answer=saved` (the joint written, no report), then loads the Note with a bar of how far the server is
+  (`GET …/checking`, `Project.checking`, fed by `joints.analyse(progress=…)`); refused, it is put back. Working the
+  motion out again keeps each sweep whose joint is as it was (`joints.swept_key`, from the motion before), and the
+  interference: only the changed joint is swept again.
 - **Facts that are no shape** (Kaspar's lamp issues, 2026-11-10): `MATERIAL`, `MATERIALS`, `MASS`, `POSES`, `BOM`
   and `DRIVES` are plain literals (`note.FACTS`), left out of `geometry_key`, worked out by the server from the stored
   build when it reports (`Project.facts`: mass from `materials.py`, torque by virtual work in `joints.torque`, the BOM in

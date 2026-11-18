@@ -92,6 +92,9 @@ ARCHIVED = re.compile(rf"^(versions/[0-9]{{4}}/)?({_NOTE}\.py|{_NOTE}\.checks\.j
 
 _locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
+# how far the joints of a Note are being worked out again (its sweeps), by "<dir>/<note>": {"done": 0…1, "since"}.
+# Read without any lock: the canvas asks it while it waits for the Note, whose lock the working out holds.
+_checking: dict[str, dict] = {}
 _times_guard = threading.Lock()
 
 
@@ -949,13 +952,26 @@ class Project:
         verts, tris, _ = render.load(out / "model.glb")
         geo = json.loads((out / "faces.json").read_text())
         r = dict(r)
-        r["tags"], r["motion"] = derive.found({k: parsed[k] for k in ("tags", "joints", "ground", "tips", "placed", "poses", "keepout")},
-                                              r["fingerprint"]["bbox"], geo, verts, tris, r.get("snaps") or {})
+        key = f"{self.dir}/{name}"
+        _checking[key] = {"done": 0.0, "since": time.time()}
+        try:
+            r["tags"], r["motion"] = derive.found({k: parsed[k] for k in ("tags", "joints", "ground", "tips", "placed", "poses", "keepout")},
+                                                  r["fingerprint"]["bbox"], geo, verts, tris, r.get("snaps") or {},
+                                                  before=r.get("motion"),      # the same build: its sweeps kept where they hold
+                                                  progress=lambda f: _checking.__setitem__(key, {**_checking.get(key, {}), "done": round(f, 3)}))
+        finally:
+            _checking.pop(key, None)
         r["literals"] = notes.literals_key(source)
         tmp = out / "result.json.new"
         tmp.write_text(json.dumps(r, default=str))
         tmp.replace(out / "result.json")
         return r
+
+    def checking(self, name: str) -> dict:
+        """How far the joints of `name` are being worked out again ({"done": 0…1, "seconds"}), or {} when they are not."""
+        self._path(name)
+        c = _checking.get(f"{self.dir}/{name}")
+        return {"done": c["done"], "seconds": round(time.time() - c["since"], 1)} if c else {}
 
     def accept_build(self, name: str, files: dict, version: int | None = None) -> dict:
         """What the agent built of a Note, uploaded: {file name: bytes}. Taken only if it is a build of the files as
@@ -1179,7 +1195,7 @@ class Project:
         return out
 
     # ---- writing -----------------------------------------------------------------
-    def write(self, name: str, source: str, agent: bool = False) -> dict:
+    def write(self, name: str, source: str, agent: bool = False, report: bool = True) -> dict:
         path = self._path(name)
         if len(source) > MAX_SOURCE:
             raise Problem("that is too long for a Note")
@@ -1195,6 +1211,8 @@ class Project:
                     raise Problem(f"load check of {name} is waiting: {lc['message']}. Then edit it.", 409)
             path.write_text(source if source.endswith("\n") else source + "\n")
             self.touch()
+            if not report:      # the canvas: it loads the Note again, and asks `checking` meanwhile
+                return {"note": name, "saved": True}
             if parsed["error"] and "syntax" in parsed["error"]:
                 return {"note": name, "built": False, "green": False, "error": parsed["error"], "checks": []}
             if not parsed["is_note"]:

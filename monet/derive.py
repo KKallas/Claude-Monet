@@ -71,9 +71,11 @@ def riding(spec: dict, keepout, part_names: list) -> dict:
     return spec
 
 
-def found(literals: dict, bbox, geo: dict, verts, tris, snaps: dict | None = None) -> tuple:
+def found(literals: dict, bbox, geo: dict, verts, tris, snaps: dict | None = None, before: dict | None = None,
+          progress=None) -> tuple:
     """(tags found, motion or None). literals: the Note's {"tags", "joints", "ground", "tips", "placed", "poses",
-    "keepout"}; geo: faces.json; snaps: the build's snap points."""
+    "keepout"}; geo: faces.json; snaps: the build's snap points; before: the motion last worked out from this same
+    build, whose sweeps are kept where their joint is as it was (joints.analyse); progress: told how far it is."""
     parts = geo["parts"]
     names = [p["name"] for p in parts]
     got = tags.resolve(literals.get("tags") or {}, geo["faces"], bbox, blocked=rays.crossing(verts, tris),
@@ -86,6 +88,6 @@ def found(literals: dict, bbox, geo: dict, verts, tris, snaps: dict | None = Non
     model = joints.resolve(spec, literals.get("ground"), names, literals.get("tags") or {}, got,
                            geo["faces"], literals.get("tips") or {})
     model.update(joints.analyse(model, joints.solids(verts, tris, parts), materials.keepouts(names, literals.get("keepout")),
-                                literals.get("poses")))
+                                literals.get("poses"), before, progress))
     model["seconds"] = round(time.time() - t0, 2)
     return got, model
