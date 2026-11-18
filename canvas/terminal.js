@@ -6,7 +6,9 @@
 // in this browser and puts it in the one line it gives the person to start Monet local with (--pair: it goes from the
 // page to the person's own terminal by their hand, never to the server). The page picks what runs by name, from Monet
 // local's own list; it sends keys, never a command line. Monet local also says how much of the Claude plan is used (the
-// bars at the top: session, week, a model's week), from what Claude Code knows on that computer. What is typed here is the person; the agent it starts reaches Monet through the agent's door,
+// bars at the top: session, week, a model's week), from what Claude Code knows on that computer. A file given here
+// (dropped on the panel, a picture pasted, or picked with Attach) goes the same way to Monet local, which keeps it in the
+// project's folder (attachments/) and pastes its path into what runs, as a terminal does with a file dropped on it. What is typed here is the person; the agent it starts reaches Monet through the agent's door,
 // like any other.
 
 const KEEP = 'monet.local', PORTS = [47821, 47822, 47823, 47824],      // where Monet local listens: the first that was free (local.py)
@@ -40,6 +42,9 @@ export function createTerminal(view, button, hooks) {
   root.hidden = true;
   root.innerHTML = `<div class="term-grip" title="drag: how tall the terminal is"></div>
     <div class="term-bar"><span class="term-tabs"></span><span class="term-where"></span><span class="sp"></span><span class="term-usage"></span>
+      <span class="term-size" title="how big the terminal's letters are (kept in this browser)"><button data-term="smaller">A−</button><b></b><button data-term="bigger">A+</button></span>
+      <button data-term="attach" title="give the agent a file: a screenshot, a drawing, a PDF. It is kept in the project's folder (attachments/) and its path is put where you type. Or drop files here, or paste a picture" hidden>📎 Attach</button>
+      <input type="file" class="term-file" multiple hidden>
       <button data-term="key" title="another agent key: the line with the old one in it stops working, for you and for anyone who got hold of it" hidden>New key</button>
       <button data-term="end" title="end what runs here (it keeps running when this panel is only closed)" hidden>End</button>
       <button data-term="close" title="close the panel: what runs in it runs on">×</button></div>
@@ -47,14 +52,23 @@ export function createTerminal(view, button, hooks) {
   view.append(root);
   const $ = (q) => root.querySelector(q);
   const enc = new TextEncoder();
-  let term = null, fit = null, ws = null, run = 'log', about = null, greeted = false, over = false, h = 320, again = 0;
-  try { h = Number(localStorage.getItem('monet.term.h')) || h; run = localStorage.getItem('monet.term.run') || run; } catch { /* defaults */ }
+  let term = null, fit = null, ws = null, run = 'log', about = null, greeted = false, over = false, h = 320, again = 0, font = 14;
+  try { h = Number(localStorage.getItem('monet.term.h')) || h; run = localStorage.getItem('monet.term.run') || run; font = Number(localStorage.getItem('monet.term.font')) || font; } catch { /* defaults */ }
+  const FONTS = [10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28];
+  /** The letters a size bigger or smaller (or as kept): what fits in the panel follows, and what runs is told. */
+  function letters(step = 0) {
+    const i = FONTS.findIndex((f) => f >= font);
+    font = FONTS[Math.max(0, Math.min(FONTS.length - 1, (i < 0 ? FONTS.length - 1 : i) + step))];
+    try { localStorage.setItem('monet.term.font', String(font)); } catch { /* not kept */ }
+    $('.term-size b').textContent = font;
+    if (term) { term.options.fontSize = font; try { fit.fit(); } catch { /* hidden */ } }
+  }
 
   async function xterm() {
     if (term) return;
     document.head.append(Object.assign(document.createElement('link'), { rel: 'stylesheet', href: 'https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/css/xterm.css' }));
     const [{ Terminal }, { FitAddon }] = await Promise.all([import('@xterm/xterm'), import('@xterm/addon-fit')]);
-    term = new Terminal({ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: 12.5, cursorBlink: true, scrollback: 5000,
+    term = new Terminal({ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: font, cursorBlink: true, scrollback: 5000,
       allowProposedApi: true, theme: { background: '#00000000', foreground: '#b6ffd0', cursor: '#5ef6ff', cursorAccent: '#06110c', selectionBackground: '#1f5a48', green: '#5dff9b', brightGreen: '#8dffb8', yellow: '#ffd75e', brightYellow: '#ffe58a', red: '#ff6b81', brightRed: '#ff8fa0', cyan: '#5ef6ff', brightCyan: '#9dfaff', blue: '#6fb1ff', magenta: '#ff7ad9', brightBlack: '#5b8a72' },
       allowTransparency: true });
     fit = new FitAddon();
@@ -74,6 +88,7 @@ export function createTerminal(view, button, hooks) {
     $('.term-where').classList.toggle('warn', !!about && !!hooks.project() && about.project !== hooks.project());
     $('.term-where').title = about && hooks.project() && about.project !== hooks.project() ? `Monet local works on ${about.project}; the canvas shows ${hooks.project()}` : '';
     $('[data-term="end"]').hidden = !(greeted && run !== 'log');
+    $('[data-term="attach"]').hidden = !(greeted && run !== 'log');
     $('[data-term="key"]').hidden = !hooks.mine();
   }
 
@@ -151,6 +166,9 @@ as of ${esc(ago(b.at))}${old ? ' (it is new after a reply of Claude Code in this
         if (m.run !== 'log') about.running = [...new Set([...(about.running ?? []), m.run])];
         tabs();
         term.focus();
+      } else if (m.t === 'attached') {      // kept in the folder, its path pasted where one types
+        if (m.error) term.write(`\r\n\x1b[31m${m.error}\x1b[0m\r\n`);
+        term.focus();
       } else if (m.t === 'usage') {
         plan(m.bars);
       } else if (m.t === 'exit') {
@@ -171,6 +189,46 @@ as of ${esc(ago(b.at))}${old ? ' (it is new after a reply of Claude Code in this
       tabs();
     };
   }
+
+  const MAX = 30_000_000;      // bytes of one file: as Monet local takes (local.py MAX_ATTACH)
+  /** Files given to what runs: sent to Monet local on this computer, which keeps them and pastes their paths. */
+  async function attach(files) {
+    files = [...(files ?? [])].filter((f) => f.size || f.type);
+    if (!files.length) return;
+    if (!(ws?.readyState === WebSocket.OPEN && greeted && run !== 'log')) {
+      term?.write(`\r\n\x1b[33mOpen Claude Code (or another tab above) to give it files.\x1b[0m\r\n`);
+      return;
+    }
+    for (const f of files) {
+      if (f.size > MAX) { term.write(`\r\n\x1b[31m${f.name}: a file given here is at most ${MAX / 1e6} MB\x1b[0m\r\n`); continue; }
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      // a picture pasted has no name of its own: when it was taken is one
+      const name = f.name && f.name !== 'image.png' ? f.name : `screenshot-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.${(f.type.split('/')[1] || 'png').replace('jpeg', 'jpg')}`;
+      ws.send(JSON.stringify({ t: 'file', name, data: btoa(bin) }));
+    }
+  }
+  root.addEventListener('dragover', (e) => {
+    if (![...(e.dataTransfer?.types ?? [])].includes('Files')) return;
+    e.preventDefault();
+    root.classList.add('dropping');
+  });
+  root.addEventListener('dragleave', (e) => { if (!root.contains(e.relatedTarget)) root.classList.remove('dropping'); });
+  root.addEventListener('drop', (e) => {
+    if (!e.dataTransfer?.files?.length) return;
+    e.preventDefault();
+    root.classList.remove('dropping');
+    attach(e.dataTransfer.files);
+  });
+  // a picture on the clipboard (a screenshot) pasted into the terminal: given as a file; text is typed as ever
+  root.addEventListener('paste', (e) => {
+    const files = [...(e.clipboardData?.files ?? [])];
+    if (!files.length) return;
+    e.preventDefault(); e.stopPropagation();
+    attach(files);
+  }, true);
+  $('.term-file').addEventListener('change', (e) => { attach(e.target.files); e.target.value = ''; });
 
   function poke() { if (ws?.readyState === WebSocket.OPEN && greeted) ws.send(JSON.stringify({ t: 'poke' })); }
 
@@ -198,6 +256,8 @@ as of ${esc(ago(b.at))}${old ? ' (it is new after a reply of Claude Code in this
     if (b.dataset.run) { run = b.dataset.run; try { localStorage.setItem('monet.term.run', run); } catch { /* not kept */ } about = about && { ...about, run: undefined }; dial(); }
     else if (b.dataset.term === 'close') show(false);
     else if (b.dataset.term === 'end' && ws && greeted) ws.send(JSON.stringify({ t: 'end' }));
+    else if (b.dataset.term === 'attach') $('.term-file').click();
+    else if (b.dataset.term === 'smaller' || b.dataset.term === 'bigger') letters(b.dataset.term === 'bigger' ? 1 : -1);
     else if (b.dataset.term === 'key') hooks.newKey().then((made) => { if (made) { hangUp(); about = null; tabs(); help('key'); } });
     else if (b.dataset.term === 'copy') navigator.clipboard?.writeText(line()).then(() => { b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1500); });
   });
@@ -214,6 +274,7 @@ as of ${esc(ago(b.at))}${old ? ' (it is new after a reply of Claude Code in this
       try { localStorage.setItem('monet.term.h', String(h)); } catch { /* not kept */ }
     };
   });
+  letters();
   button.onclick = () => show(root.hidden);
   if (came) show(true);      // the link was just opened: here is what it is for
 

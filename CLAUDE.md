@@ -149,6 +149,16 @@ wrong:
   via my user so gh would have the correct credentials"): Monet local starts it as them, with their PATH (`own_env`
   in local.py takes out what `uv run` put in front), Claude Code with `--chrome` (Claude in Chrome: their own browser),
   and `monet.py view [out.png]` saves the picture of their open canvas for it, the key never printed.
+- **Motion studies** (Kaspar, 2026-11-18): monet.json `studies` (`Project.set_study`, `clean_study`): named per
+  project, each a timeline of an assembly (`of`) that also keys the camera, the section's position (its axis and side
+  are the study's), parts shown (held) and see-through (straight), and keeps a view (style, edges). The timeline holds
+  them as lines `@camera`, `@section`, `^part`, `%part` beside joints and `~lights` (`kept`/`opened` in timeline.js);
+  `viewNow`/`viewTo` in canvas.js read and put them, and the video applies them per frame. An assembly's old
+  `animations[note]` is its own study (named after it), moved over on the first write; `set_animation` is a door to it.
+- **Files given to the agent** (Kaspar, 2026-11-18): dropped on the Terminal panel, a picture pasted into it, or picked
+  with Attach: sent on the 127.0.0.1 line (`{t: file}`), kept by Monet local in the folder's `attachments/` by a safe name
+  of its own (`Local.attach`), and the path pasted into what runs as a bracketed paste, as a terminal does with a dropped
+  file. Never through the server. The terminal's letters have a size of their own (A−/A+, kept in the browser).
 - **The plan's usage over the terminal** (Kaspar, 2026-11-14): Session, Week and a model's week (Fable) as bars in the
   Terminal panel's bar. `skill/monet/scripts/usage.py` reads only what Claude Code knows on that computer: the
   `rate_limits` its status line is given (Monet local starts `claude --settings` with usage.py as the status line,

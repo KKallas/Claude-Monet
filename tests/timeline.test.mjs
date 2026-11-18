@@ -94,3 +94,24 @@ test('light lines: "~name" on the timeline, kept apart as lights in the project'
   assert.deepEqual(kept(o), { fps: 24, length: 48, tracks: { leaf: [[0, 0]] }, lights: { led: [[0, 0], [24, 1]], haze: [[0, 0.5]] }, actions: [] });
   assert.equal(kept(opened({ fps: 30, length: 10, tracks: {} })).lights, undefined);
 });
+
+test('a study keeps its camera, section and parts as lines, and gives them back as it was given them', async () => {
+  const { kept, opened, poseAt, viewLine } = await import('../canvas/timeline.js');
+  const cam = (x) => ({ proj: 'persp', p: [x, -100, 80], t: [0, 0, 10], u: [0, 0, 1], z: 1, fov: 35 });
+  const study = { of: 'arm', fps: 30, length: 120, tracks: { j1: [[0, 0], [60, 45]] }, actions: [],
+    camera: [[0, cam(100)], [120, cam(0)]], section: { axis: 'Y', flip: false, keys: [[0, 0.4], [100, 0.6]] },
+    visible: { 'tool/cover': [[0, 1], [60, 0]] }, clear: { housing: [[0, 1], [90, 0.2]] }, view: { style: 'shaded', edges: true } };
+  const a = opened(structuredClone(study));
+  assert.deepEqual(Object.keys(a.tracks).sort(), ['%housing', '@camera', '@section', '^tool/cover', 'j1']);
+  assert.deepEqual(a.section, { axis: 'Y', flip: false });
+  assert.deepEqual(kept(a), study);
+  const at = poseAt(a, 30);
+  assert.deepEqual(at['@camera'].p, [75, -100, 80]);            // the camera moves straight, number by number
+  assert.equal(at['@camera'].proj, 'persp');
+  assert.ok(Math.abs(at['@section'] - 0.46) < 1e-9);
+  assert.equal(at['^tool/cover'], 1);                            // shown until the key that hides it: held, not faded
+  assert.equal(poseAt(a, 59.9)['^tool/cover'], 1);
+  assert.equal(poseAt(a, 60)['^tool/cover'], 0);
+  assert.ok(Math.abs(poseAt(a, 45)['%housing'] - 0.6) < 1e-9);
+  assert.ok(viewLine('@camera') && viewLine('^x') && viewLine('%x') && !viewLine('j1') && !viewLine('~lamp'));
+});

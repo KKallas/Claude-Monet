@@ -289,7 +289,7 @@ def reach(c: Caller, project: str, note: str, x: float, y: float, z: float, tip:
             "image": f"{c.base}/file/p/{project}/n/{note}/render.png?{query}"}, png
 
 
-def animate(c: Caller, project: str, note: str, animation: dict | None = None) -> dict:
+def animate(c: Caller, project: str, note: str, animation: dict | None = None, study: str = "") -> dict:
     """Put keyframes on an assembly's timeline (Motion in the canvas), for the user to play there and to render as
     a video there (the canvas draws it, lights and all; the server draws no video: for a look of your own at a moment
     of it, call pose with the joints as they are then). animation: {"fps": 30, "length": 120, "tracks": {joint: [[frame, value], …]}}: frames whole,
@@ -300,18 +300,34 @@ def animate(c: Caller, project: str, note: str, animation: dict | None = None) -
     verbs. "lights": {light, "room" or "haze": [[frame, level 0…1], …]}: the Note's LIGHTS, the room's own light and
     the smoke in the air, keyed as joints are; patterns: {pixels light: [[frame, {kind: chase|wave|scan|rainbow|sparkle|solid|off, …}], …]}
     what its pixels play (see the guide, Lights and beams). null
-    takes the animation away. Nothing is built from it."""
+    takes the animation away. Nothing is built from it.
+
+    study: a motion study of its own, named (the canvas lists them in Motion; empty: the assembly's own, named after
+    it). A study's timeline may also key what is seen: "camera": [[frame, {"proj": "persp"|"ortho", "p": [x, y, z],
+    "t": [x, y, z] looked at, "u": [0, 0, 1], "z": zoom, "fov": 35}], …], "section": {"axis": "X"|"Y"|"Z", "flip":
+    false, "keys": [[frame, 0…1 across the assembly], …]}, "visible": {part: [[frame, 1 shown | 0 hidden], …]},
+    "clear": {part: [[frame, opacity 1 … 0.05], …]}, and "view": {"style": "rendered"|"shaded"|"hidden", "edges":
+    true}. What you leave out of a study stays as it was."""
     p = c.ws.project(project)
     if not p.is_note(note):
         raise Problem(f"{note} is a helper module, not a Note")
-    kept = p.set_animation(note, animation)
+    if study:
+        if animation is None:
+            p.set_study(study, None)
+            return {"note": note, "study": study, "animation": None, "canvas": c.canvas(project, note)}
+        had = p.studies().get(study) or {}
+        if not isinstance(animation, dict):
+            raise Problem("an animation is {fps, length, tracks}")
+        kept = {note: p.set_study(study, {**had, **animation, "of": note}).get(study)}
+    else:
+        kept = p.set_animation(note, animation)
     try:
         r = p.result(note)
         moved = joints.drivers(r["motion"]) if r.get("ok") and r.get("motion") else []
     except Problem:          # not built for its source yet: nothing to say about its joints
         moved = None
     unknown = sorted(set((kept.get(note) or {}).get("tracks") or {}) - set(moved)) if moved is not None else []
-    return {"note": note, "animation": kept.get(note), "canvas": c.canvas(project, note),
+    return {"note": note, **({"study": study} if study else {}), "animation": kept.get(note), "canvas": c.canvas(project, note),
             **({"warning": f"not joints of {note} moved by hand, so they do nothing: {', '.join(unknown)}"} if unknown else {})}
 
 

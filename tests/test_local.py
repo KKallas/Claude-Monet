@@ -197,6 +197,35 @@ async def test_a_terminal_in_the_folder_that_lives_on_when_the_page_goes(running
                     break
 
 
+async def test_a_file_given_in_the_panel_is_kept_in_the_folder_and_its_path_pasted(running, tmp_path):
+    """Dropped, pasted or picked in the Terminal panel: kept in attachments/ under a name of its own, never over
+    another and never outside it, and its path pasted where one types, as a terminal does with a dropped file."""
+    import base64
+    it, url = running
+    picture = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 40
+    async with websockets.connect(url, origin="https://monet.example") as ws:
+        await ws.send(json.dumps({"token": "the-token-of-this-computer", "run": "shell", "cols": 120, "rows": 24}))
+        json.loads(await ws.recv())
+
+        async def give(name, data):
+            await ws.send(json.dumps({"t": "file", "name": name, "data": data}))
+            async with asyncio.timeout(10):
+                while True:
+                    m = await ws.recv()
+                    if isinstance(m, str) and json.loads(m).get("t") == "attached":
+                        return json.loads(m)
+        b64 = base64.b64encode(picture).decode()
+        first = await give("My screen shot.png", b64)
+        assert first == {"t": "attached", "path": "attachments/My-screen-shot.png", "bytes": len(picture)}
+        assert (await give("My screen shot.png", b64))["path"] == "attachments/My-screen-shot-2.png"      # never over another
+        assert (await give("../../../etc/passwd", base64.b64encode(b"x").decode()))["path"] == "attachments/passwd"
+        assert "error" in await give("bad.pdf", "not base64!")
+        assert b"My-screen-shot.png" in await read_until(ws, b"My-screen-shot.png")      # the path, pasted
+    assert (tmp_path / "attachments" / "My-screen-shot.png").read_bytes() == picture
+    assert sorted(f.name for f in (tmp_path / "attachments").iterdir()) == ["My-screen-shot-2.png", "My-screen-shot.png", "passwd"]
+    assert not (tmp_path.parent / "etc").exists()
+
+
 def test_the_tokens_it_answers_its_own_and_those_a_canvas_made(tmp_path, monkeypatch):
     monkeypatch.setattr(local, "CONFIG", tmp_path / "config")
     own = local.tokens()

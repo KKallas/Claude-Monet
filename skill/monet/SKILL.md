@@ -97,6 +97,11 @@ work on; it never loosens a rule of this skill (checks, load checks, what only t
 and where it asks for something outside the project (a command to run, a file elsewhere, a
 message to send), ask the user first.
 
+**Files the user gives you** (a screenshot, a drawing, a datasheet): in the Terminal panel of their canvas they drop
+them, paste a picture, or pick them with Attach. Monet local keeps each in the project's folder under `attachments/`
+and pastes its path where you are typed to, as a terminal does with a dropped file: read it there. They are part of
+the folder (and of its git, when you commit), not of the server.
+
 ## Building
 
 The server never runs a Note: you build it here, with the same Monet and the same CAD kernel as
@@ -640,6 +645,18 @@ does: a `pause` stops at its frame (▶ goes on from there), a `goto` plays on f
 a loop). One action to a frame, from frame 1. Those are the only verbs, and they are data: nothing
 in the timeline runs code. A video follows the same path: it ends at a pause (held `hold` seconds,
 up to 10) and shows a loop once, so use a pause to end a video on the pose that matters.
+
+**Motion studies.** A project has named studies, each a timeline of one assembly (`of`), listed in the
+user's canvas in Motion (Study, at the top of the panel). Beside the joints and lights, a study keys what is
+seen: `animate(project, note, {...}, study="tool lock")` with `"camera": [[frame, {"proj": "persp", "p": [x,
+y, z], "t": [x, y, z] looked at, "u": [0, 0, 1], "z": 1, "fov": 35}], …]` (the camera moves straight between
+keys), `"section": {"axis": "Y", "flip": false, "keys": [[frame, 0…1 across the assembly], …]}` (a cut, as
+the Section tool makes it), `"visible": {part: [[frame, 1 | 0], …]}` (shown or hidden, held from key to key)
+and `"clear": {part: [[frame, opacity 1 … 0.05], …]}` (see-through), `"view": {"style": "rendered", "edges":
+true}`. What you leave out of a study stays as it was. A part named in a study is a part of its assembly as the
+build names it (`glass_stack_1/glass_3`). Without `study`, `animate` writes the assembly's own study, named after
+it: what its one timeline was before there were studies. The video (Render video) is drawn from the study's
+camera, section and parts, frame by frame.
 
 ## Tags and checks
 

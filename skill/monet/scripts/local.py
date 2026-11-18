@@ -39,6 +39,7 @@ It looks at the folder every second and asks the server every few (and at once w
 says the person changed something), so what is done on either side shows on the other within seconds.
 """
 import asyncio
+import base64
 import fcntl
 import hashlib
 import hmac
@@ -63,6 +64,8 @@ EVERY = 4               # seconds between two looks at the server, when nothing 
 BRIEF = "PROJECT.md"    # the project in words, for whoever works on it next: kept in step with the server, as the Notes are
 KEPT_RE = re.compile(r"^(?:[a-z][a-z0-9_]{0,47}\.checks\.json|monet\.json)$")      # what a project keeps beside those: checks, settings
 KEEP = 256_000          # bytes of a terminal's output kept, for a page that comes (back) to it
+ATTACH = "attachments"  # where what the person gives the agent in the Terminal panel is put (a screenshot, a drawing, a PDF)
+MAX_ATTACH = 30_000_000     # bytes of one such file
 CONFIG = Path(os.environ.get("MONET_CONFIG") or Path.home() / ".config" / "monet")
 
 
@@ -633,6 +636,8 @@ class Local:
                     s.resize(int(c.get("cols") or 80), int(c.get("rows") or 24))
                 elif c.get("t") == "poke":
                     self.poked.set()
+                elif c.get("t") == "file":
+                    await ws.send(json.dumps(self.attach(s, c)))
                 elif c.get("t") == "end":
                     s.stop()
 
@@ -644,6 +649,30 @@ class Local:
             s.clients.discard(q)
             for t in (*tasks, told):
                 t.cancel()
+
+    def attach(self, s, c: dict) -> dict:
+        """A file the person gave the agent in the Terminal panel (dropped, pasted or picked): kept in the folder's
+        attachments/ under a name of its own (never over another), and its path pasted into what runs, as a terminal
+        does with a file dropped on it, so the agent reads it (Claude Code takes a picture's path as the picture)."""
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(str(c.get("name") or "")).name).strip(".-")[:80] or "file"
+        try:
+            data = base64.b64decode(str(c.get("data") or ""), validate=True)
+        except ValueError:
+            return {"t": "attached", "error": "that file did not come through whole"}
+        if not data or len(data) > MAX_ATTACH:
+            return {"t": "attached", "error": f"a file given here is at most {MAX_ATTACH // 1_000_000} MB"}
+        where = self.folder / ATTACH
+        where.mkdir(exist_ok=True)
+        base, dot, ext = stem.rpartition(".") if "." in stem else (stem, "", "")
+        target, k = where / stem, 1
+        while target.exists():
+            k += 1
+            target = where / f"{base}-{k}{dot}{ext}"
+        target.write_bytes(data)
+        say(f"attached {ATTACH}/{target.name} ({max(1, len(data) // 1000)} kB) for {s.name}")
+        path = str(target).replace(" ", "\\ ")
+        s.write(f"\x1b[200~{path}\x1b[201~ ".encode())      # a bracketed paste, as of a file dropped on a terminal
+        return {"t": "attached", "path": f"{ATTACH}/{target.name}", "bytes": len(data)}
 
     async def log(self, ws, about: dict) -> None:
         """What this program did with the files, as it says it: read only."""
@@ -678,7 +707,7 @@ class Local:
         server = None
         for port in ([self.port] if self.port else PORTS):      # another program may have one of them: the next, then
             try:
-                server = await websockets.serve(self.serve, "127.0.0.1", port, origins=self.origins(), max_size=1_000_000)
+                server = await websockets.serve(self.serve, "127.0.0.1", port, origins=self.origins(), max_size=MAX_ATTACH * 4 // 3 + 4096)
                 self.port = port
                 break
             except OSError as e:

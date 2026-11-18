@@ -696,3 +696,16 @@ def test_a_folder_keeps_the_checks_and_the_agent_brings_in_only_what_is_missing(
     assert all({k: v for k, v in c.items() if k != "by"} == {k: v for k, v in was[c["id"]].items() if k != "by"} for c in now[:-1])   # none changed
     assert json.loads(client.post(f"{door}/kept", json={"project": "cloned"}).json()["files"]["monet.json"])["material"] == "petg"
     assert client.delete("/w/mari/api/p/cloned").status_code == 200
+
+
+def test_a_motion_study_by_the_person_and_by_the_agent(client, reg):
+    h, w = f"/w/{reg['name']}/api/p/starter", f"/w/{reg['id']}/agent"
+    got = client.put(f"{h}/studies/lock%20study", json={"study": {"of": "rod_foot", "length": 60, "section": {"axis": "X", "keys": [[0, 0.5]]}}}).json()
+    assert got["studies"]["lock study"]["section"]["axis"] == "X"
+    assert client.get(h).json()["studies"]["lock study"]["of"] == "rod_foot"
+    assert client.put(f"{h}/studies/lock%20study", json={"study": {"length": 60, "view": {"style": "neon"}}}).status_code == 400
+    r = client.post(f"{w}/animate", json={"project": "starter", "note": "rod_foot", "study": "lock study",
+                                          "animation": {"length": 60, "visible": {"rod_foot": [[0, 1], [30, 0]]}}}).json()
+    assert r["study"] == "lock study" and r["animation"]["visible"]["rod_foot"][1] == [30, 0.0]
+    assert r["animation"]["section"]["axis"] == "X"          # what the agent left out stays as it was
+    assert "lock study" not in client.delete(f"{h}/studies/lock%20study").json()["studies"]

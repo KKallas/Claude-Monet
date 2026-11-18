@@ -24,7 +24,8 @@ builder with uv: https://docs.astral.sh/uv/).
     monet.py look <project> <note> [out.png] [views]
     monet.py view [out.png]                   what the user sees: their open canvas, as it is on their screen
     monet.py pose <project> <note> "j1=30, j2=-10" [out.png]   an assembly moved: what it hits, and its picture
-    monet.py animate <project> <note> <keys.json>    keyframes on the timeline: {"fps", "length", "tracks": {joint: [[frame, value], …]}}
+    monet.py animate <project> <note> <keys.json> [--study=NAME]   keyframes on the timeline: {"fps", "length", "tracks": {joint: [[frame, value], …]}}
+                                             (of a named motion study: also camera, section, visible, clear, view)
                                              ("none" takes the animation away)
     monet.py bom <project> <note> [out.csv]  the bill of materials; with out.csv, also as a spreadsheet
     monet.py save <project> "message"        then: git add -A && git commit
@@ -350,8 +351,10 @@ def main(argv):
         show(r)
         print(out)
     elif cmd == "animate":
+        study = next((x.split("=", 1)[1] for x in a if x.startswith("--study=")), "")
+        a = [x for x in a if not x.startswith("--study=")]
         keys = None if a[2] == "none" else json.loads(Path(a[2]).read_text())
-        show(call("animate", project=a[0], note=a[1], animation=keys))
+        show(call("animate", project=a[0], note=a[1], animation=keys, **({"study": study} if study else {})))
     elif cmd == "bom":
         r = call("bom", project=a[0], note=a[1])
         csv_url = r.pop("csv")

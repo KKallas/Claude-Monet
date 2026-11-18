@@ -13,9 +13,10 @@ import { lengthOf } from './sketch2d.js';
 import { IDENTITY, apply, bodyOf, drivers, frames as poseFrames, handle, solve as reachFor, span, tipAt, values as jointValues } from './motion.js';
 import { createNavCube } from './navcube.js';
 import { dials } from './dial.js';
+import { close as closePop, opened, pop, refill } from './pop.js';
 import { railWidth } from './rails.js';
 import { sideEdge } from './side.js';
-import { createTimeline, played, poseAt } from './timeline.js';
+import { createTimeline, played, poseAt, valueAt } from './timeline.js';
 import { videoWriter, canWrite } from './video.js';
 import { createLights } from './lights.js';
 import { noteTree, pathsTo } from './tree.js';
@@ -71,6 +72,8 @@ const S = { state: null, project: null, proj: null, note: null, data: null, face
   mode: 'face', sel: nothing(), boxTool: false, measuring: false, inspect: null, point: null, hot: null, tagSel: null, rev: null, compare: null, message: '', saveResult: null,
   // Motion: the joints moved by hand and their values, free parts dragged somewhere, what that hits, the joint being made or changed
   pose: {}, freePose: {}, clash: [], edit: null, hotJoint: null, playing: null,
+  // a motion study: how see-through each part is (1 solid … 0.05), keyed on its timeline like what is shown
+  see: {},
   // Find (find.js): the words every list is narrowed to; the check being changed, and what is typed into it so far
   find: '', editCheck: null, checkDraft: {} };
 
@@ -159,7 +162,7 @@ const neonMaterials = NEON.map(([linewidth, color, opacity]) => new LineMaterial
 let neonDirty = true, neonOn = false;
 const wipeA = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0), wipeB = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0);
 const box = new THREE.Box3(), size = new THREE.Vector3(), centre = new THREE.Vector3();
-let radius = 100, meshes = [], shared = null, edgesOn = true, xray = false, sectionOn = false, explode = 0, partColours = true;
+let radius = 100, meshes = [], shared = null, edgesOn = true, xray = false, sectionOn = false, sectionFlip = false, explode = 0, partColours = true;
 const home = new THREE.Vector3();   // the middle of the assembly as it is put together
 
 // selected lines and points are drawn over everything, thick enough to see
@@ -545,7 +548,8 @@ function styleAll() {
       const m = o.material;
       m.clippingPlanes = key === 'part' ? (sectionOn ? [cut] : []) : (S.compare?.mode === 'wipe' ? [key === 'a' ? wipeA : wipeB] : []);
       const fade = S.compare?.mode === 'fade' ? (key === 'a' ? 1 - S.compare.mix : S.compare.mix) : 1;
-      const opacity = key === 'part' ? (xray ? 0.25 : 1) * (m.userData.opacity ?? 1) : fade;      // a clear material keeps its own
+      const see = key === 'part' ? (S.see[S.parts[o.userData.part]?.name] ?? 1) : 1;      // see-through in a study
+      const opacity = key === 'part' ? (xray ? 0.25 : 1) * (m.userData.opacity ?? 1) * see : fade;      // a clear material keeps its own
       m.transparent = opacity < 1; m.opacity = opacity; m.depthWrite = opacity >= 1;
       m.side = key === 'part' && sectionOn && !xray ? THREE.FrontSide : THREE.DoubleSide;   // the inside is the cap's to draw
       m.needsUpdate = true;
@@ -555,10 +559,11 @@ function styleAll() {
 
 function setSection() {
   const axis = 'XYZ'.indexOf($('#sectionAxis').value), t = Number($('#sectionAt').value);
-  cut.normal.set(0, 0, 0).setComponent(axis, -1);
+  cut.normal.set(0, 0, 0).setComponent(axis, sectionFlip ? 1 : -1);      // flipped: the other side is kept
   // the ends reach a little past the part: a cut lying on its top or bottom face would flicker
   const lo = box.min.getComponent(axis), hi = box.max.getComponent(axis), past = 0.002 * (hi - lo) + 0.01;
-  cut.constant = lo - past + (hi - lo + 2 * past) * t;
+  const at = lo - past + (hi - lo + 2 * past) * t;
+  cut.constant = sectionFlip ? -at : at;
   const mix = S.compare?.mix ?? 0.5, x = box.min.x + (box.max.x - box.min.x) * mix;
   wipeA.constant = x; wipeB.constant = -x;
   neonDirty = true;
@@ -912,7 +917,7 @@ function selectedItems() {
 
 function selectionChanged() {
   S.inspect = shared ? inspect() : null;
-  showSelection(); showMeasure(); renderPanel(true);
+  showSelection(); showMeasure(); renderPanel(true); refillEditor();
   if (!S.project || !S.note) return;
   const items = selectedItems(), face = theFace();
   const tags = Object.entries(S.data?.tag_faces ?? {}).filter(([, ids]) => face && ids.includes(face.i)).map(([k]) => k);
@@ -1447,7 +1452,7 @@ const atPose = (name) => {
 // of the timeline (played(), in timeline.js) from the camera as it stood when it began, a few between
 // each picture of the view, so the person goes on working and never sees them; H.264 (canvas/video.js). Done, the video
 // plays over the view, smooth however slow this computer is. It starts by itself when playing runs under 25 fps.
-const filmKey = () => JSON.stringify([S.project, S.note, S.rev, timeline.anim.fps, timeline.anim.tracks, timeline.anim.actions, lamps.on]);
+const filmKey = () => JSON.stringify([S.project, S.note, studyName(), S.rev, timeline.anim.fps, timeline.anim.tracks, timeline.anim.actions, timeline.anim.section, lamps.on]);
 const filmed = () => film?.key === filmKey() ? film : null;
 function slowness(now) {      // how many pictures a second playing gets here: under 25, the video is rendered
   if (!timeline.playing || film) { slow = { from: 0, count: 0 }; return; }
@@ -1473,8 +1478,10 @@ async function startFilm(why = '') {
   if (!writer) { tell('This browser cannot write H.264 video: try Chrome.'); return; }
   if (film?.url) URL.revokeObjectURL(film.url);
   const pad = Object.assign(document.createElement('canvas'), { width: w, height: h });
+  // the study's camera keys, if it has any, move the video's camera: it starts as the projection their first key has
+  const keyed = anim.tracks['@camera']?.[0]?.[1], cam = keyed ? (keyed.proj === 'ortho' ? ortho : persp).clone() : camera.clone();
   film = { key: filmKey(), note: S.note, frames, fps: anim.fps, i: 0, writer, w, h, pad, ctx: pad.getContext('2d'),
-    cam: camera.clone(), cw: canvas.width, ch: canvas.height, anim: structuredClone(anim), done: false, why };
+    cam, cw: canvas.width, ch: canvas.height, anim: structuredClone(anim), done: false, why };
   busy(`${why ? why + ': ' : ''}rendering the video… 0/${frames.length}`);
   renderPanel(true);
 }
@@ -1492,7 +1499,13 @@ function shoot() {
   if (!moving() || S.note !== f.note) return stopFilm('the video stopped: the view left the animation');
   if (canvas.width !== f.cw || canvas.height !== f.ch) return stopFilm('the video stopped: the view changed size (render it again)');
   const budget = timeline.playing ? 12 : 40, t0 = performance.now(), mo = model();
-  const pose = S.pose, levels = { ...lamps.levels };
+  const pose = S.pose, levels = { ...lamps.levels }, hidden = new Set(S.hidden), see = { ...S.see }, cutAt = $('#sectionAt').value;
+  const back = () => {      // the view as the person had it: the study's lines at the frame they stand at
+    S.pose = pose; filmClock = null; lamps.lightly(levels); S.hidden = hidden; S.see = see;
+    $('#sectionAt').value = cutAt; setSection(); placeParts();
+    for (const one of groups.part.children) one.visible = !S.hidden.has(one.userData.part) && !(lamps.on && isKeepout(one.userData.part));
+    styleAll();
+  };
   let n = 0;
   try {
     while (f.i < f.frames.length && f.writer.backlog < 8 && (n === 0 || performance.now() - t0 < budget)) {
@@ -1504,14 +1517,15 @@ function shoot() {
       S.pose = { ...pose, ...joints };
       filmClock = { anim: f.anim, frame: f.frames[f.i] };
       lamps.lightly(lit);
+      viewTo(at, f.cam);      // the study's camera onto the video's, where the section cuts, what is shown and see-through
       placeParts();
       if (lamps.on) { lamps.update(f.i / f.fps, f.cam); lamps.render(f.cam); } else renderer.render(scene, f.cam);
       f.ctx.drawImage(canvas, 0, 0, f.w, f.h);
       f.writer.add(f.pad, f.i);
       f.i++; n++;
     }
-  } catch (e) { S.pose = pose; filmClock = null; lamps.lightly(levels); placeParts(); return stopFilm(`the video failed: ${e.message}`); }
-  S.pose = pose; filmClock = null; lamps.lightly(levels); placeParts();
+  } catch (e) { back(); return stopFilm(`the video failed: ${e.message}`); }
+  back();
   if (n) busy(`${f.why ? f.why + ': ' : ''}rendering the video… ${f.i}/${f.frames.length}`);
   if (f.i >= f.frames.length && !f.finishing) {
     f.finishing = true;
@@ -1574,19 +1588,21 @@ function play(name) {
 
 // the timeline along the bottom of the view in Motion (timeline.js): keys of the joints over frames, kept in the project
 const timeline = createTimeline($('#timeline'), {
-  pose: () => ({ ...S.pose, ...Object.fromEntries(Object.entries(lamps.levels).map(([k, v]) => [`~${k}`, v])) }),
+  pose: () => ({ ...S.pose, ...Object.fromEntries(Object.entries(lamps.levels).map(([k, v]) => [`~${k}`, v])), ...viewNow() }),
+  first: (line) => (line[0] === '^' || line[0] === '%' ? 1 : undefined),      // a part was shown and solid before its first key
   setPose(values) {
     poseTo(values);
     for (const [k, v] of Object.entries(values)) if (k.startsWith('~')) setLevel(k.slice(1), v, false);
+    viewTo(values);
   },
   async save(animation, key) {
-    const [project, note] = key.split('/');
+    const [project, note, name] = key.split('/');
     try {
-      const animations = (await api(`/p/${project}/n/${note}/animation`, 'PUT', { animation })).animations;
+      const studies = (await api(`/p/${project}/studies/${encodeURIComponent(name)}`, 'PUT', { study: { ...animation, of: note } })).studies;
       if (S.project !== project) return;
-      S.proj.animations = animations;
+      S.proj.studies = studies;
       S.rev = (await api(`/p/${project}/rev`)).rev;      // our own change: nothing to load again
-      const keyed = [animations[note]?.tracks, animations[note]?.lights].some((t) => Object.values(t ?? {}).some((k) => k.length));
+      const keyed = [studies[name]?.tracks, studies[name]?.lights].some((t) => Object.values(t ?? {}).some((k) => k.length));
       if (!$('#panel [data-card="gif"]') !== !keyed) renderPanel();      // the Animation card comes or goes
     } catch (e) { notice(`the keyframes were not kept: ${e.message}`); }
   },
@@ -1595,11 +1611,102 @@ const timeline = createTimeline($('#timeline'), {
 function showTimeline() {
   const mo = moving() ? model() : null;
   if (!mo) { timeline.show(false); return; }
-  const lit = S.data?.report?.lights ?? [];
+  const lit = S.data?.report?.lights ?? [], name = studyName(), study = theStudy(), key = `${S.project}/${S.note}/${name}`;
+  // the parts the study shows or hides, or makes see-through, each a line: those it has keys for, and any keyed just now
+  const live = key === shownStudy ? timeline.anim : null;      // keyed just now, not kept yet; another study's are not this one's
+  const lines = new Set([...Object.keys(live?.tracks ?? {}), ...Object.keys(study?.visible ?? {}).map((p) => `^${p}`), ...Object.keys(study?.clear ?? {}).map((p) => `%${p}`)]);
+  const parts = [...lines].filter((k) => /^[\^%]/.test(k)).sort((a, b) => a.slice(1).localeCompare(b.slice(1)) || a.localeCompare(b));
   const joints = [...drivers(mo).map((n) => ({ name: n, ...mo.joints[n] })),
     ...(lit.length ? [...lit.map((L) => ({ name: `~${L.name}`, label: L.name, kind: 'light', unit: '%', scale: 100 })),
-      { name: '~room', label: 'room', kind: 'room', unit: '%', scale: 100 }, { name: '~haze', label: 'haze', kind: 'haze', unit: '%', scale: 100 }] : [])];
-  timeline.show(true, `${S.project}/${S.note}`, S.proj?.animations?.[S.note] ?? null, joints);
+      { name: '~room', label: 'room', kind: 'room', unit: '%', scale: 100 }, { name: '~haze', label: 'haze', kind: 'haze', unit: '%', scale: 100 }] : []),
+    { name: '@camera', label: 'camera', kind: 'camera' },
+    ...(study?.section || live?.section ? [{ name: '@section', label: 'section', kind: 'section', unit: '%', scale: 100 }] : []),
+    ...parts.map((k) => (k[0] === '^' ? { name: k, label: `${k.slice(1)} shown`, kind: 'visible' } : { name: k, label: `${k.slice(1)} see-through`, kind: 'clear', unit: '%', scale: 100 }))];
+  const entered = key !== shownStudy;
+  timeline.show(true, key, study, joints);
+  if (entered) { shownStudy = key; enterStudy(study); timeline.go(0); }
+}
+
+// ---- motion studies: named timelines of a project, each of an assembly, with its own camera, section, parts shown
+// and see-through (monet.json studies, Project.set_study). The one open is kept per project in this browser; with
+// none chosen, the assembly's own (named after it), which is what its timeline was before there were studies.
+let shownStudy = null;
+const studyKept = () => `monet.study.${S.project}`;
+function studyName() {
+  let n = null;
+  try { n = localStorage.getItem(studyKept()); } catch { /* none */ }
+  const all = S.proj?.studies ?? {};
+  return n && all[n] && (all[n].of ?? n) === S.note ? n : S.note;
+}
+const theStudy = () => S.proj?.studies?.[studyName()] ?? null;
+function chooseStudy(name) {
+  try { localStorage.setItem(studyKept(), name); } catch { /* this visit only */ }
+  const of = S.proj?.studies?.[name]?.of ?? name;
+  if (of !== S.note) { S.room = 'motion'; open(S.project, of); return; }      // a study of another assembly: that one, in Motion
+  renderPanel(true);
+}
+/** A study opened: nothing hidden or see-through but what it keys, its section and its look. */
+function enterStudy(study) {
+  S.hidden.clear(); S.see = {};
+  const cut = study?.section;
+  sectionOn = !!cut; sectionFlip = !!cut?.flip;
+  $('#section').classList.toggle('on', sectionOn); $('#sectionPop').hidden = !sectionOn;
+  if (cut) { $('#sectionAxis').value = cut.axis ?? 'Z'; $('#sectionAt').value = valueAt(cut.keys, 0) ?? 0.5; }
+  if (study?.view?.style && study.view.style !== look.style) { $('#style').value = study.view.style; $('#style').dispatchEvent(new Event('change')); }
+  if (study?.view && typeof study.view.edges === 'boolean' && study.view.edges !== edgesOn) $('#edges').click();
+  setSection(); spread(); styleAll();
+}
+const r4 = (x) => Math.round(x * 1e4) / 1e4;
+/** The view as a study keys it. */
+function cameraNow(cam = camera) {
+  return { proj: cam.isPerspectiveCamera ? 'persp' : 'ortho', p: cam.position.toArray().map(r4), t: controls.target.toArray().map(r4),
+    u: cam.up.toArray().map(r4), z: r4(cam.zoom), fov: r4(persp.fov) };
+}
+/** The view put where a study's key has it: the page's own camera (the controls follow), or a video's. */
+function applyCamera(v, cam = camera) {
+  if (cam === camera) {
+    const want = v.proj === 'ortho' ? ortho : persp;
+    if (want !== camera) { perspective = want === persp; useCamera(want); cam = camera; }
+  }
+  cam.up.set(...v.u); cam.position.set(...v.p); cam.zoom = v.z;
+  if (cam.isPerspectiveCamera && v.fov) cam.fov = v.fov;
+  cam.lookAt(...v.t); cam.updateProjectionMatrix();
+  if (cam === camera) { controls.target.set(...v.t); controls.update(); wake(); }
+}
+/** What a study's lines are now: the camera, where the section cuts, and each part shown and how see-through. */
+function viewNow() {
+  const out = { '@camera': cameraNow(), '@section': Number($('#sectionAt').value) };
+  S.parts.forEach((q, i) => { out[`^${q.name}`] = S.hidden.has(i) ? 0 : 1; out[`%${q.name}`] = S.see[q.name] ?? 1; });
+  return out;
+}
+/** The Study and Parts cards as the frame shown has it (they are not drawn again for every frame). */
+function syncStudyCard() {
+  const f = document.querySelector('[data-studyframe]');
+  if (!f) return;
+  f.textContent = Math.round(timeline.frame);
+  const cut = $('#studyCut');
+  if (cut && document.activeElement !== cut) cut.value = $('#sectionAt').value;
+  S.parts.forEach((q, i) => {
+    const see = document.querySelector(`[data-see="${CSS.escape(q.name)}"]`), eye = document.querySelector(`[data-act="studyeye"][data-i="${i}"]`);
+    if (see && document.activeElement !== see) see.value = S.see[q.name] ?? 1;
+    if (eye) { eye.textContent = S.hidden.has(i) ? '○' : '●'; eye.closest('.row')?.querySelector('b')?.classList.toggle('muted', S.hidden.has(i)); }
+  });
+}
+/** A study's lines at a frame, put into the view (`cam`: a video's camera, the page's own left alone). */
+function viewTo(values, cam = camera) {
+  let restyle = false, hid = false;
+  if (values['@camera']) applyCamera(values['@camera'], cam);
+  if (values['@section'] != null && sectionOn) { $('#sectionAt').value = values['@section']; setSection(); }
+  for (const [k, v] of Object.entries(values)) {
+    if (k[0] === '^') {
+      const i = S.parts.findIndex((q) => q.name === k.slice(1)), gone = v === 0;
+      if (i >= 0 && gone !== S.hidden.has(i)) { if (gone) S.hidden.add(i); else S.hidden.delete(i); hid = true; }
+    } else if (k[0] === '%' && (S.see[k.slice(1)] ?? 1) !== v) { S.see[k.slice(1)] = v; restyle = true; }
+  }
+  if (hid) for (const one of groups.part.children) one.visible = !S.hidden.has(one.userData.part) && !(lamps.on && isKeepout(one.userData.part));
+  if (restyle) styleAll();
+  if (hid || restyle) wake();
+  if (cam === camera) syncStudyCard();
 }
 
 // the axis of the joint pointed at in the panel, being dragged or being made
@@ -1612,6 +1719,13 @@ function axisNow() {
       if (!f || !(f.type === 'plane' || f.type === 'cylinder')) return null;
       const p = partOfFace(f.i), d = new THREE.Vector3(...(f.type === 'plane' ? f.normal : f.axis)).applyQuaternion(groups.part.children[p].quaternion);
       return { origin: placed(p, ...(f.type === 'plane' ? f.center : f.origin)), dir: d.toArray(), kind: e.kind };
+    }
+    if (e.axisSel === 'num') {
+      const o = [e.ox, e.oy, e.oz].map((x) => Number(String(x ?? '').replace(',', '.'))), d = parseDir(e.dir);
+      if (!o.every(Number.isFinite) || !d) return null;
+      const v = typeof d === 'string' ? [0, 1, 2].map((i) => (i === 'XYZ'.indexOf(d.slice(-1)) ? (d[0] === '-' ? -1 : 1) : 0)) : d;
+      const n = Math.hypot(...v), f = poseFrames(mo, S.pose, S.freePose)[e.on];
+      return { origin: f ? apply(f, o) : o, dir: f ? turn(f, v.map((x) => x / n)) : v.map((x) => x / n), kind: e.kind };
     }
     const k = 'XYZ'.indexOf(e.axisSel);
     return k < 0 ? null : { origin: [0, 0, 0], dir: [0, 1, 2].map((i) => (i === k ? 1 : 0)), kind: e.kind };
@@ -1795,11 +1909,11 @@ function motionCards() {
         data-icon="${KIND[row.kind] ?? '◈'}" data-label="${esc(name)}" data-unit="${esc(row.unit)}" data-key="joint:${row.kind}" data-default="0" title="where ${esc(name)} is">
         <input class="num" data-posenum="${esc(name)}" value="${fmt(S.pose[name] ?? 0)}" inputmode="decimal" ${off}><span class="muted unit">${row.unit}</span>
         <button class="x" data-act="play" data-name="${esc(name)}" title="move it back and forth through its range" ${off}>${S.playing === name ? '■' : '▶'}</button></div>
-      <div class="why">${row.range ? `${fmt(lo)} … ${fmt(hi)}${row.unit}` : 'no range'} · ${sweepWords(mo.sweeps?.[name], row.unit)}</div>
+      <div class="why"><button class="inline" data-act="rangeedit" data-name="${esc(name)}" title="type its range">${row.range ? `${fmt(lo)} … ${fmt(hi)}${row.unit}` : 'no range'}</button> · ${sweepWords(mo.sweeps?.[name], row.unit)}</div>
       ${fact(torqueWords(mo.torque?.[name], row.unit))}</div>`;
   });
   const picked = [...S.sel.part].map((i) => S.parts[i]?.name).filter(Boolean);
-  const cards = [card('motion', `Motion · ${n} joint${n === 1 ? '' : 's'}`, `
+  const cards = [...studyCards(), card('motion', `Motion · ${n} joint${n === 1 ? '' : 's'}`, `
     ${mo.problems.map((t) => `<div class="why err">${esc(t)}</div>`).join('')}
     <div class="row"><span class="k">ground</span><span class="v"><select id="groundSel" title="what stays put: the parts the others move on">
       ${(mo.ground.length ? [] : ['']).concat(bodies).map((b) => `<option value="${esc(b)}" ${mo.ground[0] === b ? 'selected' : ''}>${b ? esc(b) : '(nothing yet)'}</option>`).join('')}</select></span></div>
@@ -1815,7 +1929,6 @@ function motionCards() {
       <button data-act="groupmake" ${picked.length > 1 ? '' : 'disabled'} title="select two or more objects first: they move as one">Group${picked.length > 1 ? ` ${picked.length}` : ''}</button>
       <button class="primary" data-act="jointnew">New joint</button></div>
     <p class="muted">Drag a part in the view: it moves as its joint lets it. A joint that follows others moves with them.</p>`)];
-  if (S.edit) cards.push(editCard(mo));
   const poses = Object.entries(mo.poses ?? {});
   // the keep-outs a check holds clear in a pose: only there is something in one an error
   const heldClear = (name) => new Set((S.data?.report?.checks ?? []).filter((c) => c.what.startsWith(`pose.${name}.clear.`)).map((c) => c.what.slice(`pose.${name}.clear.`.length)));
@@ -1845,7 +1958,7 @@ function motionCards() {
       : L.kind === 'projector' ? `throw ${fmt(L.throw)}, ${fmt(L.picture.width_at_1m)} × ${fmt(L.picture.height_at_1m)} mm at 1 m, ${fmt(L.lumens)} lm`
       : L.kind === 'laser' ? `${fmt(L.mw)} mW${L.fan ? `, a ${fmt(L.fan)}° fan` : ''}` : L.kind === 'glow' ? `${esc(L.glow)} glows`
       : L.kind === 'pixels' ? pixelWords(L) : `${fmt(L.lumens)} lm`;
-    const timed = (name) => !!S.proj?.animations?.[S.note]?.patterns?.[name]?.length;
+    const timed = (name) => !!theStudy()?.patterns?.[name]?.length;
     const picker = (L) => L.kind !== 'pixels' ? '' : `<div class="line"><span class="muted">pattern</span><select data-pattern="${esc(L.name)}" title="${timed(L.name) ? 'the timeline sets it: this shows one while it is not playing a pattern' : 'what the pixels play here (the agent puts patterns on the timeline: animate)'}">
       ${['solid', 'chase', 'wave', 'scan', 'rainbow', 'sparkle', 'off'].map((k) => `<option ${(previews[L.name]?.kind ?? 'solid') === k ? 'selected' : ''}>${k}</option>`).join('')}</select>${timed(L.name) ? '<span class="muted">· on the timeline</span>' : ''}</div>`;
     cards.push(card('lights', `Lights · ${lit.length}`, `<div class="line"><button data-act="lights" class="${lamps.on ? 'on' : ''}" title="the lights, the beams in smoke, the room dimmed">${lamps.on ? '● Lights on' : '○ Lights off'}</button>
@@ -1854,7 +1967,7 @@ function motionCards() {
       ${slider('room', 'room', 'the room\'s own light')}${slider('haze', 'haze', 'smoke in the air: how much the beams show')}
       <p class="muted">The Note's LIGHTS. Their levels, the room's and the haze are lines on the timeline: key them to time an animation by its light.</p>`));
   }
-  const anim = S.proj?.animations?.[S.note];
+  const anim = theStudy();
   if (Object.values(anim?.tracks ?? {}).some((k) => k.length) || Object.values(anim?.lights ?? {}).some((k) => k.length)) {
     const f = film?.note === S.note ? film : null, rendering = f && !f.done;
     cards.push(card('gif', 'Animation', `<p class="muted" style="margin-top:0">The timeline, ${fmt(anim.length)} frames at ${fmt(anim.fps)} fps. <b>Render video</b> draws every frame from this view, lights and all, in the background while you work: smooth however slow this computer is (it starts by itself when playing runs under ${SMOOTH} fps). When it is done: Watch, and Download MP4 there.</p>
@@ -1863,8 +1976,54 @@ function motionCards() {
   return cards;
 }
 
-function editCard(mo) {
+// A joint's every property, in a sheet beside the panel (pop.js): the ✎ of its row, New joint and Group open it.
+// The open study, at the top of Motion: which one (of this project's), its section, its camera; and its parts, each
+// shown or hidden and how see-through, keyed at the frame the timeline stands at.
+function studyCards() {
+  const name = studyName(), study = theStudy(), all = Object.entries(S.proj?.studies ?? {});
+  if (!all.some(([n]) => n === name)) all.push([name, { of: S.note }]);
+  const frame = Math.round(timeline.frame), on = sectionOn, axis = $('#sectionAxis').value;
+  const keys = (field) => (study?.[field] ? Object.keys(study[field]).length : 0), cams = study?.camera?.length ?? 0;
+  const list = all.sort(([a], [b]) => a.localeCompare(b)).map(([n, st]) => `<option value="${esc(n)}" ${n === name ? 'selected' : ''}>${esc(n)}${(st.of ?? n) !== S.note ? ` · of ${esc(st.of ?? n)}` : ''}</option>`).join('');
+  const head = card('study', `Study · ${esc(name)}`, `
+    <div class="line"><select id="studySel" title="the project's motion studies: a timeline each, with its own camera, section and parts">${list}</select>
+      <button data-act="studynew" title="a new study of ${esc(S.note)}">New</button><button data-act="studyrename" title="rename this study">Rename</button>
+      <button class="danger" data-act="studydel" title="remove this study" ${name === S.note && !study ? 'disabled' : ''}>Remove</button></div>
+    <div class="line"><label><input type="checkbox" id="studySection" ${on ? 'checked' : ''}> section</label>
+      <select id="studyAxis" ${on ? '' : 'disabled'}>${['X', 'Y', 'Z'].map((a) => `<option ${a === axis ? 'selected' : ''}>${a}</option>`).join('')}</select>
+      <label><input type="checkbox" id="studyFlip" ${sectionFlip ? 'checked' : ''} ${on ? '' : 'disabled'}> the other side</label></div>
+    ${on ? `<div class="line"><input type="range" id="studyCut" min="0" max="1" step="0.002" value="${esc($('#sectionAt').value)}" data-icon="◧" data-label="section"
+      data-scale="100" data-unit="%" data-key="study:section" title="where it cuts: keyed at this frame"></div>` : ''}
+    <div class="line"><button data-act="studycam" title="the view as it is now, keyed at this frame: between keys the camera moves">◉ Key the camera</button>
+      <span class="muted">${cams ? `${cams} camera key${cams === 1 ? '' : 's'}` : 'the camera is free'}</span><span style="flex:1"></span>
+      <button data-act="studylook" title="this study is seen in ${esc(STYLES[look.style] ?? look.style)}${edgesOn ? ', with edges' : ''}, as now">Keep this look</button></div>
+    <p class="muted">What is shown, see-through, where the section cuts and the camera are keyed at the frame shown (<b data-studyframe>${frame}</b>), on the timeline as lines of their own. ${keys('visible') + keys('clear') ? '' : 'Parts: below.'}</p>`);
+  const rows = S.parts.map((q, i) => `<div class="check" data-studypart="${i}"><div class="row">
+      <span><b class="${S.hidden.has(i) ? 'muted' : ''}">${esc(q.name)}</b></span>
+      <input type="range" data-see="${esc(q.name)}" min="0.05" max="1" step="0.01" value="${S.see[q.name] ?? 1}" title="how solid ${esc(q.name)} is: 100 % solid, less is see-through (keyed at this frame)"
+        data-icon="◌" data-label="${esc(q.name)} solid" data-scale="100" data-unit="%" data-key="study:see" data-default="1" style="max-width:110px">
+      <button class="x" data-act="studyeye" data-i="${i}" title="${S.hidden.has(i) ? 'show it' : 'hide it'} from this frame on (keyed)">${S.hidden.has(i) ? '○' : '●'}</button></div></div>`).join('');
+  return [head, card('studyparts', `Parts · ${S.parts.length}`, `${rows}<p class="muted">A part hidden or made see-through here is keyed at this frame: it stays so until its next key.</p>`)];
+}
+/** A study's name typed: in a sheet under the button (pop.js), Enter or the button makes it. */
+function nameStudy(anchor, title, start, then) {
+  const el = pop(anchor, `<div class="pop-head"><b>${esc(title)}</b><button class="x" data-act="close">×</button></div>
+    <div class="line"><input data-r="name" value="${esc(start)}" maxlength="48" placeholder="tool lock, unlocking in section …"><button class="primary" data-act="ok">OK</button></div>
+    <p class="muted">Letters, digits, spaces, _ . -</p>`, { key: 'study' });
+  const go = () => {
+    const v = el.querySelector('[data-r="name"]').value.trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,47}$/.test(v)) { tell('A study is named with letters, digits, spaces, _ . -, beginning with a letter or a digit.'); return; }
+    if (v !== start && S.proj?.studies?.[v]) { tell(`There is a study ${v} already.`); return; }
+    closePop(); then(v);
+  };
+  el.addEventListener('click', (e) => { const a = e.target.closest('[data-act]')?.dataset.act; if (a === 'close') closePop(); if (a === 'ok') go(); });
+  el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+}
+const putStudy = async (name, study) => { S.proj.studies = (await api(`/p/${S.project}/studies/${encodeURIComponent(name)}`, study ? 'PUT' : 'DELETE', study ? { study } : undefined)).studies; };
+
+function editorHtml(mo) {
   const e = S.edit, bodies = Object.keys(mo.bodies), face = theFace();
+  const card = (_key, title, body) => `<div class="pop-head"><b>${title}</b><button class="x" data-act="jointcancel" title="close (Esc)">×</button></div>${body}`;
   const opts = (list, cur) => list.map(([v, label]) => `<option value="${esc(v)}" ${String(v) === String(cur) ? 'selected' : ''}>${esc(label)}</option>`).join('');
   const name = `<div class="line"><input data-edit="name" value="${esc(e.name)}" placeholder="name: hinge, slide, j1…" maxlength="40" ${e.isNew ? '' : 'readonly'}></div>`;
   const buttons = `<div class="line">${e.isNew ? '' : '<button class="danger" data-act="jointdelete">Remove</button>'}<span style="flex:1"></span>
@@ -1879,7 +2038,7 @@ function editCard(mo) {
   const keep = e.original?.axis;
   const axisList = [...(keep ? [['keep', `as it is: ${typeof keep === 'string' ? `the tag ${keep}` : `${keep.dir} through ${(keep.origin ?? [0, 0, 0]).map((x) => Math.round(x * 10) / 10).join(', ')}`}`]] : []),
     ...(usable ? [['face', `the selected face: ${words(face)}`]] : []), ...axisTags.map(([k, t]) => [`tag:${k}`, `the tag ${k} (${t.kind})`]),
-    ['X', 'X, through the origin'], ['Y', 'Y, through the origin'], ['Z', 'Z, through the origin']];
+    ['X', 'X, through the origin'], ['Y', 'Y, through the origin'], ['Z', 'Z, through the origin'], ['num', 'typed: a point and a direction']];
   if (!axisList.some(([v]) => v === e.axisSel)) e.axisSel = axisList[0][0];
   const unit = UNITS[e.kind] ?? '';
   const turns = e.kind === 'revolute' || e.kind === 'slider';
@@ -1888,7 +2047,10 @@ function editCard(mo) {
     ${row('moves', `<select data-edit="moves">${opts(bodies.map((b) => [b, b]), e.moves)}</select>`)}
     ${row('on', `<select data-edit="on">${opts(bodies.map((b) => [b, b]), e.on)}</select>`)}
     ${turns ? `${row('axis', `<select data-edit="axisSel">${opts(axisList, e.axisSel)}</select>`)}
-      ${!usable && e.axisSel !== 'keep' ? '<p class="muted">Or select a round hole, a boss or a flat face (Faces, on the right) and choose it here.</p>' : ''}
+      ${e.axisSel === 'num' ? `<div class="line"><span class="muted" style="flex:1">through, mm</span>${['ox', 'oy', 'oz'].map((k, i) => `<input data-edit="${k}" value="${esc(e[k] ?? 0)}" placeholder="${'xyz'[i]}" inputmode="decimal" style="flex:0 0 64px">`).join('')}</div>
+        <div class="line"><span class="muted" style="flex:1">direction</span><input data-edit="dir" value="${esc(e.dir ?? 'Z')}" placeholder="X, -Z or 0, 0.7, 0.7" style="flex:0 0 200px"></div>
+        <p class="muted">In the assembly's frame as built, on what it moves on.</p>` : ''}
+      ${!usable && !['keep', 'num'].includes(e.axisSel) ? '<p class="muted">Or select a round hole, a boss or a flat face (Faces, on the right) and choose it here.</p>' : ''}
       <div class="line"><span class="muted" style="flex:1">range, ${unit}</span><input data-edit="lo" value="${esc(e.lo)}" placeholder="from" inputmode="decimal" style="flex:0 0 70px">
         <input data-edit="hi" value="${esc(e.hi)}" placeholder="to" inputmode="decimal" style="flex:0 0 70px"></div>
       <div class="line"><input data-edit="follows" value="${esc(e.follows)}" placeholder="follows: j2: 1, j3: -1 (or empty: moved by hand)"></div>
@@ -1898,15 +2060,75 @@ function editCard(mo) {
     <p class="muted">0 is where the parts are as built. The axis drawn in the view is the one chosen; its dot is the positive way.</p>`);
 }
 
-function editJoint(name) {
+const typed = (axis) => (axis && typeof axis === 'object'      // an axis as numbers, for the sheet's fields
+  ? { ox: axis.origin?.[0] ?? 0, oy: axis.origin?.[1] ?? 0, oz: axis.origin?.[2] ?? 0, dir: Array.isArray(axis.dir) ? axis.dir.join(', ') : axis.dir ?? 'Z' }
+  : { ox: 0, oy: 0, oz: 0, dir: 'Z' });
+function editJoint(name, anchor) {
   const spec = S.data.joints?.[name];
   if (!spec) return;
+  if (opened('joint') && S.edit?.name === name) { closePop(); return; }      // its ✎ again: put away
+  closePop();
   S.edit = { isNew: false, name, original: spec, kind: spec.kind === 'rigid' && spec.parts ? 'group' : spec.kind, moves: spec.moves, on: spec.on, parts: spec.parts,
-    axisSel: 'keep', lo: spec.range?.[0] ?? '', hi: spec.range?.[1] ?? '', flip: !!spec.flip, locked: !!spec.locked,
+    // typed: from the axis as it is, where it was found (a tag's too), so "typed" starts from where it is now
+    axisSel: 'keep', ...typed(spec.axis && typeof spec.axis === 'object' ? spec.axis : model()?.joints?.[name]?.origin
+      ? { origin: model().joints[name].origin.map((x) => Math.round(x * 1e4) / 1e4), dir: model().joints[name].dir.map((x) => Math.round(x * 1e6) / 1e6) } : null),
+    lo: spec.range?.[0] ?? '', hi: spec.range?.[1] ?? '', flip: !!spec.flip, locked: !!spec.locked,
     follows: spec.follows ? Object.entries(spec.follows).map(([k, f]) => `${k}: ${f}`).join(', ') : '' };
-  renderPanel(true); showAxes();
+  openEditor(anchor);
 }
-function newJoint(kind = 'revolute') {
+function openEditor(anchor) {
+  const mo = model();
+  if (!mo || !S.edit) return;
+  const el = pop(anchor?.isConnected ? anchor : $('#panel'), editorHtml(mo), { key: 'joint', sticky: true, wide: true, onclose: () => { S.edit = null; showAxes(); } });
+  el.addEventListener('input', (e) => {
+    const k = e.target.dataset.edit;
+    if (k && S.edit) { S.edit[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value; if (['ox', 'oy', 'oz', 'dir'].includes(k)) showAxes(); }
+  });
+  el.addEventListener('change', (e) => { if (e.target.dataset.edit && e.target.tagName === 'SELECT') refillEditor(); });
+  el.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-act]')?.dataset.act;
+    if (a === 'jointcancel') closePop();
+    if (a === 'jointsave') saveJoint();
+    if (a === 'jointdelete') removeJoint();
+  });
+  showAxes();
+}
+/** The sheet drawn again: a choice in it, or a face picked in the view, changes what it offers. */
+function refillEditor() {
+  const mo = model();
+  if (opened('joint') && S.edit && mo) { refill(editorHtml(mo)); showAxes(); }
+}
+function removeJoint() {
+  const name = S.edit.name;
+  ask(`Remove the joint "${name}" from the Note? Checks about it will fail.`, { yes: 'Remove', danger: true })
+    .then((yes) => yes && act(async () => { building([S.note]); await api(`/p/${S.project}/n/${S.note}/joints/${name}`, 'DELETE'); closePop(); }));
+}
+/** A joint's range, typed: a small sheet under its words in the row. */
+function editRange(name, anchor) {
+  const spec = S.data.joints?.[name], row = model()?.joints?.[name];
+  if (!spec || !row) return;
+  const [lo, hi] = spec.range ?? ['', ''];
+  const el = pop(anchor, `<div class="pop-head"><b>${esc(name)} · range</b><button class="x" data-act="close" title="close (Esc)">×</button></div>
+    <div class="line"><input data-r="lo" value="${esc(lo)}" placeholder="from" inputmode="decimal"><span class="muted">…</span>
+      <input data-r="hi" value="${esc(hi)}" placeholder="to" inputmode="decimal"><span class="muted unit">${esc(row.unit)}</span></div>
+    <div class="line"><span style="flex:1"></span><button data-act="close">Cancel</button><button class="primary" data-act="save">Save</button></div>
+    <p class="muted">Where it may go${row.kind === 'revolute' ? ', in degrees' : ', in mm'}; 0 is as built. Empty: no range.</p>`, { key: 'range' });
+  const save = () => {
+    const [a, b] = ['lo', 'hi'].map((k) => el.querySelector(`[data-r="${k}"]`).value.trim().replace(',', '.'));
+    const body = { ...spec };
+    if (a === '' && b === '') delete body.range;
+    else {
+      const range = [Number(a), Number(b)];
+      if (a === '' || b === '' || !range.every(Number.isFinite) || range[0] > range[1]) { tell('A range is two numbers, the first not above the second.'); return; }
+      body.range = range;
+    }
+    closePop();
+    act(async () => { building([S.note]); await api(`/p/${S.project}/n/${S.note}/joints/${name}`, 'PUT', body); });
+  };
+  el.addEventListener('click', (e) => { const a = e.target.closest('[data-act]')?.dataset.act; if (a === 'close') closePop(); if (a === 'save') save(); });
+  el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
+}
+function newJoint(kind = 'revolute', anchor = null) {
   const mo = model();
   if (!mo) { notice('open an assembly that builds first'); return; }
   const bodies = Object.keys(mo.bodies), of = bodyOf(mo), face = theFace();
@@ -1916,12 +2138,14 @@ function newJoint(kind = 'revolute') {
   if (kind === 'group') {
     const parts = [...S.sel.part].map((i) => S.parts[i]?.name).filter(Boolean);
     if (parts.length < 2) { notice('select two or more objects first (Objects, on the right)'); return; }
+    closePop();
     S.edit = { isNew: true, kind: 'group', name: unique('group'), parts };
   } else {
+    closePop();
     S.edit = { isNew: true, kind, name: unique('joint'), moves, on: picked[1] ?? mo.ground[0] ?? bodies.find((b) => b !== moves),
-      axisSel: face && (face.type === 'plane' || face.type === 'cylinder') ? 'face' : 'Z', lo: '', hi: '', follows: '', flip: false, locked: false };
+      axisSel: face && (face.type === 'plane' || face.type === 'cylinder') ? 'face' : 'Z', ...typed(null), lo: '', hi: '', follows: '', flip: false, locked: false };
   }
-  renderPanel(true); showAxes();
+  openEditor(anchor);
 }
 function saveJoint() {
   const e = S.edit, name = String(e.name ?? '').trim(), number = (x) => (String(x ?? '').trim() === '' ? null : Number(String(x).replace(',', '.')));
@@ -1937,6 +2161,11 @@ function saveJoint() {
         if (!f) { tell('Select the face to turn about or slide along, in the view.'); return; }
         const { tris, ...rest } = f;
         body.face = rest;
+      } else if (e.axisSel === 'num') {
+        const origin = [e.ox, e.oy, e.oz].map(number), dir = parseDir(e.dir);
+        if (!origin.every((x) => x != null && Number.isFinite(x))) { tell('The axis goes through a point: three numbers, x, y and z.'); return; }
+        if (!dir) { tell('A direction is X, Y, Z, -X, -Y, -Z or three numbers, as 0, 0.7, 0.7.'); return; }
+        body.axis = { origin, dir };
       } else if (e.axisSel.startsWith('tag:')) body.axis = e.axisSel.slice(4);
       else body.axis = { origin: [0, 0, 0], dir: e.axisSel };
       const lo = number(e.lo), hi = number(e.hi);
@@ -1958,8 +2187,15 @@ function saveJoint() {
   act(async () => {
     building([S.note]);
     await api(`/p/${S.project}/n/${S.note}/joints/${name}`, 'PUT', body);
-    S.edit = null;
+    closePop();
   });
+}
+/** A direction as the sheet takes it: X, -Z … or three numbers. Null where it is neither. */
+function parseDir(text) {
+  const t = String(text ?? '').trim().toUpperCase();
+  if (/^-?[XYZ]$/.test(t)) return t;
+  const v = t.split(/[\s,;]+/).filter(Boolean).map(Number);
+  return v.length === 3 && v.every(Number.isFinite) && v.some((x) => x !== 0) ? v : null;
 }
 
 // ---- compare: the diff as the thing you trust --------------------------------------------------------------
@@ -2247,7 +2483,7 @@ async function openNow(project, note, late) {
   if (changedNote) {
     S.sel = nothing(); S.inspect = null; S.tagSel = null; S.saveResult = null; S.hotPart = null; S.hidden = new Set(); explode = 0; sketch.end();
     S.editCheck = null; S.checkDraft = {};
-    stopPlaying(); Object.assign(S, { pose: {}, freePose: {}, clash: [], edit: null, hotJoint: null });
+    stopPlaying(); closePop(); Object.assign(S, { pose: {}, freePose: {}, clash: [], edit: null, hotJoint: null });
     $('#filmPlayer')?.remove();      // a video of the Note that was
   }
   // the room follows the Note: an assembly is worked on in Assembly (or Motion), a part in Part (or in Sketch, while one is drawn)
@@ -2603,26 +2839,37 @@ $('#panel').addEventListener('change', (e) => {
   if ((e.target.id === 'projPrinter' || e.target.id === 'projMaterial') && e.target.value) {      // the masses and the looks follow
     act(async () => { busy('changing the project…'); await api(`/p/${S.project}/profile`, 'PUT', { [e.target.id === 'projPrinter' ? 'printer' : 'material']: e.target.value }); });
   }
+  if (e.target.id === 'studySel') { chooseStudy(e.target.value); return; }
+  if (e.target.id === 'studySection' || e.target.id === 'studyAxis' || e.target.id === 'studyFlip') {
+    sectionOn = $('#studySection').checked; sectionFlip = $('#studyFlip').checked;
+    $('#sectionAxis').value = $('#studyAxis').value;
+    $('#section').classList.toggle('on', sectionOn); $('#sectionPop').hidden = !sectionOn;
+    setSection(); styleAll(); wake();
+    timeline.extra({ section: sectionOn ? { axis: $('#sectionAxis').value, flip: sectionFlip } : undefined });
+    showTimeline(); renderPanel(true);
+    return;
+  }
+  if (e.target.dataset.see) { timeline.key([`%${e.target.dataset.see}`]); showTimeline(); }
+  if (e.target.id === 'studyCut') timeline.key(['@section']);
   if (e.target.id === 'placeNote') { S.placeNote = e.target.value; $('#placeName').value = placeName(e.target.value); }
   if (e.target.id === 'groundSel' && e.target.value) act(async () => { building([S.note]); await api(`/p/${S.project}/n/${S.note}/ground`, 'PUT', { ground: e.target.value }); });
   if (e.target.dataset.posenum) setJoint(e.target.dataset.posenum, Number(e.target.value.replace(',', '.')));
-  if (e.target.dataset.edit && S.edit && e.target.tagName === 'SELECT') { renderPanel(true); showAxes(); }
 });
 // Motion: a joint's slider moves it as it is dragged; what is typed into the joint being made is kept as it is typed
 $('#panel').addEventListener('input', (e) => {
+  if (e.target.dataset.see) { S.see[e.target.dataset.see] = Number(e.target.value); styleAll(); wake(); }
+  if (e.target.id === 'studyCut') { $('#sectionAt').value = e.target.value; setSection(); wake(); }
   if (e.target.dataset.pose) { stopPlaying(); setJoint(e.target.dataset.pose, Number(e.target.value)); }
   if (e.target.dataset.light) setLevel(e.target.dataset.light, Number(e.target.value), true);
   if (e.target.dataset.pattern) { previews[e.target.dataset.pattern] = { kind: e.target.value }; wake(); }
-  const k = e.target.dataset.edit;
-  if (k && S.edit) S.edit[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
 });
 $('#panel').addEventListener('mouseover', (e) => {
   const j = e.target.closest('[data-joint]')?.dataset.joint ?? null;
   if (j !== S.hotJoint && !drag && moving()) { S.hotJoint = j; showAxes(); }
 });
 $('#poseHome').onclick = () => goHome();
-$('#jointNew').onclick = () => newJoint();
-$('#groupMake').onclick = () => newJoint('group');
+$('#jointNew').onclick = (e) => newJoint('revolute', e.currentTarget);
+$('#groupMake').onclick = (e) => newJoint('group', e.currentTarget);
 $('#panel').addEventListener('mouseover', (e) => {
   const t = e.target.closest('[data-tag]'), q = e.target.closest('[data-part]');
   const hot = t ? t.dataset.tag : null, hotPart = q ? Number(q.dataset.part) : null;
@@ -2665,15 +2912,39 @@ $('#panel').addEventListener('click', (e) => {
     return;
   }
   if (a === 'play') { play(b.dataset.name); return; }
-  if (a === 'jointnew') { newJoint(); return; }
-  if (a === 'groupmake') { newJoint('group'); return; }
-  if (a === 'jointedit') { editJoint(b.dataset.name); return; }
-  if (a === 'jointcancel') { S.edit = null; renderPanel(true); showAxes(); return; }
-  if (a === 'jointsave') { saveJoint(); return; }
-  if (a === 'jointdelete') {
-    const name = S.edit.name;
-    ask(`Remove the joint "${name}" from the Note? Checks about it will fail.`, { yes: 'Remove', danger: true })
-      .then((yes) => yes && act(async () => { building([S.note]); await api(`/p/${S.project}/n/${S.note}/joints/${name}`, 'DELETE'); S.edit = null; }));
+  if (a === 'jointnew') { newJoint('revolute', b); return; }
+  if (a === 'groupmake') { newJoint('group', b); return; }
+  if (a === 'jointedit') { editJoint(b.dataset.name, b); return; }
+  if (a === 'rangeedit') { editRange(b.dataset.name, b); return; }
+  if (a === 'studynew') {
+    nameStudy(b, `A new study of ${S.note}`, '', (name) => act(async () => {
+      await putStudy(name, { of: S.note, fps: timeline.anim.fps, length: timeline.anim.length, tracks: {} });
+      try { localStorage.setItem(studyKept(), name); } catch { /* this visit only */ }
+    }));
+    return;
+  }
+  if (a === 'studyrename') {
+    const old = studyName();
+    nameStudy(b, `Rename ${old}`, old, (name) => name !== old && act(async () => {
+      timeline.settle();
+      await putStudy(name, { ...(S.proj.studies?.[old] ?? {}), of: S.note });
+      await putStudy(old, null);
+      try { localStorage.setItem(studyKept(), name); } catch { /* this visit only */ }
+    }));
+    return;
+  }
+  if (a === 'studydel') {
+    const name = studyName();
+    ask(`Remove the study "${name}": its timeline, camera keys and what it shows?`, { yes: 'Remove', danger: true })
+      .then((yes) => yes && act(async () => { await putStudy(name, null); try { localStorage.removeItem(studyKept()); } catch { /* */ } }));
+    return;
+  }
+  if (a === 'studycam') { timeline.key(['@camera']); showTimeline(); renderPanel(true); return; }
+  if (a === 'studylook') { timeline.extra({ view: { style: look.style, edges: edgesOn } }); notice(`this study is seen ${STYLES[look.style] ?? look.style}${edgesOn ? ', with edges' : ''}`); return; }
+  if (a === 'studyeye') {
+    const i = Number(b.dataset.i), q = S.parts[i];
+    if (S.hidden.has(i)) S.hidden.delete(i); else S.hidden.add(i);
+    spread(); timeline.key([`^${q.name}`]); showTimeline(); renderPanel(true);
     return;
   }
   if (a === 'lock') {      // locked is written into the Note: the joint holds where it is

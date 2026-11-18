@@ -355,3 +355,49 @@ def test_a_design_made_a_project_of_its_own(ws):
         ws.project_of("both", "rakis")      # there is one already
     with pytest.raises(Problem):
         ws.project_of("both", "nothing")
+
+
+def test_a_motion_study_keeps_its_camera_section_and_parts_and_is_checked(ws):
+    """Named studies per project, each of an assembly: its timeline as an animation's, and what the view does on it,
+    keyed: the camera, the section's position, parts hidden and see-through, the style."""
+    import json
+    p = ws.create_project("studies", "starter")
+    cam = {"proj": "persp", "p": [100, -100, 80], "t": [0, 0, 10], "u": [0, 0, 1], "z": 1, "fov": 35}
+    got = p.set_study("tool lock", {"of": "rod_foot", "fps": 30, "length": 120, "tracks": {"j1": [[0, 0], [60, 45]]},
+                                    "camera": [[0, cam], [120, {**cam, "p": [0, -150, 60]}]],
+                                    "section": {"axis": "Y", "keys": [[0, 0.4], [100, 0.6]]},
+                                    "visible": {"tool/cover": [[60, 0], [0, 1]]}, "clear": {"housing": [[90, 0.2], [0, 1]]},
+                                    "view": {"style": "shaded", "edges": True}})
+    study = got["tool lock"]
+    assert study["of"] == "rod_foot" and study["camera"][1][1]["p"] == [0.0, -150.0, 60.0] and study["camera"][0][1]["fov"] == 35
+    assert study["section"] == {"axis": "Y", "flip": False, "keys": [[0, 0.4], [100, 0.6]]}
+    assert study["visible"] == {"tool/cover": [[0, 1.0], [60, 0.0]]} and study["clear"] == {"housing": [[0, 1.0], [90, 0.2]]}
+    assert p.status()["studies"]["tool lock"] == study
+    for bad, why in (({"camera": [[0, {**cam, "proj": "fisheye"}]]}, "camera"), ({"camera": [[200, cam]]}, "camera"),
+                     ({"section": {"axis": "W"}}, "section"), ({"section": {"keys": [[0, 1.5]]}}, "section"),
+                     ({"visible": {"cover": [[0, 0.5]]}}, "visible"), ({"clear": {"cover": [[0, 0]]}}, "clear"),
+                     ({"clear": {"../x y": [[0, 1]]}}, "not the name of a part"), ({"view": {"style": "neon"}}, "view"),
+                     ({"of": "../x"}, "of"), ({"fps": 0}, "fps")):
+        with pytest.raises(Problem, match=why):
+            p.set_study("bad", {"length": 120, **bad})
+    for bad in ("", " lead", "a/b", "x" * 49):
+        with pytest.raises(Problem, match="study's name"):
+            p.set_study(bad, {})
+    # the timeline an assembly had before studies is its own study; the first write moves it over
+    settings = json.loads((p.dir / "monet.json").read_text())
+    settings["animations"] = {"rod_foot": {"fps": 24, "length": 48, "tracks": {"j1": [[0, 1.0]]}}}
+    settings["studies"].pop("rod_foot", None)
+    (p.dir / "monet.json").write_text(json.dumps(settings))
+    assert p.studies()["rod_foot"] == {"fps": 24, "length": 48, "tracks": {"j1": [[0, 1.0]]}, "of": "rod_foot"}
+    assert p.animations()["rod_foot"]["tracks"] == {"j1": [[0, 1.0]]}
+    p.set_study("another", {"of": "rod_foot", "length": 10})
+    after = json.loads((p.dir / "monet.json").read_text())
+    assert "animations" not in after and after["studies"]["rod_foot"]["of"] == "rod_foot"
+    # an assembly's own timeline set as before leaves what its study sees as it was
+    p.set_study("rod_foot", {**p.studies()["rod_foot"], "section": {"axis": "X", "keys": [[0, 0.5]]}})
+    p.set_animation("rod_foot", {"fps": 24, "length": 48, "tracks": {"j1": [[0, 2.0]]}})
+    assert p.studies()["rod_foot"]["section"]["axis"] == "X" and p.studies()["rod_foot"]["tracks"]["j1"] == [[0, 2.0]]
+    # a folder's monet.json brings its studies in, as the agent's door may
+    kept = p.keep({"monet.json": json.dumps({"studies": {"from the folder": {"of": "rod_foot", "length": 30}}})})
+    assert kept["set"] == ["the study from the folder"] and "from the folder" in p.studies()
+    assert p.set_study("tool lock", None).get("tool lock") is None

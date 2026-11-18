@@ -41,19 +41,41 @@ export function moveActions(actions = [], ids, d, length) {
   return { actions: out, ids: new Set(moved.map((a) => `!:${a.frame}`)) };
 }
 export const deleteActions = (actions = [], ids) => actions.filter((a) => !ids.has(`!:${a.frame}`));
-/** The animation as the project keeps it, light lines ("~name" here) apart as `lights`; and back. */
+// A study's lines besides the joints, each told by how its name begins: "~light" a light's level, "@camera" the view
+// ({proj, p, t, u, z, fov}), "@section" where the section cuts (0…1), "^part" a part shown (1) or hidden (0), held from
+// key to key, "%part" a part's opacity (see-through).
+/** The animation (a study) as the project keeps it, those lines apart as `lights`, `camera`, `section.keys`, `visible`
+ *  and `clear`; and back. What else the study says (of, section's axis, view) goes with it as it came. */
 export function kept(anim) {
-  const tracks = {}, lights = {};
-  for (const [k, keys] of Object.entries(anim.tracks)) { if (!keys.length) continue; if (k.startsWith('~')) lights[k.slice(1)] = keys; else tracks[k] = keys; }
-  return { fps: anim.fps, length: anim.length, tracks, ...(Object.keys(lights).length ? { lights } : {}), actions: anim.actions ?? [],
-    ...(Object.keys(anim.patterns ?? {}).length ? { patterns: anim.patterns } : {}) };      // what pixels play: kept as it came
+  const tracks = {}, lights = {}, visible = {}, clear = {};
+  let camera = null, cut = null;
+  for (const [k, keys] of Object.entries(anim.tracks)) {
+    if (!keys.length) continue;
+    if (k.startsWith('~')) lights[k.slice(1)] = keys;
+    else if (k === '@camera') camera = keys;
+    else if (k === '@section') cut = keys;
+    else if (k.startsWith('^')) visible[k.slice(1)] = keys;
+    else if (k.startsWith('%')) clear[k.slice(1)] = keys;
+    else tracks[k] = keys;
+  }
+  const some = (o) => Object.keys(o).length > 0;
+  return { ...(anim.of ? { of: anim.of } : {}), fps: anim.fps, length: anim.length, tracks, ...(some(lights) ? { lights } : {}), actions: anim.actions ?? [],
+    ...(some(anim.patterns ?? {}) ? { patterns: anim.patterns } : {}),      // what pixels play: kept as it came
+    ...(camera ? { camera } : {}), ...(anim.section ? { section: { ...anim.section, keys: cut ?? [] } } : {}),
+    ...(some(visible) ? { visible } : {}), ...(some(clear) ? { clear } : {}), ...(anim.view ? { view: anim.view } : {}) };
 }
 export function opened(a) {
   const out = { ...EMPTY(), ...a, tracks: { ...(a?.tracks ?? {}) } };
   for (const [k, keys] of Object.entries(a?.lights ?? {})) out.tracks[`~${k}`] = keys;
-  delete out.lights;
+  if (a?.camera?.length) out.tracks['@camera'] = a.camera;
+  if (a?.section) { out.tracks['@section'] = a.section.keys ?? []; out.section = { axis: a.section.axis ?? 'Z', flip: !!a.section.flip }; }
+  for (const [k, keys] of Object.entries(a?.visible ?? {})) out.tracks[`^${k}`] = keys;
+  for (const [k, keys] of Object.entries(a?.clear ?? {})) out.tracks[`%${k}`] = keys;
+  for (const k of ['lights', 'camera', 'visible', 'clear']) delete out[k];
   return out;
 }
+/** Lines that are the view's, not a joint's or a light's: keyed by their own ◆, never by Key with the joints. */
+export const viewLine = (name) => /^[@^%]/.test(name);
 /** The frames of the timeline a video shows at `fps` pictures a second (tests/advance.json): from 0, its actions met; it ends at the end, at a pause (held `hold`
  *  seconds), or where a goto would go round again (a loop is shown once). */
 export function played(anim, fps, most = 20000) {
@@ -75,8 +97,15 @@ export function played(anim, fps, most = 20000) {
 /** What an action says, short. */
 export const actionText = (a) => (a.do === 'goto' ? `goto ${a.to}` : `pause${a.hold ? ` (${a.hold} s in a video)` : ''}`);
 
-/** A track's value at frame `f` (a fraction while playing): straight between its keys, held outside them. */
-export function valueAt(keys, f) {
+/** Between two values, `t` of the way: a number straight, an array or an object (a camera) number by number, a word
+ *  held until the next key. */
+export const mix = (a, b, t) => (typeof a === 'number' && typeof b === 'number' ? a + (b - a) * t
+  : Array.isArray(a) && Array.isArray(b) ? a.map((x, i) => mix(x, b[i], t))
+  : a && b && typeof a === 'object' && typeof b === 'object' ? Object.fromEntries(Object.keys(a).map((k) => [k, mix(a[k], b[k], t)]))
+  : t < 1 ? a : b);
+/** A track's value at frame `f` (a fraction while playing): straight between its keys (`held`: each held until the
+ *  next), held outside them. */
+export function valueAt(keys, f, held = false) {
   if (!keys?.length) return undefined;
   if (f <= keys[0][0]) return keys[0][1];
   const end = keys[keys.length - 1];
@@ -84,10 +113,11 @@ export function valueAt(keys, f) {
   let i = 1;
   while (keys[i][0] < f) i++;
   const [f0, v0] = keys[i - 1], [f1, v1] = keys[i];
-  return f1 === f0 ? v1 : v0 + (v1 - v0) * (f - f0) / (f1 - f0);
+  if (held) return f >= f1 ? v1 : v0;
+  return f1 === f0 ? v1 : mix(v0, v1, (f - f0) / (f1 - f0));
 }
-/** Every keyed joint's value at frame `f`. */
-export const poseAt = (anim, f) => Object.fromEntries(Object.entries(anim.tracks).filter(([, k]) => k.length).map(([j, k]) => [j, valueAt(k, f)]));
+/** Every keyed line's value at frame `f` (a part shown or hidden held, not faded). */
+export const poseAt = (anim, f) => Object.fromEntries(Object.entries(anim.tracks).filter(([, k]) => k.length).map(([j, k]) => [j, valueAt(k, f, j.startsWith('^'))]));
 /** A key set: one to a frame, in order. */
 export const setKey = (keys = [], f, v) => [...keys.filter(([g]) => g !== f), [f, v]].sort((a, b) => a[0] - b[0]);
 /** The frames that have a key on any joint, in order. */
@@ -133,12 +163,13 @@ export function tickStep(length, width, px = 52) {
 const ROW = 22, LOW = 106;     // a joint's line; the timeline as low as it goes: the bar, the ruler, the actions and the line of all keys
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const num = (v) => String(Math.round(v * 100) / 100);
-const KIND = { revolute: '⟳', slider: '⇄', light: '☀', room: '⌂', haze: '≋' };
+const KIND = { revolute: '⟳', slider: '⇄', light: '☀', room: '⌂', haze: '≋', camera: '◉', section: '◧', visible: '◐', clear: '◌' };
 const PLAY = '▶︎', PAUSE = '❚❚';
 
 /**
  * The timeline in `root`. hooks: pose() the joints' values now, setPose(values) put them there, save(anim, key) keep
- * it, height(px) as it is sized or hidden. The joints that can be keyed come with show().
+ * it, height(px) as it is sized or hidden, first(line) what a line was before its first key (where that is not the
+ * first key's value). The joints that can be keyed come with show().
  */
 export function createTimeline(root, hooks) {
   let anim = EMPTY(), key = null, from = null, frame = 0, playing = false, raf = 0, last = 0, saving = 0, sel = new Set(), joints = [];
@@ -180,7 +211,7 @@ export function createTimeline(root, hooks) {
     for (let f = 0, s = step / (step % 5 ? 2 : 5); s >= 1 && f <= anim.length; f += s) if (f % step) ticks.push(`<i class="tl-sub" style="left:${at(f)}"></i>`);
     const strings = joints.map((j, i) => {
       const keys = anim.tracks[j.name] ?? [];
-      const label = j.label ?? j.name, lit = j.name.startsWith('~');
+      const label = j.label ?? j.name, lit = j.name.startsWith('~') || viewLine(j.name);
       return `<div class="tl-row tl-joint ${lit ? 'tl-lit' : ''} ${keys.length ? 'on' : ''} ${j.locked ? 'locked' : ''} ${i >= 3 && !lit ? 'wound' : ''}" style="--s:${(1 + Math.min(i, 5) * 0.4).toFixed(1)}px">
         <div class="tl-name"><span class="tl-k">${KIND[j.kind] ?? '·'}</span><b title="${esc(label)}">${esc(label)}</b><span class="tl-v" data-tlv="${esc(j.name)}"></span>
           <button class="tl-one" data-one="${esc(j.name)}" title="key ${esc(label)} at this frame, where it is now" ${j.locked ? 'disabled' : ''}>◆</button></div>
@@ -237,7 +268,10 @@ export function createTimeline(root, hooks) {
   }
   function values() {
     const p = hooks.pose(), by = Object.fromEntries(joints.map((j) => [j.name, j]));
-    body.querySelectorAll('[data-tlv]').forEach((el) => { const j = by[el.dataset.tlv]; el.textContent = `${num((p[el.dataset.tlv] ?? 0) * (j?.scale ?? 1))}${j?.unit ?? ''}`; });
+    body.querySelectorAll('[data-tlv]').forEach((el) => {
+      const n = el.dataset.tlv, j = by[n], v = p[n];
+      el.textContent = v && typeof v === 'object' ? '' : n.startsWith('^') ? (v === 0 ? 'hidden' : 'shown') : `${num((v ?? 0) * (j?.scale ?? 1))}${j?.unit ?? ''}`;
+    });
   }
 
   function place() {
@@ -282,11 +316,15 @@ export function createTimeline(root, hooks) {
   }
   function keyAll(names) {
     const p = hooks.pose(), f = Math.round(frame), next = { ...anim.tracks };
-    for (const n of names) next[n] = setKey(next[n], f, p[n] ?? 0);
+    for (const n of names) {
+      // a line's first key after the start: it was as it always is until then (a part shown, solid), not this
+      const was = !next[n]?.length && f > 0 ? hooks.first?.(n) : undefined;
+      next[n] = setKey(was === undefined ? next[n] : setKey(next[n], 0, was), f, p[n] ?? 0);
+    }
     frame = f;
     changed(next);
   }
-  const free = () => joints.filter((j) => !j.locked).map((j) => j.name);
+  const free = () => joints.filter((j) => !j.locked && !viewLine(j.name)).map((j) => j.name);
   function remove() {
     if (!sel.size) return;
     const next = deleteKeys(anim.tracks, expand(anim.tracks, sel)), acts = deleteActions(anim.actions, sel);
@@ -459,6 +497,10 @@ export function createTimeline(root, hooks) {
       joints = js;
       draw();
     },
+    /** These lines keyed at this frame, as they are now, whether auto key is on or not (what a study shows). */
+    key(names) { if (!root.hidden && names.length) { if (playing) pause(); keyAll(names); } },
+    /** What the study says besides its lines (its section's axis, its view) changed: kept with the lines. */
+    extra(fields) { anim = { ...anim, ...fields }; changed(anim.tracks); },
     /** Joints moved by hand: playing stops, and with auto key on they are keyed here. */
     touched(names) {
       if (root.hidden) return;

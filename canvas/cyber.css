@@ -37,6 +37,9 @@
 [data-skin="cyber"] button.danger { border-color: var(--err); color: var(--err); }
 [data-skin="cyber"] button.danger:hover { background: var(--err); color: #000; }
 [data-skin="cyber"] button.x, [data-skin="cyber"] .row .x { clip-path: none; box-shadow: none; letter-spacing: 0; }
+/* words that open a sheet (a joint's range): words still, not a button */
+[data-skin="cyber"] button.inline { padding: 0; border: 0; border-bottom: 1px dotted var(--text-muted); background: none; color: inherit; font: inherit; clip-path: none; box-shadow: none; letter-spacing: inherit; text-transform: none; }
+[data-skin="cyber"] button.inline:hover { background: none; color: var(--cyan); border-bottom-color: var(--cyan); }
 [data-skin="cyber"] input, [data-skin="cyber"] select, [data-skin="cyber"] textarea { background: rgba(0, 0, 0, .55); border: 0; border-bottom: 1px solid var(--border-strong); border-radius: 0;
   color: var(--text-bright); font-family: 'Share Tech Mono', ui-monospace, monospace; font-size: 12.5px; box-shadow: inset 0 0 0 1px rgba(94, 246, 255, .07); }
 [data-skin="cyber"] input:focus, [data-skin="cyber"] select:focus, [data-skin="cyber"] textarea:focus { border-color: var(--cyan); box-shadow: inset 0 0 0 1px rgba(94, 246, 255, .25), 0 1px 0 var(--cyan), 0 6px 14px -8px var(--cyan); }
@@ -81,7 +84,7 @@
 [data-skin="cyber"] aside, [data-skin="cyber"] .panel { background: var(--glass), linear-gradient(rgba(94, 246, 255, .025) 1px, transparent 1px) 0 0 / 100% 24px, var(--bg-surface); }
 [data-skin="cyber"] aside { border-right: 1px solid var(--border); }
 [data-skin="cyber"] .panel { border-left: 1px solid var(--border); }
-[data-skin="cyber"] .head { color: var(--red); font-weight: 700; font-size: 11.5px; letter-spacing: .22em; }
+[data-skin="cyber"] .head { color: #ff7d88; font-weight: 700; font-size: 12.5px; letter-spacing: .14em; }
 [data-skin="cyber"] aside .head::after { content: ''; display: inline-block; width: 28px; height: 1px; margin-left: 8px; vertical-align: middle; background: currentColor; opacity: .5; }
 [data-skin="cyber"] .chev { color: var(--red); }
 [data-skin="cyber"] .fold:hover .head, [data-skin="cyber"] .fold:hover .chev { color: var(--cyan); }
@@ -151,7 +154,7 @@
 [data-skin="cyber"] .rail.right .rail-sec { border-right: 2px solid var(--rail-accent);
   box-shadow: var(--inner), 0 8px 24px rgba(0, 0, 0, .5), 3px 0 10px -4px var(--rail-accent), inset -8px 0 12px -10px var(--rail-accent); }
 [data-skin="cyber"] .rail-pop { border-left: 2px solid var(--rail-accent); }
-[data-skin="cyber"] .rail-title { font-size: 11px; font-weight: 700; letter-spacing: .24em; text-shadow: 0 0 8px var(--rail-accent); }
+[data-skin="cyber"] .rail-title { font-size: 11.5px; font-weight: 700; letter-spacing: .16em; text-shadow: none; }
 [data-skin="cyber"] .rail button { clip-path: none; box-shadow: none; border: 0; text-transform: none; letter-spacing: .04em; font-size: 13.5px; height: 25px; }
 [data-skin="cyber"] .rail button:hover { background: linear-gradient(90deg, color-mix(in srgb, var(--rail-accent) 18%, transparent), transparent); color: var(--rail-accent); }
 [data-skin="cyber"] .rail button:not(.on):hover { box-shadow: inset 2px 0 var(--rail-accent); }
@@ -198,7 +201,7 @@
   box-shadow: 0 0 10px rgba(94, 246, 255, .5); }
 [data-skin="cyber"] .dial-pop::after { content: ''; position: absolute; right: 0; bottom: 0; width: 20px; height: 1.5px; background: var(--yellow); transform-origin: right; transform: translate(-5px, -7px) rotate(-45deg);
   box-shadow: 0 0 6px var(--yellow); }
-[data-skin="cyber"] .dial-name { color: var(--red); font-weight: 700; letter-spacing: .24em; font-size: 12px; text-shadow: 0 0 6px rgba(255, 70, 85, .7); }
+[data-skin="cyber"] .dial-name { color: #ff7d88; font-weight: 700; letter-spacing: .14em; font-size: 12.5px; text-shadow: none; }
 [data-skin="cyber"] .dial-read { font-family: 'Share Tech Mono', ui-monospace, monospace; font-weight: 400; font-size: 26px; color: var(--yellow);
   text-shadow: 0 0 1px currentColor, 0 0 8px rgba(252, 238, 10, .6), 0 0 18px rgba(252, 238, 10, .3); }
 [data-skin="cyber"] :is(.dial-read, .dial-ends) small { color: color-mix(in srgb, currentColor 60%, transparent); }
@@ -236,7 +239,7 @@
 [data-skin="cyber"] .tl-sep { background: rgba(94, 246, 255, .18); }
 [data-skin="cyber"] .tl-name { border-right-color: rgba(94, 246, 255, .14); }
 [data-skin="cyber"] .tl-name b { color: var(--text-bright); letter-spacing: .05em; }
-[data-skin="cyber"] .tl-all .tl-name b { color: var(--red); font-size: 11px; letter-spacing: .24em; text-transform: uppercase; text-shadow: 0 0 6px rgba(255, 70, 85, .6); }
+[data-skin="cyber"] .tl-all .tl-name b { color: #ff7d88; font-size: 11.5px; letter-spacing: .14em; text-transform: uppercase; text-shadow: none; }
 [data-skin="cyber"] .tl-name .tl-v { font-family: 'Share Tech Mono', ui-monospace, monospace; color: rgba(94, 246, 255, .7); }
 [data-skin="cyber"] .tl-one { clip-path: none; box-shadow: none; }
 [data-skin="cyber"] .tl-one:hover { color: var(--yellow); }
@@ -259,7 +262,7 @@
 [data-skin="cyber"] .tl-lit.on .tl-string { box-shadow: 0 0 6px rgba(252, 238, 10, .55); opacity: 1; }
 [data-skin="cyber"] .tl-lit .tl-d { border-color: var(--yellow); box-shadow: 0 0 6px rgba(252, 238, 10, .6); }
 /* the action line: yellow flags (a goto cyan), their glyph kept readable under the playhead and when selected */
-[data-skin="cyber"] .tl-acts .tl-name b { color: var(--yellow); font-size: 11px; letter-spacing: .24em; text-transform: uppercase; text-shadow: 0 0 6px rgba(252, 238, 10, .5); }
+[data-skin="cyber"] .tl-acts .tl-name b { color: var(--yellow); font-size: 11.5px; letter-spacing: .14em; text-transform: uppercase; text-shadow: none; }
 [data-skin="cyber"] .tl-acts .tl-string { background: linear-gradient(90deg, var(--yellow), rgba(252, 238, 10, .15)); opacity: .5; height: 1px; }
 [data-skin="cyber"] .tl-d.tl-a { background: #050709; border: 0; border-left: 2px solid var(--yellow); color: var(--yellow); box-shadow: 0 0 6px rgba(252, 238, 10, .45);
   font-family: 'Share Tech Mono', ui-monospace, monospace; }
@@ -300,8 +303,10 @@
 [data-skin="cyber"] .start .tag { color: var(--red); text-transform: uppercase; letter-spacing: .16em; }
 
 /* neon: what is lit in a strong colour glows like a tube, a hot core and a halo in its own colour */
-[data-skin="cyber"] :is(header b, .head, .rail-title, .big, .item.sel, button.primary, button.on, .pill, dialog h3, .start h1, .start .tag) {
+[data-skin="cyber"] :is(header b, .big, button.primary, button.on, .start h1) {
   text-shadow: 0 0 1px currentColor, 0 0 6px currentColor, 0 0 18px color-mix(in srgb, currentColor 55%, transparent); }
+/* small words are to be read: at most a faint edge, no halo to blur them (Kaspar, 2026-11-18: the red headers were hard to read) */
+[data-skin="cyber"] :is(.head, .item.sel, .pill, dialog h3, .start .tag) { text-shadow: 0 0 2px color-mix(in srgb, currentColor 35%, transparent); }
 [data-skin="cyber"] button.primary { box-shadow: var(--inner), inset 0 0 12px rgba(252, 238, 10, .22); }
 [data-skin="cyber"] :is(button.primary:hover, button.danger:hover) { text-shadow: none; }
 

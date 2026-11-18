@@ -206,6 +206,176 @@ def _build_problem(name: str, files: dict) -> dict:
     return r
 
 
+def clean_timeline(animation) -> dict:
+    """An animation's timeline as Monet keeps it: {fps, length, tracks: {joint: [[frame, value], …]}, lights: {light,
+    room or haze: [[frame, level 0…1], …]}, actions: [{frame, do: pause|goto, to, hold}], patterns}, frames whole and
+    within 0…length (an action from 1: playing starts at 0). A Problem says what is wrong."""
+    if not isinstance(animation, dict):
+        raise Problem("an animation is {fps, length, tracks}")
+    fps, length, tracks = animation.get("fps", 30), animation.get("length", 120), animation.get("tracks") or {}
+    if not (isinstance(fps, int) and 1 <= fps <= 120):
+        raise Problem("fps is a whole number from 1 to 120")
+    if not (isinstance(length, int) and 1 <= length <= 100_000):
+        raise Problem("length is a whole number of frames from 1 to 100000")
+    if not isinstance(tracks, dict) or len(tracks) > 200:
+        raise Problem("tracks are {joint: [[frame, value], …]}, at most 200 of them")
+    clean = {"fps": fps, "length": length, "tracks": {}}
+    for joint, keys in tracks.items():
+        if not re.match(r"^[A-Za-z0-9_.-]{1,80}$", str(joint)):
+            raise Problem(f"{joint!r} is not the name of a joint")
+        if not isinstance(keys, list) or len(keys) > 5000:
+            raise Problem(f"{joint}: the keys are a list of [frame, value], at most 5000")
+        kept = {}
+        for k in keys:
+            ok = isinstance(k, list) and len(k) == 2 and isinstance(k[0], int) and not isinstance(k[0], bool) \
+                and isinstance(k[1], (int, float)) and not isinstance(k[1], bool) and math.isfinite(k[1])
+            if not ok or not 0 <= k[0] <= length:
+                raise Problem(f"{joint}: a key is [frame, value], the frame whole and from 0 to {length}")
+            kept[k[0]] = float(k[1])
+        if kept:
+            clean["tracks"][str(joint)] = [[f, kept[f]] for f in sorted(kept)]
+    lights = animation.get("lights") or {}
+    if not isinstance(lights, dict) or len(lights) > 40:
+        raise Problem("lights are {light: [[frame, level], …]}, levels from 0 to 1, at most 40 of them (room and haze among them)")
+    for light, keys in lights.items():
+        if not lamps.NAME.match(str(light)):
+            raise Problem(f"{light!r} is not the name of a light (or room, or haze)")
+        if not isinstance(keys, list) or len(keys) > 5000:
+            raise Problem(f"{light}: the keys are a list of [frame, level], at most 5000")
+        kept = {}
+        for k in keys:
+            ok = isinstance(k, list) and len(k) == 2 and isinstance(k[0], int) and not isinstance(k[0], bool) \
+                and isinstance(k[1], (int, float)) and not isinstance(k[1], bool) and 0 <= k[1] <= 1
+            if not ok or not 0 <= k[0] <= length:
+                raise Problem(f"{light}: a key is [frame, level], the frame whole from 0 to {length}, the level from 0 to 1")
+            kept[k[0]] = float(k[1])
+        if kept:
+            clean.setdefault("lights", {})[str(light)] = [[f, kept[f]] for f in sorted(kept)]
+    actions = animation.get("actions") or []
+    if not isinstance(actions, list) or len(actions) > 500:
+        raise Problem("actions are a list of {frame, do}, at most 500")
+    acts = {}
+    for a in actions:
+        whole = lambda v: isinstance(v, int) and not isinstance(v, bool)
+        if not isinstance(a, dict) or a.get("do") not in ACTIONS or not whole(a.get("frame")) or not 1 <= a["frame"] <= length:
+            raise Problem(f"an action is {{frame, do}}: do is {' or '.join(ACTIONS)}, the frame whole and from 1 to {length}")
+        if set(a) - {"frame", "do", *ACTIONS[a["do"]]}:
+            raise Problem(f"a {a['do']} has only {', '.join(['frame', 'do', *ACTIONS[a['do']]])}")
+        if a["frame"] in acts:
+            raise Problem(f"two actions at frame {a['frame']}: one to a frame")
+        one = {"frame": a["frame"], "do": a["do"]}
+        if a["do"] == "goto":
+            if not whole(a.get("to")) or not 0 <= a["to"] <= length or a["to"] == a["frame"]:
+                raise Problem(f"a goto at {a['frame']} has `to`: a whole frame from 0 to {length}, not its own")
+            one["to"] = a["to"]
+        if "hold" in a:
+            h = a["hold"]
+            if isinstance(h, bool) or not isinstance(h, (int, float)) or not 0 <= h <= 10:
+                raise Problem("a pause holds a video from 0 to 10 seconds")
+            if h:
+                one["hold"] = float(h)
+        acts[a["frame"]] = one
+    if acts:
+        clean["actions"] = [acts[f] for f in sorted(acts)]
+    # what the pixels of a light play over time (lights.PATTERNS): a key holds until the next one
+    patterns = animation.get("patterns") or {}
+    if not isinstance(patterns, dict) or len(patterns) > 16:
+        raise Problem("patterns are {light: [[frame, {kind, …}], …]}, at most 16 lights")
+    for light, keys in patterns.items():
+        if not lamps.NAME.match(str(light)) or light in lamps.SCENE:
+            raise Problem(f"{light!r} is not the name of a pixels light")
+        if not isinstance(keys, list) or len(keys) > 2000:
+            raise Problem(f"{light}: the patterns are a list of [frame, {{kind, …}}], at most 2000")
+        got = {}
+        for k in keys:
+            if not (isinstance(k, (list, tuple)) and len(k) == 2 and isinstance(k[0], int) and not isinstance(k[0], bool)
+                    and 0 <= k[0] <= length):
+                raise Problem(f"{light}: a pattern key is [frame, {{kind, …}}], the frame whole from 0 to {length}")
+            try:
+                got[k[0]] = lamps.pattern(k[1])
+            except ValueError as e:
+                raise Problem(f"{light} at frame {k[0]}: {e}") from None
+        if got:
+            clean.setdefault("patterns", {})[str(light)] = [[f, got[f]] for f in sorted(got)]
+    return clean
+
+
+STUDY_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,47}$")
+PART_NAME = re.compile(r"^[A-Za-z0-9_./-]{1,120}$")
+STYLES = ("rendered", "shaded", "hidden")
+
+
+def _keyed(what: str, keys, length: int, value, most: int = 5000) -> list:
+    """[[frame, value], …] in order, one to a frame, each value as `value` takes it (None where it is not one)."""
+    if not isinstance(keys, list) or len(keys) > most:
+        raise Problem(f"{what}: the keys are a list of [frame, value], at most {most}")
+    got = {}
+    for k in keys:
+        v = value(k[1]) if isinstance(k, (list, tuple)) and len(k) == 2 else None
+        if v is None or not (isinstance(k[0], int) and not isinstance(k[0], bool) and 0 <= k[0] <= length):
+            raise Problem(f"{what}: a key is [frame, value], the frame whole and from 0 to {length}")
+        got[k[0]] = v
+    return [[f, got[f]] for f in sorted(got)]
+
+
+def _number(lo: float, hi: float):
+    return lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and lo <= v <= hi else None
+
+
+def _view(v):
+    """A camera as a study keys it: {proj: persp|ortho, p: position, t: what it looks at, u: up, z: zoom, fov}."""
+    vec = lambda x: [float(a) for a in x] if isinstance(x, list) and len(x) == 3 and all(
+        isinstance(a, (int, float)) and not isinstance(a, bool) and math.isfinite(a) and abs(a) < 1e7 for a in x) else None
+    if not isinstance(v, dict) or v.get("proj", "persp") not in ("persp", "ortho"):
+        return None
+    p, t, u = vec(v.get("p")), vec(v.get("t")), vec(v.get("u", [0, 0, 1]))
+    z, fov = _number(1e-4, 1e4)(v.get("z", 1)), _number(5, 120)(v.get("fov", 35))
+    if None in (p, t, u, z, fov) or not any(u):
+        return None
+    return {"proj": v.get("proj", "persp"), "p": p, "t": t, "u": u, "z": z, "fov": fov}
+
+
+def clean_study(study) -> dict:
+    """A motion study as Monet keeps it: a timeline (clean_timeline) of the assembly `of`, and what the view does on it:
+    the camera keyed ({proj, p, t, u, z, fov}), a section along an axis with its position keyed (0…1 across the part),
+    parts shown or hidden (1, 0: held from key to key), parts see-through (opacity 1 … 0.05: straight between keys),
+    and the style and edges it is seen in."""
+    if not isinstance(study, dict):
+        raise Problem("a study is {of, fps, length, tracks, camera, section, visible, clear, view}")
+    clean = clean_timeline(study)
+    length = clean["length"]
+    of = study.get("of")
+    if of is not None:
+        if not re.match(rf"^{_NOTE}$", str(of)):
+            raise Problem(f"of: {of!r} is not the name of a Note")
+        clean["of"] = of
+    if study.get("camera"):
+        clean["camera"] = _keyed("camera", study["camera"], length, _view, 2000)
+    section = study.get("section")
+    if section:
+        if not isinstance(section, dict) or section.get("axis", "Z") not in ("X", "Y", "Z") or not isinstance(section.get("flip", False), bool):
+            raise Problem("section is {axis: X|Y|Z, flip, keys: [[frame, 0…1], …]}")
+        clean["section"] = {"axis": section.get("axis", "Z"), "flip": section.get("flip", False),
+                            "keys": _keyed("section", section.get("keys") or [], length, _number(0, 1))}
+    for field, value, what in (("visible", lambda v: float(v) if v in (0, 1) and not isinstance(v, bool) else None, "1 shown, 0 hidden"),
+                               ("clear", _number(0.05, 1), "the opacity, from 1 down to 0.05")):
+        lines = study.get(field) or {}
+        if not isinstance(lines, dict) or len(lines) > 500:
+            raise Problem(f"{field} is {{part: [[frame, value], …]}} ({what}), at most 500 parts")
+        for part, keys in lines.items():
+            if not PART_NAME.match(str(part)):
+                raise Problem(f"{field}: {part!r} is not the name of a part")
+            got = _keyed(f"{field} of {part}", keys, length, value)
+            if got:
+                clean.setdefault(field, {})[str(part)] = got
+    view = study.get("view")
+    if view:
+        if not isinstance(view, dict) or view.get("style", "rendered") not in STYLES or not isinstance(view.get("edges", True), bool) or set(view) - {"style", "edges"}:
+            raise Problem(f"view is {{style: {'|'.join(STYLES)}, edges: true|false}}")
+        clean["view"] = dict(view)
+    return clean
+
+
 class Workspaces:
     def __init__(self, storage: str | Path, templates: str | Path, profiles: str | Path):
         self.storage = Path(storage).resolve()
@@ -350,9 +520,9 @@ class Workspace:
                 (coming / "out" / ".times.json").write_text(json.dumps(times, indent=1))
                 settings = src.settings
                 kept = {k: settings[k] for k in ("printer", "material", "looks") if k in settings}
-                anims = {n: a for n, a in (settings.get("animations") or {}).items() if n in take}
-                if anims:
-                    kept["animations"] = anims
+                studies = {n: s for n, s in src.studies().items() if s.get("of", n) in take}
+                if studies:
+                    kept["studies"] = studies
                 (coming / "monet.json").write_text(json.dumps(kept, indent=1) + "\n")
                 try:
                     coming.rename(target)      # there whole, or not at all
@@ -519,112 +689,53 @@ class Project:
             self.touch()
             return looks
 
-    def set_animation(self, note: str, animation: dict | None) -> dict:
-        """The keyframes of an assembly's joints, from the canvas's timeline: {fps, length, tracks: {joint: [[frame,
-        value], …]}, lights: {light, room or haze: [[frame, level 0…1], …]}, actions: [{frame, do: pause|goto, to, hold}]}, frames whole and within 0…length (an action from 1:
-        playing starts at 0). None takes it away. Kept in monet.json beside the looks:
-        nothing is built from it, and an archive carries it."""
-        if not re.match(rf"^{_NOTE}$", str(note)):
-            raise Problem(f"{note!r} is not the name of a Note")
-        clean = None
-        if animation is not None:
-            if not isinstance(animation, dict):
-                raise Problem("an animation is {fps, length, tracks}")
-            fps, length, tracks = animation.get("fps", 30), animation.get("length", 120), animation.get("tracks") or {}
-            if not (isinstance(fps, int) and 1 <= fps <= 120):
-                raise Problem("fps is a whole number from 1 to 120")
-            if not (isinstance(length, int) and 1 <= length <= 100_000):
-                raise Problem("length is a whole number of frames from 1 to 100000")
-            if not isinstance(tracks, dict) or len(tracks) > 200:
-                raise Problem("tracks are {joint: [[frame, value], …]}, at most 200 of them")
-            clean = {"fps": fps, "length": length, "tracks": {}}
-            for joint, keys in tracks.items():
-                if not re.match(r"^[A-Za-z0-9_.-]{1,80}$", str(joint)):
-                    raise Problem(f"{joint!r} is not the name of a joint")
-                if not isinstance(keys, list) or len(keys) > 5000:
-                    raise Problem(f"{joint}: the keys are a list of [frame, value], at most 5000")
-                kept = {}
-                for k in keys:
-                    ok = isinstance(k, list) and len(k) == 2 and isinstance(k[0], int) and not isinstance(k[0], bool) \
-                        and isinstance(k[1], (int, float)) and not isinstance(k[1], bool) and math.isfinite(k[1])
-                    if not ok or not 0 <= k[0] <= length:
-                        raise Problem(f"{joint}: a key is [frame, value], the frame whole and from 0 to {length}")
-                    kept[k[0]] = float(k[1])
-                if kept:
-                    clean["tracks"][str(joint)] = [[f, kept[f]] for f in sorted(kept)]
-            lights = animation.get("lights") or {}
-            if not isinstance(lights, dict) or len(lights) > 40:
-                raise Problem("lights are {light: [[frame, level], …]}, levels from 0 to 1, at most 40 of them (room and haze among them)")
-            for light, keys in lights.items():
-                if not lamps.NAME.match(str(light)):
-                    raise Problem(f"{light!r} is not the name of a light (or room, or haze)")
-                if not isinstance(keys, list) or len(keys) > 5000:
-                    raise Problem(f"{light}: the keys are a list of [frame, level], at most 5000")
-                kept = {}
-                for k in keys:
-                    ok = isinstance(k, list) and len(k) == 2 and isinstance(k[0], int) and not isinstance(k[0], bool) \
-                        and isinstance(k[1], (int, float)) and not isinstance(k[1], bool) and 0 <= k[1] <= 1
-                    if not ok or not 0 <= k[0] <= length:
-                        raise Problem(f"{light}: a key is [frame, level], the frame whole from 0 to {length}, the level from 0 to 1")
-                    kept[k[0]] = float(k[1])
-                if kept:
-                    clean.setdefault("lights", {})[str(light)] = [[f, kept[f]] for f in sorted(kept)]
-            actions = animation.get("actions") or []
-            if not isinstance(actions, list) or len(actions) > 500:
-                raise Problem("actions are a list of {frame, do}, at most 500")
-            acts = {}
-            for a in actions:
-                whole = lambda v: isinstance(v, int) and not isinstance(v, bool)
-                if not isinstance(a, dict) or a.get("do") not in ACTIONS or not whole(a.get("frame")) or not 1 <= a["frame"] <= length:
-                    raise Problem(f"an action is {{frame, do}}: do is {' or '.join(ACTIONS)}, the frame whole and from 1 to {length}")
-                if set(a) - {"frame", "do", *ACTIONS[a["do"]]}:
-                    raise Problem(f"a {a['do']} has only {', '.join(['frame', 'do', *ACTIONS[a['do']]])}")
-                if a["frame"] in acts:
-                    raise Problem(f"two actions at frame {a['frame']}: one to a frame")
-                one = {"frame": a["frame"], "do": a["do"]}
-                if a["do"] == "goto":
-                    if not whole(a.get("to")) or not 0 <= a["to"] <= length or a["to"] == a["frame"]:
-                        raise Problem(f"a goto at {a['frame']} has `to`: a whole frame from 0 to {length}, not its own")
-                    one["to"] = a["to"]
-                if "hold" in a:
-                    h = a["hold"]
-                    if isinstance(h, bool) or not isinstance(h, (int, float)) or not 0 <= h <= 10:
-                        raise Problem("a pause holds a video from 0 to 10 seconds")
-                    if h:
-                        one["hold"] = float(h)
-                acts[a["frame"]] = one
-            if acts:
-                clean["actions"] = [acts[f] for f in sorted(acts)]
-            # what the pixels of a light play over time (lights.PATTERNS): a key holds until the next one
-            patterns = animation.get("patterns") or {}
-            if not isinstance(patterns, dict) or len(patterns) > 16:
-                raise Problem("patterns are {light: [[frame, {kind, …}], …]}, at most 16 lights")
-            for light, keys in patterns.items():
-                if not lamps.NAME.match(str(light)) or light in lamps.SCENE:
-                    raise Problem(f"{light!r} is not the name of a pixels light")
-                if not isinstance(keys, list) or len(keys) > 2000:
-                    raise Problem(f"{light}: the patterns are a list of [frame, {{kind, …}}], at most 2000")
-                got = {}
-                for k in keys:
-                    if not (isinstance(k, (list, tuple)) and len(k) == 2 and isinstance(k[0], int) and not isinstance(k[0], bool)
-                            and 0 <= k[0] <= length):
-                        raise Problem(f"{light}: a pattern key is [frame, {{kind, …}}], the frame whole from 0 to {length}")
-                    try:
-                        got[k[0]] = lamps.pattern(k[1])
-                    except ValueError as e:
-                        raise Problem(f"{light} at frame {k[0]}: {e}") from None
-                if got:
-                    clean.setdefault("patterns", {})[str(light)] = [[f, got[f]] for f in sorted(got)]
+    def studies(self) -> dict:
+        """The project's motion studies, by name: monet.json's `studies`, and the timeline an assembly had before
+        there were studies (`animations`), as a study named after it, of it."""
+        settings = self.settings
+        out = dict(settings.get("studies") or {})
+        for note, anim in (settings.get("animations") or {}).items():
+            out.setdefault(note, {**anim, "of": note})
+        return out
+
+    def animations(self) -> dict:
+        """Each assembly's own study (the one named after it), as the timelines were kept before studies."""
+        return {n: {k: v for k, v in s.items() if k != "of"} for n, s in self.studies().items() if s.get("of", n) == n}
+
+    def set_study(self, name: str, study: dict | None) -> dict:
+        """A motion study, named (clean_study), or (None) taken away. Kept in monet.json beside the looks: nothing is
+        built from it, an archive carries it, and the canvas plays it. Answers every study."""
+        if not STUDY_NAME.match(str(name)):
+            raise Problem("a study's name is letters, digits, spaces, _ . -, beginning with a letter or digit, at most 48")
+        clean = None if study is None else clean_study(study)
         with self.lock:
             settings = self.settings
-            animations = settings.setdefault("animations", {})
+            studies = settings.setdefault("studies", {})
+            for note, anim in (settings.pop("animations", None) or {}).items():      # the timelines of before: studies now
+                studies.setdefault(note, {**anim, "of": note})
             if clean is None:
-                animations.pop(note, None)
+                studies.pop(name, None)
             else:
-                animations[note] = clean
+                studies[name] = clean
             (self.dir / "monet.json").write_text(json.dumps(settings, indent=1) + "\n")
             self.touch()
-            return animations
+        return self.studies()
+
+    def set_animation(self, note: str, animation: dict | None) -> dict:
+        """An assembly's own timeline (its study named after it), as it was set before there were studies: what the
+        study has besides its timeline (camera, section, parts shown and see-through, view) stays as it is. Answers
+        every assembly's own study, as `animations` were."""
+        if not re.match(rf"^{_NOTE}$", str(note)):
+            raise Problem(f"{note!r} is not the name of a Note")
+        if animation is None:
+            self.set_study(note, None)
+        else:
+            if not isinstance(animation, dict):
+                raise Problem("an animation is {fps, length, tracks}")
+            had = self.studies().get(note) or {}
+            keep = {k: v for k, v in had.items() if k in ("camera", "section", "visible", "clear", "view")}
+            self.set_study(note, {**keep, **animation, "of": note})
+        return self.animations()
 
     @property
     def tolerance(self) -> float:
@@ -669,8 +780,8 @@ class Project:
     def keep(self, files: dict, by: str = "agent") -> dict:
         """What a folder keeps (as kept() gives it), brought in: **only what the agent's door may do anyway.** A check
         the project does not have is added. A check it has is never changed and never removed, whatever the folder
-        says: that is the person's, in the canvas, and is answered under `left`. Printer, material, looks and
-        animations are set as the folder has them (an agent may set those); none is taken away."""
+        says: that is the person's, in the canvas, and is answered under `left`. Printer, material, looks, animations and
+        studies are set as the folder has them (an agent may set those); none is taken away."""
         if not isinstance(files, dict) or len(files) > MAX_ARCHIVE_FILES or sum(len(str(v)) for v in files.values()) > 2_000_000:
             raise Problem("files is {name: text}: the checks and the settings of one project")
         added, did, left = {}, [], {}
@@ -689,16 +800,20 @@ class Project:
                         self.set_profile(doc.get("printer") or None, doc.get("material") or None)
                         did.append("printer and material")
                     for note, anim in (doc.get("animations") or {}).items() if isinstance(doc.get("animations"), dict) else ():
-                        if anim != (now.get("animations") or {}).get(note):
+                        if anim != self.animations().get(note):
                             self.set_animation(note, anim)
                             did.append(f"the animation of {note}")
+                    for name, study in (doc.get("studies") or {}).items() if isinstance(doc.get("studies"), dict) else ():
+                        if study != self.studies().get(name):
+                            self.set_study(name, study)
+                            did.append(f"the study {name}")
                     for part, look in (doc.get("looks") or {}).items() if isinstance(doc.get("looks"), dict) else ():
                         if isinstance(look, dict) and look != (now.get("looks") or {}).get(part):
                             self.set_look([part], look.get("material"), look.get("color"))
                             did.append(f"the look of {part}")
                 except Problem as e:
                     say.append(str(e))
-                say += [f"{k}: not a setting Monet keeps" for k in doc if k not in ("printer", "material", "looks", "animations")]
+                say += [f"{k}: not a setting Monet keeps" for k in doc if k not in ("printer", "material", "looks", "animations", "studies")]
             elif (m := re.fullmatch(rf"({_NOTE})\.checks\.json", name)) and isinstance(doc, dict) and isinstance(doc.get("checks"), list):
                 note = m.group(1)
                 if note not in self.files():
@@ -1400,6 +1515,6 @@ class Project:
             row["uses"] = sorted(got & (set(sources) - {name}))
         return {"project": self.name, "rev": self.rev, "printer": self.settings.get("printer"), "material": self.settings.get("material"),
                 "looks": self.settings.get("looks", {}),
-                "animations": self.settings.get("animations", {}),
+                "animations": self.animations(), "studies": self.studies(),
                 "version": head["n"] if head else None, "notes": rows, "main": main_of(rows, self.name),
                 "brief": self.brief_row()}      # PROJECT.md: None until one is written

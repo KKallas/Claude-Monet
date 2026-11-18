@@ -266,6 +266,22 @@ dialog.ask { width: min(420px, 92vw); }      /* the page's own alert and confirm
 .joint .dial { flex: 1; }
 .joint .dial input.num { flex: 1; }
 .dial-pop { position: fixed; z-index: 960; width: 272px; padding: 10px 12px 12px; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, .55); outline: none; user-select: none; }
+.term-bar button { white-space: nowrap; }
+.term-size { display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; }
+.term-size b { min-width: 2ch; text-align: center; font-weight: 600; color: var(--text-muted); font-size: 12px; }
+.term-size button { padding: 2px 7px; }
+/* the Terminal panel with files held over it: they are given to what runs there (terminal.js attach) */
+.term.dropping .term-body { outline: 2px dashed var(--accent); outline-offset: -6px; }
+.term.dropping .term-body::after { content: 'Drop: kept in the project\'s attachments/ and given to the agent'; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 8px 14px; background: rgba(5, 7, 12, .9); border: 1px solid var(--accent); color: var(--text-bright); font-size: 13px; pointer-events: none; }
+/* a sheet beside the panel for what is seldom typed (pop.js): a joint's every property, its range */
+.edit-pop { width: 300px; max-height: calc(100vh - 16px); overflow: auto; user-select: text; }
+.edit-pop.wide { width: 360px; }
+.edit-pop .pop-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.edit-pop .line input:not([type=checkbox]), .edit-pop .line select { min-width: 0; }
+.edit-pop .line input[data-r] { flex: 1; }
+.edit-pop p.muted { margin: 6px 0 0; font-size: 11.5px; }
+button.inline { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; border-bottom: 1px dotted var(--text-muted); border-radius: 0; }
+button.inline:hover { color: var(--text-bright); border-bottom-color: var(--accent); }
 .dial-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .dial-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--text-muted); }
 .dial-read { font-size: 22px; font-weight: 600; line-height: 1; color: var(--text-bright); white-space: nowrap; }

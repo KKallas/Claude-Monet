@@ -795,6 +795,12 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         p, name = note_of(request, ws)
         return {"animations": p.set_animation(name, body.get("animation"))}
 
+    def put_study(request, ws, body):
+        """A motion study (PUT {study}) or (DELETE) none: its timeline, camera, section and parts shown and see-through,
+        kept in the project; nothing built from it."""
+        p = ws.project(request.path_params["project"])
+        return {"studies": p.set_study(request.path_params["study"], None if request.method == "DELETE" else body.get("study"))}
+
     def put_placed(request, ws, body):
         """An instance of another Note put at one of this Note's snap points (PUT {note, at, turn}), or taken away
         (DELETE): written into its PLACED, which build() reads, so the agent builds it again."""
@@ -984,6 +990,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route(n + "/ground", api(put_ground), methods=["PUT"]),
         Route(n + "/placed/{instance}", api(put_placed), methods=["PUT", "DELETE"]),
         Route(n + "/animation", api(put_animation), methods=["PUT"]),
+        Route("/w/{wid}/api/p/{project}/studies/{study}", api(put_study), methods=["PUT", "DELETE"]),
         Route(n + "/pose", api(pose), methods=["POST"]),
         Route(n + "/checks", api(add_check), methods=["POST"]),
         Route(n + "/checks/{check}", api(put_check), methods=["PUT", "DELETE"]),
