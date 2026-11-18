@@ -207,12 +207,17 @@ async def test_a_file_given_in_the_panel_is_kept_in_the_folder_and_its_path_past
         await ws.send(json.dumps({"token": "the-token-of-this-computer", "run": "shell", "cols": 120, "rows": 24}))
         json.loads(await ws.recv())
 
+        echoed = b""      # what the terminal said meanwhile: the pasted path may come back before "attached" does
+
         async def give(name, data):
+            nonlocal echoed
             await ws.send(json.dumps({"t": "file", "name": name, "data": data}))
             async with asyncio.timeout(10):
                 while True:
                     m = await ws.recv()
-                    if isinstance(m, str) and json.loads(m).get("t") == "attached":
+                    if isinstance(m, bytes):
+                        echoed += m
+                    elif json.loads(m).get("t") == "attached":
                         return json.loads(m)
         b64 = base64.b64encode(picture).decode()
         first = await give("My screen shot.png", b64)
@@ -220,7 +225,9 @@ async def test_a_file_given_in_the_panel_is_kept_in_the_folder_and_its_path_past
         assert (await give("My screen shot.png", b64))["path"] == "attachments/My-screen-shot-2.png"      # never over another
         assert (await give("../../../etc/passwd", base64.b64encode(b"x").decode()))["path"] == "attachments/passwd"
         assert "error" in await give("bad.pdf", "not base64!")
-        assert b"My-screen-shot.png" in await read_until(ws, b"My-screen-shot.png")      # the path, pasted
+        if b"My-screen-shot.png" not in echoed:
+            echoed += await read_until(ws, b"My-screen-shot.png")
+        assert b"My-screen-shot.png" in echoed      # the path, pasted
     assert (tmp_path / "attachments" / "My-screen-shot.png").read_bytes() == picture
     assert sorted(f.name for f in (tmp_path / "attachments").iterdir()) == ["My-screen-shot-2.png", "My-screen-shot.png", "passwd"]
     assert not (tmp_path.parent / "etc").exists()
