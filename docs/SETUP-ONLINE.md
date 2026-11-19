@@ -58,6 +58,26 @@ them scan the QR), and they choose their own password on the first visit. Everyt
 is in `/opt/monet/data` (`users.json`, the audit log `log.jsonl`, the session secret). No Note is
 ever run on the droplet: people's agents build on their own computers and upload.
 
+## 6. Sharing a study (signing in with GitHub)
+
+A motion study can be shared (Motion → the Study card → **Share…**): whoever has the link and signs in with
+GitHub watches it, and writes notes on it as issues of the project's repository, on GitHub. Monet keeps
+none of what they write, and no GitHub token: it asks GitHub once who signed in, and keeps a cookie in their
+browser. For that the server needs a GitHub **OAuth App**, made once:
+
+1. On GitHub: Settings → Developer settings → OAuth Apps → **New OAuth App**.
+   - Homepage URL: `https://<domain>`
+   - Authorization callback URL: `https://<domain>/auth/github/back`
+2. **Generate a new client secret**. Put both in `/opt/monet/.env`:
+   ```
+   MONET_GITHUB_ID=<Client ID>
+   MONET_GITHUB_SECRET=<the secret>
+   ```
+3. `cd /opt/monet && docker compose up -d` (or the next deploy) takes them in.
+
+No scope is asked for: GitHub shows the viewer only "read your public profile". Without these two, links
+can be made but nobody can open them, and the Share sheet says so.
+
 ## Check
 
 - `https://monet.example.org` shows the login page.

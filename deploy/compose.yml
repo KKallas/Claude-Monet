@@ -27,6 +27,8 @@ services:
       MONET_BASE_URL: https://${DOMAIN}
       MONET_MAX_USERS: ${MONET_MAX_USERS:-20}
       MONET_NOTE: ${MONET_NOTE:-}
+      MONET_GITHUB_ID: ${MONET_GITHUB_ID:-}          # signing in with GitHub, for shared studies (docs/SETUP-ONLINE.md)
+      MONET_GITHUB_SECRET: ${MONET_GITHUB_SECRET:-}
     volumes:
       - ./storage:/storage
       - ./data:/data

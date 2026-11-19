@@ -20,8 +20,9 @@ class Server:
     """The script's side of a server, as Monet local uses it: the files it has, what was sent, what was built."""
     URL = "https://monet.example/w/KEY"
 
-    def __init__(self, files=None, off=False, brief="", kept=None, there=True):
+    def __init__(self, files=None, off=False, brief="", kept=None, there=True, docs=None, old=False):
         self.files, self.sent, self.builds, self.off, self.brief = dict(files or {}), [], 0, off, brief
+        self.docs, self.old = dict(docs or {}), old      # the other Markdown; a server from before there were docs
         self.kept, self.asked, self.there = dict(kept or {}), [], there      # checks and settings; what keep was asked; is there a project
 
     def _host(self):
@@ -62,6 +63,19 @@ class Server:
             self.files[a["note"]] = a["source"]
             self.sent.append(a["note"])
             return {"note": a["note"]}
+        if tool == "docs":
+            if self.old:
+                raise SystemExit("monet: no tool 'docs'; there are: brief, write_brief")
+            return {"docs": ([{"path": "PROJECT.md", "text": self.brief}] if self.brief else []) + [{"path": k, "text": v} for k, v in self.docs.items()]}
+        if tool == "write_doc":
+            if a["path"] == "PROJECT.md":
+                self.brief = a["text"]
+            elif a["text"].strip():
+                self.docs[a["path"]] = a["text"]
+            else:
+                self.docs.pop(a["path"], None)
+            self.sent.append(a["path"])
+            return {"path": a["path"]}
         if tool == "brief":
             return {"project": a["project"], "text": self.brief}
         if tool == "write_brief":
@@ -305,6 +319,43 @@ def test_the_brief_is_kept_in_step_like_a_note_and_builds_nothing(tmp_path):
     other.mkdir()
     sync(other, server).step()
     assert (other / "PROJECT.md").read_text() == "# p\n\nmine\n" and (other / "a.py").exists()
+
+
+def test_every_doc_is_kept_in_step_as_the_brief_is(tmp_path):
+    """The project's other Markdown (its docs, its own skills) goes both ways as the brief does: made here it is sent,
+    made in the canvas it is taken, into its folder; taken away in the canvas it goes here too; changed on both sides
+    it is left alone. Nothing of it is built."""
+    server = Server({"a": NOTE}, docs={"docs/wiring.md": "# Wiring\n"})
+    s = sync(tmp_path, server)
+    s.step()
+    assert (tmp_path / "docs" / "wiring.md").read_text() == "# Wiring\n"
+    builds = server.builds
+    (tmp_path / ".claude" / "skills" / "print").mkdir(parents=True)
+    (tmp_path / ".claude" / "skills" / "print" / "SKILL.md").write_text("# Print\n")
+    (tmp_path / "attachments").mkdir()
+    (tmp_path / "attachments" / "drawing.md").write_text("not a doc\n")      # what was given to the agent stays here
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "x.md").write_text("not a doc\n")
+    assert s.changed()
+    s.step()
+    assert server.docs[".claude/skills/print/SKILL.md"] == "# Print\n" and server.builds == builds
+    assert "attachments/drawing.md" not in server.docs and "node_modules/x.md" not in server.docs
+    del server.docs["docs/wiring.md"]                                  # taken away in the canvas
+    s.step()
+    assert not (tmp_path / "docs" / "wiring.md").exists()
+    (tmp_path / ".claude" / "skills" / "print" / "SKILL.md").write_text("# Print\n\nmine\n")
+    server.docs[".claude/skills/print/SKILL.md"] = "# Print\n\ntheirs\n"
+    s.step()
+    assert server.docs[".claude/skills/print/SKILL.md"].endswith("theirs\n")
+    assert (tmp_path / ".claude" / "skills" / "print" / "SKILL.md").read_text().endswith("mine\n")
+    assert any(".claude/skills/print/SKILL.md was changed here and on the server" in line for line in local.LOG)
+
+
+def test_a_server_from_before_docs_keeps_the_brief_alone(tmp_path):
+    server = Server({"a": NOTE}, brief="# p\n", old=True)
+    (tmp_path / "notes.md").write_text("# notes\n")
+    sync(tmp_path, server).step()
+    assert (tmp_path / "PROJECT.md").read_text() == "# p\n" and server.sent == []
 
 
 def test_a_sitting_with_an_end_is_told_to_the_agent_and_said_before_it_is_over(tmp_path):

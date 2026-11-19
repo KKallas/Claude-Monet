@@ -23,7 +23,8 @@ import { noteTree, pathsTo } from './tree.js';
 import { found as foundNotes, noteStates, prune, query, sift } from './find.js';
 import { remote } from './remote.js';
 import { createTerminal } from './terminal.js';
-import { createBrief } from './brief.js';
+import { createDocs } from './docs.js';
+import { createShare } from './share.js';
 import { bomLines, grams, howWords, materialName, materialWords, partWords, poseLines, poseValues, torqueWords } from './facts.js';
 
 const $ = (s) => document.querySelector(s);
@@ -39,18 +40,22 @@ function ask(text, { yes = 'OK', no = 'Cancel', danger = false } = {}) {
 }
 const tell = (text) => ask(text, { no: null });
 const wid = location.pathname.split('/')[2];
-const root = `/w/${wid}/api`;
+// a shared study (/s/<token>): one study of one project, watched by someone signed in with GitHub; the page is the same,
+// with only what plays the study (share.js beside it). The server's share door answers nothing else
+const sharing = location.pathname.startsWith('/s/');
+const root = sharing ? `/s/${wid}/api` : `/w/${wid}/api`;
 const PALETTE = ['#e26f28', '#2896c8', '#3caa5a', '#be46aa', '#d2aa1e', '#5a64dc', '#dc4650', '#14a096'];
 const BASE = new THREE.Color('#b9c2d6'), PICK = new THREE.Color('#ffd23f'), CLASHED = new THREE.Color('#ff3b30');
 // an assembly: every part in a colour of its own, quiet enough that a tag or a pointed-at face still stands out
 const PARTS = ['#8fa8d6', '#d6a58f', '#9cc7a4', '#c9a3d0', '#d4c58a', '#8fc7cf', '#d49aa8', '#a9b0e0', '#b8cf94', '#e0b48a', '#9fb8b0', '#c7b1a0'];
 
-let terminal = null, brief = null;      // terminal.js, made further down
+let terminal = null, docs = null, share = null;      // terminal.js, docs.js and share.js, made further down
 async function api(path, method = 'GET', body) {
   const file = body instanceof Blob;      // an archive goes as it is, anything else as JSON
   const r = await fetch(root + path, { method, headers: body ? { 'content-type': file ? 'application/zip' : 'application/json' } : {}, body: file ? body : body ? JSON.stringify(body) : undefined });
   const data = await r.json().catch(() => ({}));
   if (r.status === 401 && data.login) { location.href = `/login?next=${encodeURIComponent(location.pathname + location.hash)}`; throw new Error('log in first'); }
+  if (r.status === 401 && data.github) { location.href = data.github; throw new Error('sign in with GitHub first'); }
   if (!r.ok) throw new Error(data.error || `error ${r.status}`);
   if (method !== 'GET') terminal?.poke();      // I changed something here: Monet local brings it into the folder
   return data;
@@ -1134,10 +1139,11 @@ const label = $('#dim'), spot = new THREE.Vector3();
 // (how they move: joints) -----------------------------------------------------------------------------------------
 const kindOf = (name) => S.proj?.notes.find((n) => n.name === name)?.kind;
 function roomBar() {
-  document.body.dataset.room = S.room;
+  const shown = S.docs ? 'docs' : S.room;      // Docs lies over the room it was opened from, which stays as it was
+  document.body.dataset.room = shown;
   syncCamera();
-  document.querySelectorAll('[data-room]').forEach((b) => b.classList.toggle('on', b.dataset.room === S.room));
-  document.querySelectorAll('[data-rooms]').forEach((el) => el.classList.toggle('away', !el.dataset.rooms.split(' ').includes(S.room)));
+  document.querySelectorAll('[data-room]').forEach((b) => b.classList.toggle('on', b.dataset.room === shown));
+  document.querySelectorAll('[data-rooms]').forEach((el) => el.classList.toggle('away', !el.dataset.rooms.split(' ').includes(shown)));
   document.querySelectorAll('[data-sketching]').forEach((el) => el.classList.toggle('away', S.room !== 'sketch' || !sketch.state.active));
   document.querySelectorAll('[data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === sketch.state.tool));
   const sized = sketch.state.tool === 'offset' || sketch.state.tool === 'fillet';
@@ -1156,7 +1162,6 @@ function roomBar() {
   remote.say();
   showPlanes();
   syncLights();
-  brief?.mark(S.proj?.brief);      // PROJECT.md: the button says whether the project has one
 }
 function startSketch(what) {
   S.room = 'sketch';
@@ -1173,6 +1178,10 @@ function leaveSketch() {
 const notice = (text) => { busy(text); setTimeout(() => { if (B.text === text && !B.clocked) busy(); }, 3500); };
 async function goRoom(room) {
   if (!S.proj) return;
+  // Docs: the project's words and scripts (docs.js). It lies over the room it was opened from: the poll's open() of a
+  // Note changed meanwhile goes on under it, and leaving it goes back there
+  if (room === 'docs') { S.docs = true; stopPlaying(); roomBar(); return docs.show(); }
+  if (S.docs) { S.docs = false; roomBar(); if (room === S.room) return; }
   if (room === 'sketch') {
     if (S.room === 'sketch') return;
     if (kindOf(S.note) !== 'note') {      // a sketch is drawn on a part: go to one first
@@ -1265,8 +1274,20 @@ $('#zoomSel').onclick = () => zoomToSelection();
 // the time on this computer's clock, for a file's name: 2026-11-14-20-15
 const stamp = (d = new Date()) => [d.getFullYear(), d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes()].map((n) => String(n).padStart(2, '0')).join('-');
 async function renderImage(width) {
+  const pad = await drawPicture(width);
+  if (!pad) return;
+  const blob = await new Promise((r) => pad.toBlob(r, 'image/png'));
+  busy();
+  if (!blob) { tell('The picture was not made: it is too big for this browser. Try a smaller one.'); return; }
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `${S.note}-${stamp()}.png` });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+  notice(`the picture is saved: ${pad.width} × ${pad.height} px`);
+}
+/** The view as it is, `width` pixels wide (selection and measurement left out), on a canvas of its own. */
+async function drawPicture(width) {
   const w = view.clientWidth, h = view.clientHeight;
-  if (!S.data?.report?.built || !w || !h) { notice('open a Note that builds first'); return; }
+  if (!S.data?.report?.built || !w || !h) { notice('open a Note that builds first'); return null; }
   const gl = renderer.getContext(), most = Math.min(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), gl.getParameter(gl.MAX_TEXTURE_SIZE), 8192);
   const k = Math.min(width / w, most / w, most / h), ratio = renderer.getPixelRatio();
   const sel = S.sel, hot = [S.hot, S.hotPart], seen = [selLines, selDots, dimLine, dimDots].map((o) => o.visible);
@@ -1288,15 +1309,9 @@ async function renderImage(width) {
   } finally {
     S.sel = sel; [S.hot, S.hotPart] = hot; paint();
     [selLines, selDots, dimLine, dimDots].forEach((o, i) => { o.visible = seen[i]; });
-    renderer.setPixelRatio(ratio); lamps.quality(false); resize(); wake();
+    renderer.setPixelRatio(ratio); lamps.quality(false); resize(); wake(); busy();
   }
-  const blob = await new Promise((r) => pad.toBlob(r, 'image/png'));
-  busy();
-  if (!blob) { tell('The picture was not made: it is too big for this browser. Try a smaller one.'); return; }
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `${S.note}-${stamp()}.png` });
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
-  notice(`the picture is saved: ${pad.width} × ${pad.height} px`);
+  return pad;
 }
 $('#shot').onclick = (e) => { const pop = $('#shotPop'); pop.hidden = !pop.hidden; e.currentTarget.classList.toggle('on', !pop.hidden); };
 $('#shotGo').onclick = () => renderImage(Number($('#shotSize').value));
@@ -1386,7 +1401,7 @@ function checkPose() {
   poseBusy = true;
   setTimeout(async () => {
     try {
-      if (!moving()) return;
+      if (!moving() || sharing) return;      // (a shared study is watched: the server answers no pose there)
       if (atHome()) { S.clash = []; return; }
       const free = Object.fromEntries(Object.entries(S.freePose).map(([b, m]) => [b, [0, 1, 2, 3].map((r) => m.slice(r * 4, r * 4 + 4))]));
       S.clash = (await api(`/p/${S.project}/n/${S.note}/pose`, 'POST', { values: S.pose, free })).clashes;
@@ -1588,6 +1603,7 @@ function play(name) {
 
 // the timeline along the bottom of the view in Motion (timeline.js): keys of the joints over frames, kept in the project
 const timeline = createTimeline($('#timeline'), {
+  readOnly: sharing,      // a shared study is played, not keyed
   pose: () => ({ ...S.pose, ...Object.fromEntries(Object.entries(lamps.levels).map(([k, v]) => [`~${k}`, v])), ...viewNow() }),
   first: (line) => (line[0] === '^' || line[0] === '%' ? 1 : undefined),      // a part was shown and solid before its first key
   setPose(values) {
@@ -1633,6 +1649,7 @@ function showTimeline() {
 let shownStudy = null;
 const studyKept = () => `monet.study.${S.project}`;
 function studyName() {
+  if (sharing) return S.state?.share?.study ?? S.note;      // the one shared, and only that
   let n = null;
   try { n = localStorage.getItem(studyKept()); } catch { /* none */ }
   const all = S.proj?.studies ?? {};
@@ -1988,7 +2005,8 @@ function studyCards() {
   const head = card('study', `Study · ${esc(name)}`, `
     <div class="line"><select id="studySel" title="the project's motion studies: a timeline each, with its own camera, section and parts">${list}</select>
       <button data-act="studynew" title="a new study of ${esc(S.note)}">New</button><button data-act="studyrename" title="rename this study">Rename</button>
-      <button class="danger" data-act="studydel" title="remove this study" ${name === S.note && !study ? 'disabled' : ''}>Remove</button></div>
+      <button class="danger" data-act="studydel" title="remove this study" ${name === S.note && !study ? 'disabled' : ''}>Remove</button>
+      <button data-act="studyshare" title="a link to watch this study, for anyone signed in with GitHub; their notes become issues of the project's repository" ${study ? '' : 'disabled'}>Share…</button></div>
     <div class="line"><label><input type="checkbox" id="studySection" ${on ? 'checked' : ''}> section</label>
       <select id="studyAxis" ${on ? '' : 'disabled'}>${['X', 'Y', 'Z'].map((a) => `<option ${a === axis ? 'selected' : ''}>${a}</option>`).join('')}</select>
       <label><input type="checkbox" id="studyFlip" ${sectionFlip ? 'checked' : ''} ${on ? '' : 'disabled'}> the other side</label></div>
@@ -2018,6 +2036,35 @@ function nameStudy(anchor, title, start, then) {
   };
   el.addEventListener('click', (e) => { const a = e.target.closest('[data-act]')?.dataset.act; if (a === 'close') closePop(); if (a === 'ok') go(); });
   el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+}
+/** Sharing the open study: a link to watch it (the share door), the repository its notes go to as issues. The link is
+ *  answered once, when it is made: the server keeps only its fingerprint. */
+async function shareStudy(anchor) {
+  const name = studyName(), base = `/p/${S.project}/studies/${encodeURIComponent(name)}/share`;
+  let got, link = '';
+  try { got = await api(base); } catch (e) { tell(e.message); return; }
+  const html = () => `<div class="pop-head"><b>Share ${esc(name)}</b><button class="x" data-act="close">×</button></div>
+    ${got.github ? '' : '<p class="err">Signing in with GitHub is not set up on this server (MONET_GITHUB_ID, MONET_GITHUB_SECRET): nobody can open a link yet.</p>'}
+    <p class="muted">Anyone signed in with GitHub who has the link can watch this study as built, and nothing else of the project: no source, no check, no other Note. A note they leave becomes an issue of the repository, written by them on GitHub; Monet keeps none of it.</p>
+    <div class="line"><span class="muted">Repository</span><input data-r="repo" value="${esc(got.repository ?? '')}" placeholder="owner/name" spellcheck="false"><button data-act="repo">Set</button></div>
+    ${link ? `<div class="line"><input readonly data-r="link" value="${esc(link)}"><button data-act="copy" data-what="link">Copy</button></div>
+      <div class="line"><input readonly data-r="md" value="${esc(`[▶ ${name}](${link})`)}"><button data-act="copy" data-what="md">Copy for a README</button></div>
+      <p class="muted">Shown this once: Monet keeps only a fingerprint of it. Lost, make a new one (the old one stops working).</p>`
+      : got.shared ? `<p>Shared since ${esc(new Date(got.shared.made).toLocaleString())}. The link was shown when it was made; a new one closes it.</p>` : '<p class="muted">Not shared.</p>'}
+    <div class="line"><button class="primary" data-act="make">${got.shared || link ? 'New link' : 'Make a link'}</button>${got.shared || link ? '<button class="danger" data-act="unshare">Close the link</button>' : ''}</div>`;
+  const el = pop(anchor, html(), { key: 'share', wide: true });
+  el.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-act]'), a = b?.dataset.act;
+    if (!a) return;
+    try {
+      if (a === 'close') { closePop(); return; }
+      if (a === 'copy') { await navigator.clipboard.writeText(el.querySelector(`[data-r="${b.dataset.what}"]`).value); notice('copied'); return; }
+      if (a === 'repo') { got.repository = (await api(`/p/${S.project}/repository`, 'PUT', { repository: el.querySelector('[data-r="repo"]').value })).repository; notice(got.repository ? `notes go to ${got.repository}` : 'no repository'); }
+      if (a === 'make') { const made = await api(base, 'POST'); link = made.link; got = { ...got, shared: { made: made.made } }; }
+      if (a === 'unshare') { if (!(await ask(`Close the link to ${name}? Whoever has it can no longer watch it.`, { yes: 'Close it', danger: true }))) return; got = await api(base, 'DELETE'); link = ''; }
+      refill(html());
+    } catch (err) { tell(err.message); }
+  });
 }
 const putStudy = async (name, study) => { S.proj.studies = (await api(`/p/${S.project}/studies/${encodeURIComponent(name)}`, study ? 'PUT' : 'DELETE', study ? { study } : undefined)).studies; };
 
@@ -2529,7 +2576,7 @@ async function openNow(project, note, late) {
   const names = S.proj.notes.map((n) => n.name);
   // a project opens on its main (the Note named as the project, or the biggest design), where there is one
   S.note = names.includes(note) ? note : (S.proj.main?.note ?? S.proj.notes.find((n) => n.kind === 'assembly')?.name ?? S.proj.notes.find((n) => n.kind === 'note')?.name ?? names[0] ?? null);
-  history.replaceState(null, '', `#${project}${S.note ? '/' + S.note : ''}`);
+  if (!sharing) history.replaceState(null, '', `#${project}${S.note ? '/' + S.note : ''}`);
   $('#projectName').textContent = project;
   if (changedNote) {
     S.sel = nothing(); S.inspect = null; S.tagSel = null; S.saveResult = null; S.hotPart = null; S.hidden = new Set(); explode = 0; sketch.end();
@@ -2598,6 +2645,7 @@ async function openNow(project, note, late) {
   }
   busy(); arriving();
   styleAll(); paint(); showTag(); renderPanel(true); showLast(); assemblyBar(); showSnaps(); showGhosts(); syncLights(); showTimeline();
+  if (S.docs) docs.poll();      // the Docs room over it: the list, and the open file if it changed and nothing is unsaved
   if (other && moving()) timeline.settle();      // back in Motion: posed and lit as the timeline stands, not as built
 }
 
@@ -2757,6 +2805,7 @@ function checkEditor(c) {
 
 function renderPanel(force) {
   showTimeline();
+  if (sharing) { share?.render(); return; }      // beside a shared study: its notes (share.js), nothing to change
   const panel = $('#panel'), putPanel = (html) => { panel.innerHTML = html; sift(panel, query(S.find)); };
   if (!force && panel.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) { S.stale = true; return; }
   S.stale = false;
@@ -2985,6 +3034,7 @@ $('#panel').addEventListener('click', (e) => {
     }));
     return;
   }
+  if (a === 'studyshare') { shareStudy(b); return; }
   if (a === 'studyrename') {
     const old = studyName();
     nameStudy(b, `Rename ${old}`, old, (name) => name !== old && act(async () => {
@@ -3167,7 +3217,7 @@ sheet.addEventListener('submit', async (e) => {
 });
 // what the page answers the agent with, through remote.js: where it is, its words, a picture, and going somewhere
 const hands = {
-  where: () => ({ project: S.project, note: S.note, room: S.room, kind: kindOf(S.note) ?? null, ...(S.find ? { find: S.find } : {}) }),
+  where: () => ({ project: S.project, note: S.note, room: S.docs ? 'docs' : S.room, kind: kindOf(S.note) ?? null, ...(S.find ? { find: S.find } : {}) }),
   screen() {
     const words = (el) => (el?.innerText ?? '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
     const panel = words($('#panel'));
@@ -3176,12 +3226,13 @@ const hands = {
       hidden: [...S.hidden], ...(S.room === 'motion' ? { pose: S.pose } : {}), busy: B.text || null, compare: S.compare ? true : undefined,
       panel: panel.slice(0, 8000), ...(panel.length > 8000 ? { cut: true } : {}) };
   },
-  async goto({ project = '', note = '', room = '', find } = {}) {
+  async goto({ project = '', note = '', room = '', find, doc = '' } = {}) {
     if (typeof find === 'string') setFind(find);      // Find, filled for the person: words, never code
     const other = project && project !== S.project;
     if (other || (note && note !== S.note)) await open(project || S.project, note || null);
     if (note && S.note !== note) throw new Error(`there is no Note "${note}" in ${S.project}: the canvas shows ${S.note ?? 'nothing'}`);
-    if (room && room !== S.room) await goRoom(room);
+    if (doc) { await goRoom('docs'); if (!(await docs.openFile(/\.md$/.test(doc) ? 'doc' : 'note', doc.replace(/\.py$/, '')))) throw new Error(`there is no ${doc} in ${S.project}`); }
+    else if (room && room !== (S.docs ? 'docs' : S.room)) await goRoom(room);
     return hands.where();
   },
   view() {
@@ -3196,11 +3247,22 @@ const hands = {
     return { ...hands.where(), png: out.toDataURL('image/png') };
   },
 };
-// the brief: the project in words, for whoever picks it up next (brief.js; PROJECT.md)
-brief = createBrief($('#briefBtn'), { project: () => S.project, api, ask, tell,
+// Docs: the project's words and scripts, and Monet's own (docs.js; PROJECT.md is the brief)
+docs = createDocs($('#docs'), $('#docsList'), { project: () => S.project, ask, tell, notice,
+  async call(path, method = 'GET', body) {
+    const r = await fetch(root + path, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+    const data = await r.json().catch(() => ({}));
+    if (r.status === 401 && data.login) { location.href = `/login?next=${encodeURIComponent(location.pathname + location.hash)}`; }
+    if (method !== 'GET' && r.ok) terminal?.poke();      // Monet local brings it into the folder at once
+    return { status: r.status, data };
+  },
   help: () => (/^https:\/\/github\.com\//.test(S.state?.version?.source ?? '') ? `${S.state.version.source}/blob/main/docs/REPOSITORY.md` : '') });
-// the terminal: this page to Monet local on this computer, never through the server (terminal.js)
-terminal = createTerminal(view, $('#termBtn'), { project: () => S.project, link: () => S.state?.agent ?? '',
+// beside a shared study: a note on it, for GitHub (share.js)
+if (sharing) share = createShare($('#panel'), view, { share: () => S.state?.share, frame: () => timeline.frame, fps: () => timeline.anim.fps, length: () => timeline.anim.length,
+  camera: () => cameraNow(), picture: (w) => drawPicture(w), pause: () => { stopPlaying(); timeline.pause(); }, notice, tell,
+  goTo(f, cam) { stopPlaying(); timeline.pause(); timeline.go(f); if (cam) viewTo({ '@camera': cam }); } });
+// the terminal: this page to Monet local on this computer, never through the server (terminal.js); not beside a shared study
+if (!sharing) terminal = createTerminal(view, $('#termBtn'), { project: () => S.project, link: () => S.state?.agent ?? '',
   mine: () => !!S.state && S.state.me.username === S.state.workspace.username,
   height(px) { if (under.terminal !== px) { under.terminal = px; resize(); wake(); } },      // it lies over the view: the picture is drawn for what is left
   // the one thing that closes the agent's door: another key (the line with the old one in it stops working at once)
@@ -3213,6 +3275,7 @@ $('#logout').onclick = async (e) => { e.preventDefault(); await fetch('/api/logo
 let dialled = false;
 async function start(project) {
   S.state = await api('/state');
+  if (sharing) return startShared();
   if (!dialled) { dialled = true; remote.start(root, hands, S.state.mine); }
   const mine = S.state.me.username === S.state.workspace.username;
   $('#wsName').textContent = mine ? S.state.me.name : `${S.state.workspace.name} (you are looking in as ${S.state.me.username})`;
@@ -3221,6 +3284,19 @@ async function start(project) {
   const want = project || (S.state.projects.includes(hp) ? hp : S.state.projects[0]);
   if (want) await open(want, project ? null : hn);
   else shut();
+}
+
+/** A shared study: its assembly, in Motion, at the moment the address names (#f=<frame>&c=<camera>), else its start. */
+async function startShared() {
+  const s = S.state.share, hash = new URLSearchParams(location.hash.slice(1));
+  $('#wsName').textContent = `${s.viewer} · a study of ${S.state.workspace.name}'s`;
+  let cam = null;
+  try { cam = hash.get('c') ? JSON.parse(hash.get('c')) : null; } catch { /* not a camera */ }
+  S.room = 'motion';
+  await open(s.project, s.note);
+  const f = Number(hash.get('f'));
+  if (Number.isFinite(f) && f > 0) timeline.go(f);
+  if (cam?.p && cam?.t) viewTo({ '@camera': cam });
 }
 
 // follow the agent: when the project moves, look again
@@ -3235,7 +3311,7 @@ setInterval(async () => {
     if (rev !== S.rev && !S.compare) await open(S.project, S.note);
   } catch { /* the server is away; try again */ }
 }, 500);
-window.addEventListener('hashchange', () => { const [p, n] = decodeURIComponent(location.hash.slice(1)).split('/'); if (p && (p !== S.project || (n && n !== S.note))) open(p, n); });
+if (!sharing) window.addEventListener('hashchange', () => { const [p, n] = decodeURIComponent(location.hash.slice(1)).split('/'); if (p && (p !== S.project || (n && n !== S.note))) open(p, n); });
 
 // a page left open over a deploy runs the build it was loaded with. While the next one is being built, the server says
 // so with how long it should take, and a note counts down to it; once it answers, the note becomes the button that
@@ -3284,7 +3360,7 @@ versionNow().then((v) => {
 });
 document.addEventListener('visibilitychange', lookForNewer);
 
-window.monet = { S, terminal, brief, groups, cube, lookAlong, controls, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom,
+window.monet = { S, terminal, docs, get share() { return share; }, groups, cube, lookAlong, controls, get camera() { return camera; }, scene, holo, drawn, sheets, look, sketch, planes, select, pick, boxPick, goRoom,
   axes, setJoint, goHome, play, stopPlaying, timeline, partPose, lamps, setLevel, startFilm, watchFilm, get film() { return film; }, get pictures() { return pictures; }, reach, tipAt: (name) => tipAt(model(), name, S.pose),
   ghosts, snapAt, placeAt: (name) => { S.placeAt = name; showSnaps(); renderPanel(true); } };   // for looking in from the console, and from scripts/shot.mjs
 resize();

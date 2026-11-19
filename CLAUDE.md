@@ -186,10 +186,33 @@ wrong:
   `status()` gives each row's `uses` (imports and `PLACED`) and the project's `main` (`workspace.main_of`: that Note, else a
   guess, `named: False`); `canvas/tree.js` makes the side panel's tree from them, the same in every room. Making a project
   of another design (`Workspace.project_of`) carries checks, so it is a route of the canvas API only.
+- **The Docs room** (Kaspar, 2026-11-19: "simple editor .md and scripts … formatted .md while editing in the same
+  window"): a fifth tab, `S.docs` lying over the room it was opened from (so the poll's `open()` goes on under it),
+  in place of the brief's dialog (brief.js is gone). `canvas/docs.js` with CodeMirror 6 (`canvas/editor.js`, loaded on
+  first use from esm.sh by the import map; the `@codemirror/*` and `@lezer/highlight` entries are exact module paths
+  so there is one `@codemirror/state`: change them together) draws Markdown as it is typed, marks dimmed; Read is
+  `canvas/markdown.js` (escaped first, tags only from its patterns; `tests/markdown.test.mjs`). It edits the project's
+  docs (`workspace.DOC_RE`/`is_doc`: `.md` up to four folders, `.claude/skills/…` too, never `versions/ out/ attachments/
+  node_modules/ .git`; `Project.docs/doc/write_doc`, a `was` sha and 409 against writing over a change) and the Notes'
+  Python (`PUT …/n/<note>/source`, written, never run: it waits for a build); Monet's own skill, scripts and docs are
+  read-only (`MANUAL`, a fixed list made at start). Unsaved text is kept in localStorage with the sha it was typed over.
+  Docs travel in archives and versions (`archived()`), and Monet local keeps them all in step (`docs()`/`doc()`,
+  a doc deleted in the canvas is deleted in the folder). The agent has `docs`/`write_doc` (no Note, no check).
+- **Sharing a study** (Kaspar, 2026-11-19: GitHub holds the notes, so Monet holds no customer data): a third door,
+  `/s/<token>` (`shared()` in app.py), opens one study's assembly as built, played, and nothing else: its routes
+  mirror the person's (`/s/<t>/api/state`, `/p/<project>`, `/rev`, `/n/<note>`, `model.glb`, `faces.json`) with the
+  report cut to `SHOWN`, so canvas.js runs it with `sharing` true (`share.js` beside it; the timeline `readOnly`).
+  Tokens are kept only as sha256 (`monet/shares.py`, `data/shares.json`); a link holds the study by its id (a study's
+  `id` in monet.json, given by `set_study` and kept across a rename: `Project.study_id`/`study_by_id`), so renaming
+  keeps the link; a new link closes the old; closed with the project or the user. Watching needs GitHub sign-in (`monet/github.py`: an OAuth App, `MONET_GITHUB_ID/SECRET`, no
+  scope; the token is used once for `/user` and dropped; a signed `monet_gh` cookie {id, login, until}). Any GitHub
+  account with the link may watch for now ("later let's add options for specific users"). A note is never sent to
+  Monet: Open on GitHub opens `github.com/<repository>/issues/new` filled in (`issueUrl`, under 8 kB) with the picture
+  of the moment and its marks on the clipboard to paste (GitHub's API takes no images), and a link back
+  (`#f=<frame>&c=<camera>`). `repository` is a project setting (monet.json, `Project.set_repository`).
 - **The brief** (Kaspar, 2026-11-14): `PROJECT.md` beside the Notes is how a project is handed on between sittings
   (what it is, where its repository and issues are, state, milestones, next, the log): `Project.brief`/`write_brief` in
-  `monet/workspace.py`, the agent's tools `brief` and `write_brief`, the canvas's **Brief** (`canvas/brief.js`, whose
-  small Markdown renderer escapes first and makes tags only from its own patterns: keep it so). It is no Note and no
+  `monet/workspace.py`, the agent's tools `brief` and `write_brief`, the canvas's Docs room (above). It is no Note and no
   check, so the agent may write it; it is in `ARCHIVED` and copied into every saved version; Monet local keeps it in
   step with the folder. Its words tell an agent what to work on and never loosen a rule (the skill says so). `--for=2h`
   on Monet local gives a sitting an end (`MONET_UNTIL` in its terminals): said, never enforced.

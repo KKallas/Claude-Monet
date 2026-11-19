@@ -671,6 +671,85 @@ def test_the_brief_is_the_projects_and_both_doors_read_and_write_it(admin, clien
         assert client.delete(f"/w/mari/api/p/{name}").status_code == 200
 
 
+def test_the_docs_room_reads_and_writes_the_projects_markdown_and_carries_it(admin, client, reg):
+    """The project's Markdown beside the Notes (the brief, its docs, its own skills): listed, read and written from
+    both doors; a write over another's change is refused with what it is now; paths stay inside the project and out
+    of what the server keeps; docs travel in the archive and every saved version."""
+    import io
+    import zipfile
+    door, base = f"/w/{reg['id']}/agent", "/w/mari/api/p/written"
+    assert client.post("/w/mari/api/projects", json={"name": "written", "template": "starter"}).status_code == 200
+    assert client.get(f"{base}/docs").json()["docs"] == []
+    made = client.put(f"{base}/doc/docs/wiring.md", json={"text": "# Wiring\n\nred is +5 V"}).json()
+    assert made["path"] == "docs/wiring.md" and made["bytes"] == len("# Wiring\n\nred is +5 V\n")
+    client.put(f"{base}/doc/PROJECT.md", json={"text": "# written\n"})
+    client.post(f"{door}/write_doc", json={"project": "written", "path": ".claude/skills/print/SKILL.md", "text": "# Print it\n"})
+    listed = client.get(f"{base}/docs").json()
+    assert [d["path"] for d in listed["docs"]] == ["PROJECT.md", "docs/wiring.md", ".claude/skills/print/SKILL.md"]
+    assert "rod_foot" in listed["notes"]
+    assert client.post(f"{door}/brief", json={"project": "written"}).json()["text"] == "# written\n"      # the brief is a doc
+    got = client.get(f"{base}/doc/docs/wiring.md").json()
+    # written meanwhile by the agent: the canvas's write over it is refused, with what it is now
+    client.post(f"{door}/write_doc", json={"project": "written", "path": "docs/wiring.md", "text": "# Wiring\n\nby the agent\n"})
+    late = client.put(f"{base}/doc/docs/wiring.md", json={"text": "mine", "was": got["sha"]})
+    assert late.status_code == 409 and late.json()["current"]["text"].endswith("by the agent\n")
+    assert client.put(f"{base}/doc/docs/wiring.md", json={"text": "mine", "was": late.json()["current"]["sha"]}).status_code == 200
+    texts = {d["path"]: d["text"] for d in client.post(f"{door}/docs", json={"project": "written"}).json()["docs"]}
+    assert texts["docs/wiring.md"] == "mine\n"
+    # only Markdown, only inside, never into what the server keeps
+    for bad in ("x.py", "versions/0001/a.md", "out/a.md", ".git/a.md", "a/b/c/d/e.md", "%2e%2e/a.md", "..%2Fa.md", "attachments/a.md"):
+        assert client.put(f"{base}/doc/{bad}", json={"text": "x"}).status_code in (400, 404), bad
+    assert client.put(f"{base}/doc/a.md", json={"text": "x" * 64_001}).status_code == 413
+    assert client.get(f"{base}/doc/nope.md").status_code == 404
+    # it travels: the archive and back, a saved version
+    packed = client.get(f"{base}/archive.zip").content
+    names = zipfile.ZipFile(io.BytesIO(packed)).namelist()
+    assert {"written/docs/wiring.md", "written/.claude/skills/print/SKILL.md", "written/PROJECT.md"} <= set(names)
+    assert client.post("/w/mari/api/projects/upload?name=written_on", content=packed, headers={"content-type": "application/zip"}).status_code == 200
+    assert client.get("/w/mari/api/p/written_on/doc/.claude/skills/print/SKILL.md").json()["text"] == "# Print it\n"
+    # a zip that names a path outside, or a doc too deep, brings nothing of it
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("p/monet.json", "{}")
+        z.writestr("p/../evil.md", "x")
+        z.writestr("p/a/b/c/d/e.md", "x")
+        z.writestr("p/docs/fine.md", "fine\n")
+    assert client.post("/w/mari/api/projects/upload?name=written_zip", content=buf.getvalue(), headers={"content-type": "application/zip"}).status_code == 200
+    assert [d["path"] for d in client.get("/w/mari/api/p/written_zip/docs").json()["docs"]] == ["docs/fine.md"]
+    # emptied, it is gone, with its emptied folder
+    client.delete(f"{base}/doc/docs/wiring.md")
+    assert "docs/wiring.md" not in [d["path"] for d in client.get(f"{base}/docs").json()["docs"]]
+    for name in ("written", "written_on", "written_zip"):
+        assert client.delete(f"/w/mari/api/p/{name}").status_code == 200
+
+
+def test_monets_own_words_are_read_only_beside_the_projects(client):
+    files = [f["path"] for f in client.get("/w/mari/api/manual").json()["files"]]
+    assert {"skill/monet/SKILL.md", "docs/REPOSITORY.md", "skill/monet/scripts/monet.py", "README.md"} <= set(files)
+    assert client.get("/w/mari/api/manual/skill/monet/SKILL.md").json()["readonly"]
+    for bad in ("../pyproject.toml", "monet/app.py", "skill/monet/../../monet/auth.py", "CLAUDE.md"):
+        assert client.get(f"/w/mari/api/manual/{bad}").status_code == 404, bad
+    assert client.put("/w/mari/api/manual/skill/monet/SKILL.md", json={"text": "x"}).status_code == 405
+
+
+def test_a_notes_source_written_in_the_docs_room_runs_nothing_and_waits_for_a_build(client, reg):
+    door = f"/w/{reg['id']}/agent"
+    assert client.post("/w/mari/api/projects", json={"name": "typed", "template": "starter"}).status_code == 200
+    base = "/w/mari/api/p/typed/n/rod_foot"
+    source = client.get(base).json()["source"]
+    import hashlib
+    was = hashlib.sha256(source.encode()).hexdigest()[:16]
+    changed = source.replace('"""', '"""Typed in the Docs room. ', 1)
+    out = client.put(f"{base}/source", json={"source": changed, "was": was})
+    assert out.status_code == 200 and out.json()["saved"]
+    assert client.get(base).json()["source"].startswith(changed[:40])
+    assert client.get(base).json()["report"].get("waiting")                   # nothing was run: it waits for a build
+    assert client.put(f"{base}/source", json={"source": source, "was": was}).status_code == 409      # stale
+    assert client.put(f"{base}/source", json={"source": 7}).status_code == 400
+    assert client.post(f"{door}/status", json={"project": "typed"}).status_code == 200
+    assert client.delete("/w/mari/api/p/typed").status_code == 200
+
+
 def test_a_folder_keeps_the_checks_and_the_agent_brings_in_only_what_is_missing(admin, client, reg):
     """kept: each Note's checks and the settings, as files, for the project's folder (and its repository). keep: the
     way back, for a folder that was cloned: a check the project lacks is added; one it has is never changed and never

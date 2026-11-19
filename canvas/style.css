@@ -372,20 +372,46 @@ body.row-resizing, body.row-resizing * { cursor: row-resize !important; user-sel
 .item.guess, .item.shared { white-space: normal; font-size: 11px; cursor: default; }
 
 /* the video rendered in the background, played over the view */
-/* the brief (PROJECT.md): the project in words */
-#briefBtn.none { border-style: dashed; color: var(--text-muted); }
-dialog.brief { width: min(820px, 94vw); max-height: 90vh; display: none; flex-direction: column; }
-dialog.brief[open] { display: flex; }
-.brief-doc { overflow: auto; min-height: 120px; max-height: 62vh; margin: 10px 0 4px; padding: 4px 16px 10px; background: var(--bg-body); border: 1px solid var(--border); border-radius: 6px; line-height: 1.5; }
-.brief-doc h2 { font-size: 18px; margin: 14px 0 6px; } .brief-doc h3 { margin: 18px 0 4px; } .brief-doc h4, .brief-doc h5 { margin: 12px 0 2px; font-size: 12px; color: var(--text-bright); }
+/* Docs: the project's words and scripts, over the view and the panel (docs.js) */
+.app > .docs { grid-area: 2 / 2 / 3 / 4; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-body); border-left: 1px solid var(--border); }
+body[data-room="docs"] .app > .view, body[data-room="docs"] .app > .panel { display: none; }
+.docs-bar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--bg-surface); }
+.docs-bar .sp { flex: 1; }
+.docs-path { font-weight: 700; color: var(--text-bright); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.docs-what { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.docs-dirty { color: var(--warn, #ffb347); }
+#docsNewPath { width: min(420px, 50%); padding: 5px 8px; color: var(--text-bright); background: var(--bg-body); border: 1px solid var(--accent); font: inherit; }
+.docs-body { flex: 1; min-height: 0; display: flex; }
+.docs-edit, .docs-read { flex: 1; min-width: 0; min-height: 0; }
+.docs-edit > .cm-editor { height: 100%; }
+.docs-edit[hidden], .docs-read[hidden] { display: none; }
+.docs-read.brief-doc { max-height: none; margin: 0; border: 0; border-radius: 0; padding: 14px 32px 40vh; background: transparent; }
+.docs-plain { width: 100%; height: 100%; box-sizing: border-box; padding: 14px 22px; resize: none; border: 0; outline: 0; color: var(--text); background: transparent; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+#docsList { display: flex; flex-direction: column; gap: 1px; padding-bottom: 10px; }
+.docs-group { padding: 10px 14px 3px; color: var(--text-muted); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; cursor: default; }
+.docs-monet summary { cursor: pointer; list-style: none; } .docs-monet summary::-webkit-details-marker { display: none; }
+.docs-monet[open] summary { color: var(--text); }
+button.docs-file { display: block; width: 100%; text-align: left; padding: 4px 14px; border: 0; background: transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+button.docs-file.on { color: var(--accent); background: rgba(94, 246, 255, .07); }
+.docs-help { display: block; padding: 12px 14px 0; font-size: 12px; color: var(--text-muted); }
+/* Markdown drawn whole (Read; markdown.js) */
+.brief-doc { overflow: auto; min-height: 120px; max-height: 62vh; margin: 10px 0 4px; padding: 4px 16px 10px; background: var(--bg-body); border: 1px solid var(--border); border-radius: 6px; line-height: 1.6; font-size: 14.5px; }
+.brief-doc > :first-child { margin-top: 4px; }
+.brief-doc h1 { font-size: 26px; margin: 18px 0 8px; color: var(--text-bright); } .brief-doc h2 { font-size: 21px; margin: 20px 0 6px; color: var(--text-bright); }
+.brief-doc h3 { font-size: 17px; margin: 18px 0 4px; color: var(--text-bright); } .brief-doc :is(h4, h5, h6) { margin: 12px 0 2px; font-size: 14px; color: var(--text-bright); }
 .brief-doc p { margin: 6px 0; } .brief-doc ul, .brief-doc ol { margin: 4px 0; padding-left: 22px; } .brief-doc li { margin: 2px 0; }
 .brief-doc li.todo, .brief-doc li.done { list-style: none; margin-left: -18px; }
 .brief-doc li.todo::before { content: '☐ '; color: var(--warn); } .brief-doc li.done::before { content: '☑ '; color: var(--ok, #6fcf97); }
 .brief-doc li.done { color: var(--text-muted); }
-.brief-doc a { color: var(--accent); } .brief-doc pre { user-select: text; white-space: pre-wrap; }
-.brief-none { margin: 18px 0; color: var(--text-muted); }
-dialog.brief textarea { flex: 1; min-height: 46vh; margin-top: 10px; padding: 10px 12px; resize: vertical; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  color: var(--text); background: var(--bg-body); border: 1px solid var(--border-strong); border-radius: 6px; }
+.brief-doc a { color: var(--accent); }
+.brief-doc pre { user-select: text; white-space: pre-wrap; padding: 8px 12px; background: var(--bg-surface); border: 1px solid var(--border); }
+.brief-doc code { font-family: 'Share Tech Mono', ui-monospace, monospace; color: var(--yellow, #ffd23f); }
+.brief-doc pre code { color: var(--text); }
+.brief-doc blockquote { margin: 8px 0; padding: 2px 14px; border-left: 3px solid var(--border-strong); color: var(--text-muted); }
+.brief-doc hr { border: 0; border-top: 1px solid var(--border-strong); margin: 16px 0; }
+.brief-doc table { border-collapse: collapse; margin: 8px 0; } .brief-doc :is(th, td) { padding: 4px 10px; border: 1px solid var(--border); text-align: left; }
+.brief-doc th { color: var(--text-bright); background: var(--bg-surface); }
+.brief-doc img { max-width: 100%; }
 /* another Note on its way: the one in the frame fades, and the frame says what is coming */
 #gl { transition: opacity .15s; }
 .view.fetching #gl { opacity: .22; }
@@ -468,3 +494,25 @@ small.hits, .fold .hits { color: var(--accent); }
 
 /* a pop-up of the right rail opens to its left (the Picture's size) */
 .rail.right .rail-pop { left: auto; right: calc(100% + 6px); }
+
+/* a shared study (/s/<token>): only what plays it, and a note for GitHub beside it (share.js) */
+body[data-share] .app { --l: 0px; }
+body[data-share] .app > aside, body[data-share] .app > .side-edge, body[data-share] header .rooms, body[data-share] #termBtn, body[data-share] #logout,
+body[data-share] #usersLink, body[data-share] #project .chev, body[data-share] .rail.left .motion, body[data-share] .panel .find { display: none !important; }
+body[data-share] #project { pointer-events: none; }
+.timeline.ro :is([data-tl="key"], [data-tl="auto"], [data-tl="del"]) { display: none; }
+.timeline.ro :is([data-tlf="length"], [data-tlf="fps"]) { pointer-events: none; border-color: transparent; background: transparent; }
+.sh-overlay { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none; }
+.sh-overlay.on { pointer-events: auto; cursor: crosshair; }
+.sh-tools { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 7; display: flex; align-items: center; gap: 4px; padding: 6px 8px;
+  background: var(--bg-elevated); border: 1px solid var(--border-strong); }
+.sh-tools[hidden] { display: none; }
+.sh-tools button { min-width: 30px; padding: 3px 7px; }
+.sh-tools button small { font-size: 10px; margin-left: 2px; }
+.sh-tools .sh-c { width: 24px; min-width: 24px; height: 24px; padding: 0; background: var(--c) !important; border-color: transparent !important; clip-path: none !important; }
+.sh-tools .sh-c.on { outline: 2px solid var(--text-bright); outline-offset: 2px; }
+.sh-sep { width: 1px; align-self: stretch; margin: 0 4px; background: var(--border-strong); }
+.share-card .sh-l { display: flex; flex-direction: column; align-items: stretch; text-align: left; gap: 4px; margin: 10px 0 0; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+.share-card .sh-l :is(input, textarea) { width: 100%; box-sizing: border-box; padding: 7px 9px; color: var(--text-bright); background: var(--bg-body); border: 1px solid var(--border-strong); font: 14px/1.45 inherit; text-transform: none; letter-spacing: 0; resize: vertical; }
+.share-card .sh-row { margin-top: 10px; gap: 8px; align-items: center; flex-wrap: wrap; }
+.share-card .sh-how { margin-top: 14px; font-size: 12px; }

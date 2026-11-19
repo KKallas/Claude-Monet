@@ -14,7 +14,14 @@
                "three-mesh-bvh": "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.9.16/build/index.module.js",
                "mp4-muxer": "https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.mjs",
                "@xterm/xterm": "https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/lib/xterm.mjs",
-               "@xterm/addon-fit": "https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.11.0/lib/addon-fit.mjs" } }
+               "@xterm/addon-fit": "https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.11.0/lib/addon-fit.mjs",
+               "@codemirror/state": "https://esm.sh/@codemirror/state@6.7.6/es2022/state.mjs",
+               "@codemirror/view": "https://esm.sh/@codemirror/view@6.43.15/X-ZEBjb2RlbWlycm9yL3N0YXRlQDYuNy42/es2022/view.mjs",
+               "@codemirror/language": "https://esm.sh/@codemirror/language@6.13.1/X-ZEBjb2RlbWlycm9yL3N0YXRlQDYuNy42LEBjb2RlbWlycm9yL3ZpZXdANi40My4xNSxAbGV6ZXIvY29tbW9uQDEuNS4zLEBsZXplci9oaWdobGlnaHRAMS4yLjU/es2022/language.mjs",
+               "@lezer/highlight": "https://esm.sh/@lezer/highlight@1.2.5/X-ZEBsZXplci9jb21tb25AMS41LjM/es2022/highlight.mjs",
+               "@codemirror/commands": "https://esm.sh/@codemirror/commands@6.11.1?deps=@codemirror/state@6.7.6,@codemirror/view@6.43.15,@codemirror/language@6.13.1,@lezer/common@1.5.3,@lezer/highlight@1.2.5",
+               "@codemirror/lang-markdown": "https://esm.sh/@codemirror/lang-markdown@6.5.2?deps=@codemirror/state@6.7.6,@codemirror/view@6.43.15,@codemirror/language@6.13.1,@lezer/common@1.5.3,@lezer/highlight@1.2.5",
+               "@codemirror/lang-python": "https://esm.sh/@codemirror/lang-python@6.2.1?deps=@codemirror/state@6.7.6,@codemirror/view@6.43.15,@codemirror/language@6.13.1,@lezer/common@1.5.3,@lezer/highlight@1.2.5" } }
 </script>
 </head>
 <body>
@@ -23,9 +30,8 @@
     <b aria-label="MONET"><span data-t="M">M</span><canvas class="hole" aria-hidden="true"></canvas><span data-t="NET">NET</span></b>
     <span class="chip" id="chip"></span>
     <button id="project" title="the projects of this workspace: open one, start one, download, upload or delete"><span id="projectName">no project</span><span class="chev"></span></button>
-    <button id="briefBtn" hidden>Brief</button>
-    <span class="rooms" title="four places to work: a drawing on a face, one part, the parts put together, and how they move">
-      <button data-room="sketch">Sketch</button><button data-room="part">Part</button><button data-room="assembly">Assembly</button><button data-room="motion">Motion</button>
+    <span class="rooms" title="five places to work: a drawing on a face, one part, the parts put together, how they move, and the project in words (its brief, docs and scripts)">
+      <button data-room="sketch">Sketch</button><button data-room="part">Part</button><button data-room="assembly">Assembly</button><button data-room="motion">Motion</button><button data-room="docs">Docs</button>
     </span>
     <span class="sp"></span>
     <span class="muted" id="wsName"></span>
@@ -43,7 +49,11 @@
       <div class="fold" data-fold="side-sketches"><span class="chev"></span><span class="head">Sketches</span></div>
       <div class="body" id="sketchList"></div>
     </section>
-    <section data-card="side-notes">
+    <section data-card="side-docs" data-rooms="docs">
+      <div class="fold" data-fold="side-docs"><span class="chev"></span><span class="head">Docs</span></div>
+      <div class="body" id="docsList"></div>
+    </section>
+    <section data-card="side-notes" data-rooms="sketch part assembly motion">
       <div class="fold" data-fold="side-notes"><span class="chev"></span><span class="head">Notes</span></div>
       <div class="body" id="notes"></div>
     </section>
@@ -147,6 +157,8 @@
     </div>
     <div class="hint">drag: orbit · right-drag: pan · wheel: zoom<br>click: select · Shift: add · Ctrl: take away · Shift- or Ctrl-drag: box</div>
   </div>
+
+  <section class="docs" id="docs" data-rooms="docs"></section>
 
   <div class="panel">
     <div class="find"><input id="find" type="search" placeholder="Find: an object, a check, a joint, a tag…   /" autocomplete="off" spellcheck="false"

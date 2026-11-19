@@ -62,6 +62,10 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")      # a Note's name, as monet/n
 PORTS = (47821, 47822, 47823, 47824)      # where it listens: the first that is free; the canvas tries the same ones (terminal.js)
 EVERY = 4               # seconds between two looks at the server, when nothing happened here
 BRIEF = "PROJECT.md"    # the project in words, for whoever works on it next: kept in step with the server, as the Notes are
+# the project's other Markdown (its docs, its own skills): as monet/workspace.py has it (DOC_RE, NOT_DOCS)
+_SEG = r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}"
+DOC_RE = re.compile(rf"^(?:(?:\.claude|{_SEG})/)?(?:{_SEG}/){{0,2}}{_SEG}\.md$")
+NOT_DOCS = {"versions", "out", "attachments", "node_modules", ".git"}
 KEPT_RE = re.compile(r"^(?:[a-z][a-z0-9_]{0,47}\.checks\.json|monet\.json)$")      # what a project keeps beside those: checks, settings
 KEEP = 256_000          # bytes of a terminal's output kept, for a page that comes (back) to it
 ATTACH = "attachments"  # where what the person gives the agent in the Terminal panel is put (a screenshot, a drawing, a PDF)
@@ -178,12 +182,26 @@ class Sync:
                     self.once(f"{f.name} cannot be read as text: left alone")
         return out
 
+    def doc_files(self) -> list[Path]:
+        """The folder's docs (PROJECT.md and the other Markdown beside the Notes), as the server finds a project's."""
+        out = []
+        for here, dirs, files in os.walk(self.folder):
+            rel = Path(here).relative_to(self.folder)
+            depth = len(rel.parts)
+            dirs[:] = [d for d in dirs if depth < 3 and not (Path(here) / d).is_symlink()
+                       and (not d.startswith(".") or (d == ".claude" and depth == 0)) and not (depth == 0 and d in NOT_DOCS)]
+            for f in files:
+                path = (rel / f).as_posix()
+                if DOC_RE.match(path) and path.split("/")[0] not in NOT_DOCS and not (Path(here) / f).is_symlink():
+                    out.append(Path(here) / f)
+        return out
+
     def changed(self) -> bool:
         """Did a Python file here (or the brief) change since the last look? By time and size: cheap enough to ask every second."""
         now = {f.stem: (f.stat().st_mtime_ns, f.stat().st_size) for f in self.folder.glob("*.py") if NAME_RE.match(f.stem) and f.is_file()}
-        for f in [self.folder / BRIEF, *self.folder.glob("*.json")]:
-            if f.is_file() and (f.name == BRIEF or KEPT_RE.match(f.name)):
-                now[f.name] = (f.stat().st_mtime_ns, f.stat().st_size)
+        for f in [*self.doc_files(), *self.folder.glob("*.json")]:
+            if f.is_file() and (f.suffix == ".md" or KEPT_RE.match(f.name)):
+                now[f.relative_to(self.folder).as_posix()] = (f.stat().st_mtime_ns, f.stat().st_size)
         if now == self.seen:
             return False
         self.seen = now
@@ -242,7 +260,7 @@ class Sync:
                 self.known[name] = sha(mine)
                 say(f"{name}.py: sent" + (f" ({r['error']})" if r.get("error") else ""))
             moved = True
-        self.brief()
+        self.docs()
         self.keeping()
         self.prefer = ""        # --mine and --theirs settle what differed at the start, nothing later
         self.seen = {}
@@ -253,53 +271,75 @@ class Sync:
             self.build()
         return True
 
+    def docs(self) -> None:
+        """PROJECT.md (the project in words, for whoever works on it next) and the other Markdown beside the Notes
+        (its docs, its own skills): kept the same on both sides, as the Notes are. Nothing is built from them."""
+        got, why = self.ask("docs", project=self.project)
+        if got is None:
+            if "no tool" in str(why):
+                self.brief()      # a server from before there were docs: the brief alone
+            return
+        server = {d["path"]: d.get("text") or None for d in got.get("docs", [])}
+        local = {f.relative_to(self.folder).as_posix() for f in self.doc_files()}
+        for path in sorted(set(server) | local | {BRIEF}):
+            self.doc(path, server.get(path), writer=lambda text, path=path: self.ask("write_doc", project=self.project, path=path, text=text))
+
     def brief(self) -> None:
-        """PROJECT.md, the project in words for whoever works on it next: kept the same on both sides, as the Notes
-        are. It is no Note: nothing is built from it."""
+        """The brief alone, from a server before there were docs."""
         got, why = self.ask("brief", project=self.project)
         if got is None:
             return      # a server from before there were briefs: nothing to keep
-        f = self.folder / BRIEF
+        self.doc(BRIEF, got.get("text") or None, writer=lambda text: self.ask("write_brief", project=self.project, text=text))
+
+    def doc(self, path: str, theirs: str | None, writer) -> None:
+        """One doc brought together: whoever changed it since the two last agreed is taken; changed on both sides,
+        it is left alone on both (--mine or --theirs settle it)."""
+        f = self.folder / path
         try:
             mine = whole(f.read_text(encoding="utf-8")) if f.is_file() else None
         except (OSError, UnicodeDecodeError):
-            self.once(f"{BRIEF} cannot be read as text: left alone")
+            self.once(f"{path} cannot be read as text: left alone")
             return
         mine = mine if mine and mine.strip() else None
-        theirs, k = got.get("text") or None, self.known.get(BRIEF)
+        k = self.known.get(path)
         if mine == theirs:
             if mine is None:
-                self.once(f"no {BRIEF} yet (the project in words, for whoever works on it next): the first to work here writes it")
+                if path == BRIEF:
+                    self.once(f"no {BRIEF} yet (the project in words, for whoever works on it next): the first to work here writes it")
             else:
-                self.known[BRIEF] = sha(mine)
+                self.known[path] = sha(mine)
             return
         if mine is None:
             if k == sha(theirs):
-                self.once(f"{BRIEF} is gone here and still on the server: left there")
+                self.once(f"{path} is gone here and still on the server: left there (empty it in the canvas's Docs to take it away)")
                 return
             take = "theirs"
         elif theirs is None:
             if k == sha(mine):
-                self.once(f"{BRIEF} was emptied in the canvas and is still here: left here")
+                # it was taken away on the server (in the canvas): taken away here too
+                f.unlink(missing_ok=True)
+                self.known.pop(path, None)
+                say(f"{path}: taken away (it was taken away in the canvas)")
                 return
             take = "mine"
         else:
             i_changed, they_changed = sha(mine) != k, sha(theirs) != k
             take = "mine" if i_changed and not they_changed else "theirs" if they_changed and not i_changed else self.prefer
         if not take:
-            self.once(f"{BRIEF} was changed here and on the server since they last agreed: left as it is on both sides. "
+            self.once(f"{path} was changed here and on the server since they last agreed: left as it is on both sides. "
                       f"Start again with --mine to send this folder's, or --theirs to take the server's")
         elif take == "theirs":
+            f.parent.mkdir(parents=True, exist_ok=True)
             f.write_text(theirs, encoding="utf-8")
-            self.known[BRIEF] = sha(theirs)
-            say(f"{BRIEF}: taken from the server" + (" (it was not here yet)" if mine is None else " (changed in the canvas)"))
+            self.known[path] = sha(theirs)
+            say(f"{path}: taken from the server" + (" (it was not here yet)" if mine is None else " (changed in the canvas)"))
         else:
-            r, why = self.ask("write_brief", project=self.project, text=mine)
+            r, why = writer(mine)
             if r is None:
-                self.once(f"{BRIEF} not sent: {why}")
+                self.once(f"{path} not sent: {why}")
                 return
-            self.known[BRIEF] = sha(mine)
-            say(f"{BRIEF}: sent")
+            self.known[path] = sha(mine)
+            say(f"{path}: sent")
 
     def keeping(self) -> None:
         """What the project keeps beside its Notes (each Note's checks, and monet.json: printer, material, looks,

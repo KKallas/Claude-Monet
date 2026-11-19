@@ -309,6 +309,18 @@ def test_the_dials_and_rails_of_the_canvas():
     assert done.returncode == 0, done.stdout[-2000:]
 
 
+def test_the_markdown_of_the_docs_room():
+    """canvas/markdown.js: what the Docs room's Read makes of a doc, with no tag from the text itself; in node."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on this machine")
+    done = subprocess.run([node, "--test", str(Path(__file__).parent / "markdown.test.mjs")], capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stdout[-2000:]
+
+
 def test_the_keyframes_of_the_timeline():
     """canvas/timeline.js (keys, moving them, the value between them) has its own tests, in node."""
     import shutil

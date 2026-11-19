@@ -21,6 +21,8 @@ COPY canvas ./canvas
 COPY notes ./notes
 COPY profiles ./profiles
 COPY skill ./skill
+COPY docs ./docs
+COPY README.md ./
 ARG COMMIT=unknown
 ENV COMMIT=$COMMIT PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
     MONET_HOST=0.0.0.0 PORT=8080 MONET_STORAGE=/storage MONET_DATA=/data FORWARDED_ALLOW_IPS=* HOME=/tmp

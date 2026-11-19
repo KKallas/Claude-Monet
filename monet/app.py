@@ -20,6 +20,8 @@ import urllib.parse
 import zipfile
 from pathlib import Path
 
+import httpx
+
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware import Middleware
@@ -30,13 +32,48 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket
 
-from . import __version__, agent, auth, joints as joint_rules, note as notes, remote as remoting, tags as tagging
+from . import __version__, agent, auth, github, joints as joint_rules, note as notes, remote as remoting, tags as tagging, workspace
+from .shares import Shares
 from .store import Store, now
 from .workspace import EXPORTS, MAX_ARCHIVE, Problem, Workspaces
 
 ROOT = Path(__file__).resolve().parent.parent
 CANVAS = ROOT / "canvas"
 NO_STORE = {"Cache-Control": "no-store"}
+
+
+def manual() -> dict[str, str]:
+    """Monet's own words, by path, read once at start: the skill (and its scripts) an agent is given, the docs, the
+    README. The Docs room shows them beside the project's, read-only."""
+    out = {}
+    for f in [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md")), *sorted((ROOT / "skill" / "monet").rglob("*.md")),
+              *sorted((ROOT / "skill" / "monet" / "scripts").glob("*.py"))]:
+        if f.is_file() and "__pycache__" not in f.parts:
+            out[f.relative_to(ROOT).as_posix()] = f.read_text(encoding="utf-8")
+    return out
+
+
+MANUAL = manual()
+
+SHARE_PAGE_HEAD = """<!doctype html><html lang="en" data-skin="cyber"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monet</title><link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#040509;color:#c8d3d8;font:500 16px/1.5 Rajdhani,system-ui,sans-serif}
+main{max-width:460px;padding:28px 32px;border:1px solid rgba(94,246,255,.34);background:#0b0e16}h1{margin:0 0 6px;color:#f4fbff;font-size:22px;letter-spacing:.06em}
+a.go{display:inline-block;margin-top:14px;padding:9px 18px;border:1px solid #5ef6ff;color:#5ef6ff;text-decoration:none;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+a.go:hover{background:rgba(94,246,255,.1)}p.muted{color:#63727b;font-size:14px}p.err{color:#ff6b6b}</style></head><body><main>"""
+
+
+def share_signin(there: str, configured: bool, why: str = "") -> str:
+    from html import escape
+    if not configured:
+        return SHARE_PAGE_HEAD + "<h1>MONET · a shared study</h1><p>Signing in with GitHub is not set up on this server yet, so this study cannot be watched here.</p></main></body></html>"
+    return (SHARE_PAGE_HEAD + "<h1>MONET · a shared study</h1><p>Someone shared a motion study with you. Sign in with GitHub to watch it and to leave notes,"
+            " which you write as issues on GitHub.</p>" + (f'<p class="err">{escape(why)}</p>' if why else "")
+            + (f'<a class="go" href="{escape(there)}">Sign in with GitHub</a>' if there else "")
+            + '<p class="muted">Monet asks GitHub only who you are (your public profile) and keeps nothing of yours but a cookie in this browser.</p></main></body></html>')
+
+
+SHARE_GONE = SHARE_PAGE_HEAD + "<h1>MONET</h1><p>This link does not open anything (any more): ask whoever shared it for a new one.</p></main></body></html>"
 
 
 def version() -> dict:
@@ -278,6 +315,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
     secret = auth.session_secret(store)
     throttle = auth.Throttle()
     info = version()
+    shares = Shares(store.dir)      # share links of studies, by the sha of their token (shares.py)
     arrived(store.dir, info["commit"])
 
     def caller(ws, owner, headers, scheme="http") -> agent.Caller:
@@ -334,7 +372,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
                 request.state.owner = owner
                 out = await run_in_threadpool(lambda: fn(request, workspaces.of(owner["id"], owner["name"]), body))
             except Problem as e:
-                return JSONResponse({"error": str(e)}, e.status)
+                return JSONResponse({"error": str(e), **getattr(e, "extra", {})}, e.status)
             return out if isinstance(out, Response) else JSONResponse(out, headers=NO_STORE)
         return go()
 
@@ -488,7 +526,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
             except auth.HttpError as e:
                 return fail(e)
             except Problem as e:
-                return JSONResponse({"error": str(e)}, e.status)
+                return JSONResponse({"error": str(e), **getattr(e, "extra", {})}, e.status)
         return endpoint
 
     def shown(u: dict) -> dict:
@@ -546,6 +584,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         if target["id"] == user["id"]:
             raise auth.HttpError(400, "you cannot delete yourself")
         store.delete_user(target["id"])      # their folder stays on the disk: storage/<id>
+        shares.close_all(target["id"])
         store.log(type="user-delete", user=target["username"], id=target["id"], who=user["username"])
         return JSONResponse({"ok": True})
 
@@ -606,6 +645,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
     def delete_project(request, ws, _body):
         name = request.path_params["project"]
         ws.delete_project(name)
+        shares.close_all(request.state.owner["id"], name)
         store.log(type="project-delete", user=request.state.owner["username"], project=name, who=request.state.me["username"])
         return {"deleted": name, "projects": ws.projects()}
 
@@ -653,11 +693,172 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
     def put_brief(request, ws, body):
         return ws.project(request.path_params["project"]).write_brief(body.get("text"))
 
+    def list_docs(request, ws, _body):
+        """The project's Markdown (PROJECT.md first, then its docs and its own skills): what the Docs room lists."""
+        p = ws.project(request.path_params["project"])
+        return {"project": p.name, "docs": p.docs(), "notes": p.files()}
+
+    def get_doc(request, ws, _body):
+        return ws.project(request.path_params["project"]).doc(request.path_params["path"])
+
+    def put_doc(request, ws, body):
+        """A doc, the whole of it; `was` (the sha it was read with) keeps another's change meanwhile from being lost."""
+        p, path = ws.project(request.path_params["project"]), request.path_params["path"]
+        if request.method == "DELETE":
+            return p.write_doc(path, "", body.get("was"))
+        return p.write_doc(path, body.get("text"), body.get("was"))
+
+    def put_source(request, ws, body):
+        """A Note's source, from the Docs room: written, never run. It waits for a build (Monet local makes one) as
+        after any change in the canvas. `was`: the sha it was read with, as for a doc."""
+        p, name = note_of(request, ws)
+        source = body.get("source")
+        if not isinstance(source, str):
+            raise Problem("a Note is text (Python)")
+        with p.lock:
+            if p._path(name).exists():
+                now = p.read(name)
+                if body.get("was") is not None and workspace.sha(now) != body.get("was"):
+                    raise Problem(f"{name}.py was changed meanwhile (by the agent, or in another window)", 409, current={"text": now, "sha": workspace.sha(now)})
+                if p.is_note(name) and p.saved(name):
+                    lc = p.load_check(name)
+                    if lc["status"] == "red" and not lc.get("acknowledged"):
+                        raise Problem(f"the load check of {name} is red: look at it and acknowledge it first (Part room, Versions)", 409)
+            out = p.write(name, source.replace("\r\n", "\n"), report=False)
+        return {**out, "sha": workspace.sha(p.read(name))}
+
+    def manual_list(_request, _ws, _body):
+        """Monet's own words, to read beside the project's: the skill an agent is given, its scripts, and the docs.
+        Read-only: every user and every agent has the same."""
+        return {"files": [{"path": k, "bytes": len(v)} for k, v in MANUAL.items()]}
+
+    def manual_file(request, _ws, _body):
+        path = request.path_params["path"]
+        if path not in MANUAL:      # from the list made at start, never a path joined from the request
+            raise Problem(f"no such file of Monet's: {path}", 404)
+        return {"path": path, "text": MANUAL[path], "readonly": True}
+
+    # ---- sharing a study: a link to watch it, for anyone signed in with GitHub (shares.py, github.py) ------------
+    def share_study(request, ws, _body):
+        """GET: whether the study is shared. POST: a new link (the one before stops working), answered this once: it
+        is not kept, only its sha. DELETE: the link closed."""
+        p, name, owner = ws.project(request.path_params["project"]), request.path_params["study"], request.state.owner
+        if name not in p.studies():
+            raise Problem(f"no study {name!r} in {p.name}", 404)
+        sid = p.study_id(name)      # the link holds the study by its id: renamed, it still opens it
+        out = {"project": p.name, "study": name, "github": github.configured() is not None, "repository": p.settings.get("repository")}
+        if request.method == "POST":
+            token = shares.make(owner["id"], p.name, sid)
+            store.log(type="share", user=owner["username"], project=p.name, study=name, who=request.state.me["username"])
+            return {**out, "link": f"{base_url(request.headers, request.url.scheme)}/s/{token}", **(shares.of(owner["id"], p.name, sid) or {})}
+        if request.method == "DELETE":
+            shares.close(owner["id"], p.name, sid)
+            store.log(type="unshare", user=owner["username"], project=p.name, study=name, who=request.state.me["username"])
+        return {**out, "shared": shares.of(owner["id"], p.name, sid)}
+
+    def put_repository(request, ws, body):
+        """The project's GitHub repository (owner/name): where the share page's notes are opened as issues."""
+        return {"repository": ws.project(request.path_params["project"]).set_repository(body.get("repository"))}
+
+    def shared(fn, page_too=False):
+        """The share door: /s/<token>/…, for anyone signed in with GitHub who has the link. It opens one study of one
+        project, as built and played, and nothing else: no source, no check, no other Note, nothing to change."""
+        async def endpoint(request: Request):
+            token = request.path_params["token"]
+            link = shares.find(token)
+            owner = store.users.get(link["user"]) if link else None
+            if not owner:
+                return (HTMLResponse(SHARE_GONE, 404) if page_too else JSONResponse({"error": "this link does not open anything (any more)"}, 404))
+            who = github.viewer(secret, request.cookies)
+            if who is None:
+                there = f"/auth/github?next=/s/{token}"
+                return (HTMLResponse(share_signin(there, github.configured() is not None), headers=NO_STORE) if page_too
+                        else JSONResponse({"error": "sign in with GitHub first", "github": there}, 401))
+            ws = workspaces.of(owner["id"], owner["name"])
+            try:
+                p = ws.project(link["project"])
+                found = p.study_by_id(link["study"])      # by its id: under whatever name it has now
+                if found is None:
+                    raise Problem("the study shared here is not there any more", 404)
+                name, study = found
+                of = study.get("of") or name
+                if request.path_params.get("project", p.name) != p.name or request.path_params.get("note", of) != of:
+                    raise Problem("not shared here", 404)
+                out = await run_in_threadpool(lambda: fn(request, p, name, study, of, who, owner))
+            except Problem as e:
+                return JSONResponse({"error": str(e)}, e.status)
+            return out if isinstance(out, Response) else JSONResponse(out, headers=NO_STORE)
+        return endpoint
+
+    def share_page(_request, *_):
+        return HTMLResponse(page("index.html").body.decode().replace("<body>", '<body data-share="1">', 1), headers=NO_STORE)
+
+    def share_state(request, p, study_name, study, of, who, owner):
+        base = base_url(request.headers, request.url.scheme)
+        return {"workspace": {"name": owner["name"], "username": ""}, "me": {"username": f"github:{who['login']}", "name": who["login"], "role": "viewer"},
+                "projects": [p.name], "templates": [], "base": "", "agent": "", "origin": base, "version": info, "mine": False,
+                "share": {"project": p.name, "study": study_name, "note": of, "repository": p.settings.get("repository"), "viewer": who["login"],
+                          "link": f"{base}/s/{request.path_params['token']}"}}
+
+    def share_project(request, p, study_name, study, of, who, owner):
+        st = p.status()
+        return {"project": p.name, "rev": st["rev"], "printer": st["printer"], "material": st["material"], "looks": st["looks"],
+                "animations": {}, "studies": {study_name: study}, "version": None, "brief": None,
+                "notes": [{**r, "uses": []} for r in st["notes"] if r["name"] == of], "main": {"note": of, "named": True}}
+
+    def share_rev(request, p, *_):
+        return {"rev": p.rev}
+
+    SHOWN = ("note", "built", "state", "measure", "parts", "motion", "lights", "pixels", "material", "took")
+
+    def share_note(request, p, study_name, study, of, who, owner):
+        parsed = notes.parse(p.read(of))
+        report = p.report(of)
+        return {"note": of, "is_note": True, "doc": "", "params": {}, "tags": {}, "joints": parsed["joints"], "ground": parsed["ground"], "placed": {},
+                "report": {k: report[k] for k in SHOWN if k in report}, "snaps": {}, "tag_faces": {}, "tag_hits": {}, "checks": [], "versions": [],
+                "load_check": {"status": "new", "changes": []}}
+
+    def share_model(request, p, study_name, study, of, *_):
+        return FileResponse(p.model(of, "draft", last=request.query_params.get("last") == "1"), media_type="model/gltf-binary", headers=NO_STORE)
+
+    def share_faces(request, p, study_name, study, of, *_):
+        if request.query_params.get("last") != "1":
+            p.result(of)
+        f = p.out / of / "faces.json"
+        if not f.exists():
+            raise Problem(f"{of} is not built yet", 404)
+        return FileResponse(f, media_type="application/json", headers=NO_STORE)
+
+    async def github_start(request: Request):
+        if not github.configured():
+            return HTMLResponse(share_signin("", False), 503)
+        callback = f"{base_url(request.headers, request.url.scheme)}/auth/github/back"
+        there, nonce = github.start(secret, request.query_params.get("next", "/"), callback)
+        return RedirectResponse(there, 302, headers={"Set-Cookie": github.state_cookie(nonce, secure(request))})
+
+    async def github_back(request: Request):
+        if not github.configured():
+            return HTMLResponse(share_signin("", False), 503)
+        callback = f"{base_url(request.headers, request.url.scheme)}/auth/github/back"
+        try:
+            who, there = await run_in_threadpool(lambda: github.back(secret, request.query_params.get("code"), request.query_params.get("state"),
+                                                                        request.cookies.get(github.STATE_COOKIE), callback))
+        except (ValueError, OSError, httpx.HTTPError) as e:
+            return HTMLResponse(share_signin("", True, str(e)), 400, headers=NO_STORE)
+        response = RedirectResponse(there, 302)
+        response.headers.append("Set-Cookie", github.cookie(secret, who, secure(request)))
+        response.headers.append("Set-Cookie", f"{github.STATE_COOKIE}=; Path=/auth/github; Max-Age=0; HttpOnly; SameSite=Lax")
+        return response
+
+    async def github_out(request: Request):
+        return RedirectResponse(github.safe_next(request.query_params.get("next")), 302,
+                                headers={"Set-Cookie": f"{github.COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"})
+
     def get_note(request, ws, _body):
         p, name = note_of(request, ws)
         source = p.read(name)
         parsed = notes.parse(source)
-        out = {"note": name, "source": source, "doc": parsed["doc"], "params": parsed["params"], "tags": parsed["tags"],
+        out = {"note": name, "source": source, "sha": workspace.sha(source), "doc": parsed["doc"], "params": parsed["params"], "tags": parsed["tags"],
                "joints": parsed["joints"], "ground": parsed["ground"], "placed": parsed["placed"],
                "is_note": parsed["is_note"]}
         if parsed["is_note"]:
@@ -979,6 +1180,11 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route("/w/{wid}/api/p/{project}/checks", api(all_checks)),
         Route("/w/{wid}/api/p/{project}/brief", api(get_brief)),
         Route("/w/{wid}/api/p/{project}/brief", api(put_brief), methods=["PUT"]),
+        Route("/w/{wid}/api/p/{project}/docs", api(list_docs)),
+        Route("/w/{wid}/api/p/{project}/doc/{path:path}", api(get_doc)),
+        Route("/w/{wid}/api/p/{project}/doc/{path:path}", api(put_doc), methods=["PUT", "DELETE"]),
+        Route("/w/{wid}/api/manual", api(manual_list)),
+        Route("/w/{wid}/api/manual/{path:path}", api(manual_file)),
         Route("/w/{wid}/api/p/{project}/looks", api(looks), methods=["PUT"]),
         Route("/w/{wid}/api/p/{project}/profile", api(put_profile), methods=["PUT"]),
         Route("/w/{wid}/api/p/{project}/save", api(save), methods=["POST"]),
@@ -993,10 +1199,13 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route(n + "/planes/{plane}", api(move_plane), methods=["PUT"]),
         Route(n + "/joints/{joint}", api(put_joint), methods=["PUT", "DELETE"]),
         Route(n + "/checking", api(checking)),
+        Route(n + "/source", api(put_source), methods=["PUT"]),
         Route(n + "/ground", api(put_ground), methods=["PUT"]),
         Route(n + "/placed/{instance}", api(put_placed), methods=["PUT", "DELETE"]),
         Route(n + "/animation", api(put_animation), methods=["PUT"]),
         Route("/w/{wid}/api/p/{project}/studies/{study}", api(put_study), methods=["PUT", "DELETE"]),
+        Route("/w/{wid}/api/p/{project}/studies/{study}/share", api(share_study), methods=["GET", "POST", "DELETE"]),
+        Route("/w/{wid}/api/p/{project}/repository", api(put_repository), methods=["PUT"]),
         Route(n + "/pose", api(pose), methods=["POST"]),
         Route(n + "/checks", api(add_check), methods=["POST"]),
         Route(n + "/checks/{check}", api(put_check), methods=["PUT", "DELETE"]),
@@ -1007,6 +1216,17 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         Route(n + "/bom", api(bom_of)),
         Route(n + "/bom.csv", api(bom_csv)),
         # the agent's door: /w/<agent key>: the tools, and the files their answers point at
+        # the share door: one study, watched (shared()); and signing in with GitHub for it
+        Route("/auth/github", github_start),
+        Route("/auth/github/back", github_back),
+        Route("/auth/github/out", github_out),
+        Route("/s/{token}", shared(share_page, page_too=True)),
+        Route("/s/{token}/api/state", shared(share_state)),
+        Route("/s/{token}/api/p/{project}", shared(share_project)),
+        Route("/s/{token}/api/p/{project}/rev", shared(share_rev)),
+        Route("/s/{token}/api/p/{project}/n/{note}", shared(share_note)),
+        Route("/s/{token}/api/p/{project}/n/{note}/model.glb", shared(share_model)),
+        Route("/s/{token}/api/p/{project}/n/{note}/faces.json", shared(share_faces)),
         Route("/w/{wid}/agent", door(agent_tools)),
         Route("/w/{wid}/agent/{tool}", door(agent_call), methods=["POST"]),
         Route("/w/{wid}/upload/{project}/{note}", door(upload_build), methods=["POST"]),

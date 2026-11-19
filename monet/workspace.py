@@ -27,6 +27,8 @@ import hashlib
 import io
 import json
 import math
+import os
+import secrets
 import re
 import shutil
 import threading
@@ -82,6 +84,21 @@ what was left open.
 
 What the next one needs and would not find in the Notes: decisions and why, dead ends, measurements, suppliers.
 """
+# The project's other words: Markdown beside the Notes (its docs, its own skills for an agent: .claude/skills/x/SKILL.md),
+# kept, edited and carried as the brief is. A path of at most four parts, each a plain name; never into what the server
+# keeps of its own (versions, builds) or what a folder has that is no project (git, node_modules, attachments).
+_SEG = r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}"
+DOC_RE = re.compile(rf"^(?:(?:\.claude|{_SEG})/)?(?:{_SEG}/){{0,2}}{_SEG}\.md$")
+NOT_DOCS = {"versions", "out", "attachments", "node_modules", ".git"}
+MAX_DOCS = 200
+MAX_DOCS_BYTES = 2_000_000
+
+
+def is_doc(rel: str) -> bool:
+    rel = str(rel or "")
+    return bool(DOC_RE.match(rel)) and rel.split("/")[0] not in NOT_DOCS and ".." not in rel.split("/")
+
+
 MAX_ARCHIVE = 100_000_000      # bytes of a project as an archive: of the zip, and of what it unpacks to
 MAX_ARCHIVE_FILES = 5000
 # what an archive of a project holds, and all that is taken from one that comes in: the Notes, their checks, the
@@ -89,6 +106,31 @@ MAX_ARCHIVE_FILES = 5000
 _NOTE = r"[a-z][a-z0-9_]{0,47}"
 ARCHIVED = re.compile(rf"^(versions/[0-9]{{4}}/)?({_NOTE}\.py|{_NOTE}\.checks\.json|monet\.json|PROJECT\.md)$"
                       rf"|^versions/[0-9]{{4}}/(meta\.json|{_NOTE}\.glb|{_NOTE}\.fingerprint\.json)$")
+
+
+
+def archived(rel: str) -> bool:
+    """Whether a path is one an archive of a project holds (and all that is taken from one that comes in): ARCHIVED,
+    and the docs, of the project and of each saved version."""
+    m = re.match(r"^versions/[0-9]{4}/(.+)$", rel)
+    return bool(ARCHIVED.match(rel)) or is_doc(m.group(1) if m else rel)
+
+
+def doc_paths(root: Path) -> list[str]:
+    """The docs under a folder (a project's, or a saved version's), as paths from it: PROJECT.md first. Not through a
+    link, not into what is no doc (NOT_DOCS, and folders beginning with a dot but .claude)."""
+    out = []
+    for here, dirs, files in os.walk(root):
+        rel = Path(here).relative_to(root)
+        depth = len(rel.parts)
+        dirs[:] = sorted(d for d in dirs if depth < 3 and not (Path(here) / d).is_symlink()
+                         and (not d.startswith(".") or (d == ".claude" and depth == 0)) and not (depth == 0 and d in NOT_DOCS))
+        for f in sorted(files):
+            path = (rel / f).as_posix()
+            if is_doc(path) and not (Path(here) / f).is_symlink():
+                out.append(path)
+    return sorted(out, key=lambda d: (d != BRIEF, d.count("/"), d.lower()))
+
 
 _locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
@@ -101,9 +143,15 @@ _times_guard = threading.Lock()
 class Problem(Exception):
     """Something the caller did that cannot be done. The message is for them."""
 
-    def __init__(self, message: str, status: int = 400):
+    def __init__(self, message: str, status: int = 400, **extra):
         super().__init__(message)
         self.status = status
+        self.extra = extra      # more for the caller beside the words: what a doc is now, when it was changed meanwhile
+
+
+def sha(text: str) -> str:
+    """Which text a doc was: what the canvas says it wrote over, so another's change meanwhile is not lost unasked."""
+    return hashlib.sha256(str(text).encode("utf-8")).hexdigest()[:16]
 
 
 def now() -> str:
@@ -304,6 +352,7 @@ def clean_timeline(animation) -> dict:
 
 
 STUDY_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,47}$")
+STUDY_ID = re.compile(r"^[0-9a-f]{16}$")      # a study's own id: it stays when the study is renamed (a share link holds it)
 PART_NAME = re.compile(r"^[A-Za-z0-9_./-]{1,120}$")
 STYLES = ("rendered", "shaded", "hidden")
 
@@ -376,6 +425,8 @@ def clean_study(study) -> dict:
         if not isinstance(view, dict) or view.get("style", "rendered") not in STYLES or not isinstance(view.get("edges", True), bool) or set(view) - {"style", "edges"}:
             raise Problem(f"view is {{style: {'|'.join(STYLES)}, edges: true|false}}")
         clean["view"] = dict(view)
+    if STUDY_ID.match(str(study.get("id") or "")):
+        clean["id"] = study["id"]
     return clean
 
 
@@ -552,13 +603,13 @@ class Workspace:
                 # zipped as a folder (as Download does) or as what is in it
                 tops = {i.filename.split("/")[0] for i in files}
                 folder = f"{tops.pop()}/" if len(tops) == 1 and all("/" in i.filename for i in files) else ""
-                take = {i.filename[len(folder):]: i for i in files if ARCHIVED.match(i.filename[len(folder):])}
+                take = {i.filename[len(folder):]: i for i in files if archived(i.filename[len(folder):])}
                 if len(take) > MAX_ARCHIVE_FILES or sum(i.file_size for i in take.values()) > MAX_ARCHIVE:
                     raise Problem(f"that archive unpacks to more than a project may be ({MAX_ARCHIVE // 1_000_000} MB)", 413)
                 got = {rel: z.read(i) for rel, i in take.items()}
         except (zipfile.BadZipFile, zlib.error, EOFError, RuntimeError, NotImplementedError):
             raise Problem("that is not a zip that can be read")
-        if not any("/" not in rel for rel in got):
+        if not any(not rel.startswith("versions/") and not is_doc(rel) for rel in got):      # words alone are no project
             raise Problem("there is nothing of a project in that archive: no Notes, no monet.json")
         docs = {}
         for rel, raw in got.items():
@@ -573,10 +624,10 @@ class Workspace:
                 raise Problem(f"{rel} in that archive is not what Monet writes there")
             if rel.endswith(".py") and "/" not in rel and len(text) > MAX_SOURCE:
                 raise Problem(f"{rel} is too long for a Note")
-            if rel.endswith(BRIEF) and len(raw) > MAX_BRIEF:
-                raise Problem(f"{rel} is too long for a brief")
+            if rel.endswith(".md") and len(raw) > MAX_BRIEF:
+                raise Problem(f"{rel} is too long for a brief or a doc ({MAX_BRIEF // 1000} kB)")
         # a saved version is whole or it is refused: what it says of each Note has to be in the archive too
-        for n in sorted({rel.split("/")[1] for rel in got if "/" in rel}):
+        for n in sorted({rel.split("/")[1] for rel in got if rel.startswith("versions/") and not is_doc(rel)}):
             meta = docs.get(f"versions/{n}/meta.json") or {}
             kept = meta.get("notes")
             whole = meta.get("n") == int(n) and isinstance(meta.get("at"), str) and isinstance(meta.get("message"), str) and isinstance(kept, dict) and all(
@@ -692,6 +743,35 @@ class Project:
             self.touch()
             return looks
 
+    def set_repository(self, repository) -> str | None:
+        """The project's GitHub repository, owner/name (or None): where notes left on a shared study are opened as
+        issues, by the one who leaves them. A setting, kept in monet.json; nothing here talks to GitHub."""
+        repo = str(repository or "").strip().removeprefix("https://github.com/").removesuffix(".git").strip("/")
+        if repo and not re.match(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$", repo):
+            raise Problem("a GitHub repository is owner/name, as in github.com/owner/name")
+        with self.lock:
+            settings = self.settings
+            if repo:
+                settings["repository"] = repo
+            else:
+                settings.pop("repository", None)
+            (self.dir / "monet.json").write_text(json.dumps(settings, indent=1) + "\n")
+            self.touch()
+        return repo or None
+
+    def study_by_id(self, sid: str) -> tuple[str, dict] | None:
+        """(name, study) of the study with this id: what a share link holds, so a rename does not lose it."""
+        return next(((n, st) for n, st in self.studies().items() if st.get("id") == sid), None)
+
+    def study_id(self, name: str) -> str:
+        """A study's id, given to it now if it has none yet (one kept before there were ids)."""
+        study = self.studies().get(name)
+        if study is None:
+            raise Problem(f"no study {name!r} in {self.name}", 404)
+        if not study.get("id"):
+            study = self.set_study(name, study)[name]
+        return study["id"]
+
     def studies(self) -> dict:
         """The project's motion studies, by name: monet.json's `studies`, and the timeline an assembly had before
         there were studies (`animations`), as a study named after it, of it."""
@@ -703,7 +783,7 @@ class Project:
 
     def animations(self) -> dict:
         """Each assembly's own study (the one named after it), as the timelines were kept before studies."""
-        return {n: {k: v for k, v in s.items() if k != "of"} for n, s in self.studies().items() if s.get("of", n) == n}
+        return {n: {k: v for k, v in s.items() if k not in ("of", "id")} for n, s in self.studies().items() if s.get("of", n) == n}
 
     def set_study(self, name: str, study: dict | None) -> dict:
         """A motion study, named (clean_study), or (None) taken away. Kept in monet.json beside the looks: nothing is
@@ -719,6 +799,9 @@ class Project:
             if clean is None:
                 studies.pop(name, None)
             else:
+                # its id: the one it was given (a rename is the study written under its new name, with its id), else the
+                # one it had under this name, else a new one
+                clean["id"] = clean.get("id") or (studies.get(name) or {}).get("id") or secrets.token_hex(8)
                 studies[name] = clean
             (self.dir / "monet.json").write_text(json.dumps(settings, indent=1) + "\n")
             self.touch()
@@ -814,9 +897,12 @@ class Project:
                         if isinstance(look, dict) and look != (now.get("looks") or {}).get(part):
                             self.set_look([part], look.get("material"), look.get("color"))
                             did.append(f"the look of {part}")
+                    if doc.get("repository") and doc.get("repository") != now.get("repository"):
+                        self.set_repository(doc.get("repository"))
+                        did.append("the repository")
                 except Problem as e:
                     say.append(str(e))
-                say += [f"{k}: not a setting Monet keeps" for k in doc if k not in ("printer", "material", "looks", "animations", "studies")]
+                say += [f"{k}: not a setting Monet keeps" for k in doc if k not in ("printer", "material", "looks", "animations", "studies", "repository")]
             elif (m := re.fullmatch(rf"({_NOTE})\.checks\.json", name)) and isinstance(doc, dict) and isinstance(doc.get("checks"), list):
                 note = m.group(1)
                 if note not in self.files():
@@ -872,14 +958,74 @@ class Project:
             self.touch()
         return self.brief()
 
+    # ---- the docs (PROJECT.md and the other Markdown beside the Notes) -------------------
+    def doc_paths(self) -> list[str]:
+        return doc_paths(self.dir)
+
+    def docs(self) -> list[dict]:
+        """The project's Markdown: its brief first, then its docs and its own skills, by path."""
+        out = []
+        for d in self.doc_paths():
+            st = (self.dir / d).stat()
+            out.append({"path": d, "bytes": st.st_size, "updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(st.st_mtime))})
+        return out
+
+    def _doc(self, path: str) -> Path:
+        if not is_doc(path):
+            raise Problem(f"{path!r} is not the name of a doc: a .md file, at most four folders deep, of letters, digits, _ . -")
+        f = (self.dir / path)
+        if not f.resolve().is_relative_to(self.dir.resolve()) or f.is_symlink():
+            raise Problem(f"{path!r} is not a doc of this project", 404)
+        return f
+
+    def doc(self, path: str) -> dict:
+        f = self._doc(path)
+        if not f.is_file():
+            raise Problem(f"no doc {path!r} in {self.name}", 404)
+        text = f.read_text(encoding="utf-8")
+        return {"project": self.name, "path": path, "text": text, "sha": sha(text), "bytes": len(text.encode("utf-8")),
+                "updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(f.stat().st_mtime))}
+
+    def write_doc(self, path: str, text, was: str | None = None) -> dict:
+        """A doc, the whole of it (empty: taken away). `was`: the sha of the text it was written over; when the doc
+        has changed since (the agent, another window), nothing is written and the answer is 409 with what it is now."""
+        f = self._doc(path)
+        if not isinstance(text, str):
+            raise Problem("a doc is text (Markdown)")
+        text = text.replace("\r\n", "\n").replace("\x00", "")
+        if len(text.encode("utf-8")) > MAX_BRIEF:
+            raise Problem(f"a doc is at most {MAX_BRIEF // 1000} kB", 413)
+        with self.lock:
+            now = f.read_text(encoding="utf-8") if f.is_file() else ""
+            if was is not None and sha(now) != was:
+                raise Problem(f"{path} was changed meanwhile (by the agent, or in another window)", 409, current={"text": now, "sha": sha(now)})
+            if text.strip():
+                text = text if text.endswith("\n") else text + "\n"
+                if not f.is_file():
+                    have = self.docs()
+                    if len(have) >= MAX_DOCS:
+                        raise Problem(f"a project has at most {MAX_DOCS} docs", 413)
+                if sum(d["bytes"] for d in self.docs() if d["path"] != path) + len(text.encode("utf-8")) > MAX_DOCS_BYTES:
+                    raise Problem(f"a project's docs are at most {MAX_DOCS_BYTES // 1_000_000} MB together", 413)
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(text, encoding="utf-8")
+            else:
+                f.unlink(missing_ok=True)
+                for up in f.relative_to(self.dir).parents:      # an emptied folder goes with its last doc
+                    if str(up) != "." and (self.dir / up).is_dir() and not any((self.dir / up).iterdir()):
+                        (self.dir / up).rmdir()
+            self.touch()
+        return {"project": self.name, "path": path, "sha": sha(text if text.strip() else ""), "bytes": len(text.encode("utf-8")) if text.strip() else 0}
+
     def archive(self) -> bytes:
         """The project as a zip, in a folder of its name: to keep, or to upload here or to another Monet. The Notes,
         their checks, the settings and the saved versions; not the builds, which are made again from the Notes."""
         buf = io.BytesIO()
         with self.lock, zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-            for f in sorted(self.dir.glob("*")) + sorted(self.vdir.glob("[0-9][0-9][0-9][0-9]/*")):
+            docs = [self.dir / d for d in self.doc_paths()] + [v / d for v in sorted(self.vdir.glob("[0-9][0-9][0-9][0-9]")) for d in doc_paths(v)]
+            for f in dict.fromkeys(sorted(self.dir.glob("*")) + sorted(self.vdir.glob("[0-9][0-9][0-9][0-9]/*")) + docs):
                 rel = f.relative_to(self.dir).as_posix()
-                if ARCHIVED.match(rel) and f.is_file() and not f.is_symlink():
+                if archived(rel) and f.is_file() and not f.is_symlink():
                     z.write(f, f"{self.name}/{rel}")
         return buf.getvalue()
 
@@ -1348,6 +1494,9 @@ class Project:
             for f in list(self.dir.glob("*.py")) + list(self.dir.glob("*.checks.json")) + [self.dir / "monet.json", self.dir / BRIEF]:
                 if f.exists():
                     shutil.copy2(f, vdir / f.name)
+            for d in self.doc_paths():      # the docs as they were, in their folders
+                (vdir / d).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(self.dir / d, vdir / d)
             meta = {"n": n, "at": now(), "message": str(message).strip()[:300], "commit": str(commit).strip()[:64], "notes": {}}
             changed = []
             for name in names:
@@ -1532,7 +1681,7 @@ class Project:
             got = notes.imports(sources[name]) | {p.get("note") for p in placed.values() if isinstance(p, dict)}
             row["uses"] = sorted(got & (set(sources) - {name}))
         return {"project": self.name, "rev": self.rev, "printer": self.settings.get("printer"), "material": self.settings.get("material"),
-                "looks": self.settings.get("looks", {}),
+                "looks": self.settings.get("looks", {}), "repository": self.settings.get("repository"),
                 "animations": self.animations(), "studies": self.studies(),
                 "version": head["n"] if head else None, "notes": rows, "main": main_of(rows, self.name),
                 "brief": self.brief_row()}      # PROJECT.md: None until one is written

@@ -194,6 +194,8 @@ export function createTimeline(root, hooks) {
     </div>
     <div class="tl-body"></div>`;
   const $ = (s) => root.querySelector(s), body = $('.tl-body');
+  const ro = !!hooks.readOnly;      // played, not keyed (a shared study): nothing here changes it
+  root.classList.toggle('ro', ro);
 
   // the frame under x on a lane's track `b`, measured when the press began
   const frameOf = (b, x) => Math.max(0, Math.min(anim.length, Math.round(((x - b.left) / b.width) * anim.length)));
@@ -308,6 +310,7 @@ export function createTimeline(root, hooks) {
   const stop = () => { pause(); go(0); };
 
   function changed(next, actions = anim.actions) {
+    if (ro) return;
     anim = { ...anim, tracks: next, actions };
     clearTimeout(saving);
     const k = key, a = kept(structuredClone(anim));
@@ -315,6 +318,7 @@ export function createTimeline(root, hooks) {
     draw();
   }
   function keyAll(names) {
+    if (ro) return;
     const p = hooks.pose(), f = Math.round(frame), next = { ...anim.tracks };
     for (const n of names) {
       // a line's first key after the start: it was as it always is until then (a part shown, solid), not this
@@ -326,7 +330,7 @@ export function createTimeline(root, hooks) {
   }
   const free = () => joints.filter((j) => !j.locked && !viewLine(j.name)).map((j) => j.name);
   function remove() {
-    if (!sel.size) return;
+    if (ro || !sel.size) return;
     const next = deleteKeys(anim.tracks, expand(anim.tracks, sel)), acts = deleteActions(anim.actions, sel);
     sel = new Set(); menu = null; changed(next, acts);
   }
@@ -358,6 +362,7 @@ export function createTimeline(root, hooks) {
     if (!k) return;
     if (!Number.isFinite(v)) { paint(); return; }
     if (k === 'frame') { pause(); go(v); }
+    if (ro && (k === 'length' || k === 'fps')) { paint(); return; }
     if (k === 'length') {      // never shorter than its last key
       anim.length = Math.max(1, keyFrames(anim.tracks).pop() ?? 1, ...anim.actions.map((a) => Math.max(a.frame, a.to ?? 0)), Math.min(100000, v));
       frame = Math.min(frame, anim.length);
@@ -379,6 +384,7 @@ export function createTimeline(root, hooks) {
     const track = lane.querySelector('.tl-track').getBoundingClientRect(), d = e.target.closest('.tl-d');
     body.setPointerCapture(e.pointerId);
     let move, up = null;
+    if (d && ro) { go(split(d.dataset.id)[1]); return; }      // a key: shown there, never moved
     if (d) {
       const id = d.dataset.id;
       if (e.shiftKey) { if (sel.has(id)) sel.delete(id); else sel.add(id); } else if (!sel.has(id)) sel = new Set([id]);
@@ -411,6 +417,7 @@ export function createTimeline(root, hooks) {
     body.addEventListener('lostpointercapture', () => { body.onpointermove = body.onpointerup = null; }, { once: true });
   });
   body.addEventListener('dblclick', (e) => {
+    if (ro) return;
     const lane = e.target.closest('.tl-lane'), j = lane?.dataset.lane;
     if (!j || e.target.closest('.tl-d')) return;
     if (j === '!') {      // a pause where it was double-clicked, never on frame 0: playing starts there

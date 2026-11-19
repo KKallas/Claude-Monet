@@ -4,7 +4,6 @@ storage
 out
 notes/*/out
 tests
-docs
 deploy
 reference
 scripts
