@@ -53,6 +53,7 @@ export function createTerminal(view, button, hooks) {
   const $ = (q) => root.querySelector(q);
   const enc = new TextEncoder();
   let term = null, fit = null, ws = null, run = 'log', about = null, greeted = false, over = false, h = 320, again = 0, font = 14;
+  let settling = 0;      // the letters' size changing: the panel is fitted to them once they settle (redraw)
   try { h = Number(localStorage.getItem('monet.term.h')) || h; run = localStorage.getItem('monet.term.run') || run; font = Number(localStorage.getItem('monet.term.font')) || font; } catch { /* defaults */ }
   const FONTS = [10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28];
   /** The letters a size bigger or smaller (or as kept): what fits in the panel follows, and what runs is told. */
@@ -61,7 +62,23 @@ export function createTerminal(view, button, hooks) {
     font = FONTS[Math.max(0, Math.min(FONTS.length - 1, (i < 0 ? FONTS.length - 1 : i) + step))];
     try { localStorage.setItem('monet.term.font', String(font)); } catch { /* not kept */ }
     $('.term-size b').textContent = font;
-    if (term) { term.options.fontSize = font; try { fit.fit(); } catch { /* hidden */ } }
+    if (!term) return;
+    term.options.fontSize = font;
+    clearTimeout(settling);
+    settling = setTimeout(redraw, 300);
+  }
+  /** The letters settled: a program draws what it shows again at the new width when it is told the new size (Claude
+   *  Code redraws its whole screen), but what it wrote before stays broken at the old width, and xterm can only wrap
+   *  it again, which breaks boxes and drawings. So what it wrote is cleared first and the program draws it anew (as
+   *  Ctrl+L would). Monet local's own lines (the log) are plain lines that wrap well: they are kept. */
+  function redraw() {
+    const d = root.hidden ? null : fit.proposeDimensions();
+    if (!d || (d.cols === term.cols && d.rows === term.rows)) return;      // hidden, or the same size: nothing is drawn again
+    if (run !== 'log' && greeted) {      // cleared, then the size told (in fit): what the program draws comes after
+      term.clear();
+      term.write('\x1b[2J\x1b[H');
+    }
+    try { fit.fit(); } catch { /* not laid out */ }
   }
 
   async function xterm() {
