@@ -176,6 +176,18 @@ aside .fold { padding: 2px 14px 6px; }
 .row .x:hover { color: var(--err); background: none; }
 .line { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
 .line > input, .line > select { flex: 1; }
+.line.even { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+.line.even > button { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* a row whose controls come first, each in a column of its own: they run in line down the list */
+.row.lead { display: grid; align-items: center; column-gap: 6px; }
+.row.lead.seen { grid-template-columns: 22px auto minmax(0, 1fr); }
+.row.lead.parts { grid-template-columns: repeat(4, 20px) minmax(0, 1fr) auto; column-gap: 0; }
+.row.lead.parts > b { margin-left: 4px; }
+.row.lead.parts .x { width: 20px; }
+.row.lead .x { width: 22px; padding: 0; text-align: center; }
+.row.lead > b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row.lead > .v { flex: none; }
+.lead-under { padding-left: calc(4 * 20px + 4px); }
 .pill { display: inline-block; border-radius: 10px; padding: 1px 9px; font-size: 11px; font-weight: 600; border: 1px solid currentColor; }
 .doc { white-space: pre-wrap; margin: 0; color: var(--text); font: inherit; }
 .check { padding: 5px 0; border-top: 1px solid var(--border); }

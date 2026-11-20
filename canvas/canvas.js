@@ -2003,24 +2003,25 @@ function studyCards() {
   const keys = (field) => (study?.[field] ? Object.keys(study[field]).length : 0), cams = study?.camera?.length ?? 0;
   const list = all.sort(([a], [b]) => a.localeCompare(b)).map(([n, st]) => `<option value="${esc(n)}" ${n === name ? 'selected' : ''}>${esc(n)}${(st.of ?? n) !== S.note ? ` · of ${esc(st.of ?? n)}` : ''}</option>`).join('');
   const head = card('study', `Study · ${esc(name)}`, `
-    <div class="line"><select id="studySel" title="the project's motion studies: a timeline each, with its own camera, section and parts">${list}</select>
-      <button data-act="studynew" title="a new study of ${esc(S.note)}">New</button><button data-act="studyrename" title="rename this study">Rename</button>
-      <button class="danger" data-act="studydel" title="remove this study" ${name === S.note && !study ? 'disabled' : ''}>Remove</button>
-      <button data-act="studyshare" title="a link to watch this study, for anyone signed in with GitHub; their notes become issues of the project's repository" ${study ? '' : 'disabled'}>Share…</button></div>
+    <div class="line"><select id="studySel" title="the project's motion studies: a timeline each, with its own camera, section and parts">${list}</select></div>
+    <div class="line even"><button data-act="studynew" title="a new study of ${esc(S.note)}">New</button><button data-act="studyrename" title="rename this study">Rename</button>
+      <button data-act="studyshare" title="a link to watch this study, for anyone signed in with GitHub; their notes become issues of the project's repository" ${study ? '' : 'disabled'}>Share…</button>
+      <button class="danger" data-act="studydel" title="remove this study" ${name === S.note && !study ? 'disabled' : ''}>Remove</button></div>
     <div class="line"><label><input type="checkbox" id="studySection" ${on ? 'checked' : ''}> section</label>
       <select id="studyAxis" ${on ? '' : 'disabled'}>${['X', 'Y', 'Z'].map((a) => `<option ${a === axis ? 'selected' : ''}>${a}</option>`).join('')}</select>
       <label><input type="checkbox" id="studyFlip" ${sectionFlip ? 'checked' : ''} ${on ? '' : 'disabled'}> the other side</label></div>
     ${on ? `<div class="line"><input type="range" id="studyCut" min="0" max="1" step="0.002" value="${esc($('#sectionAt').value)}" data-icon="◧" data-label="section"
       data-scale="100" data-unit="%" data-key="study:section" title="where it cuts: keyed at this frame"></div>` : ''}
-    <div class="line"><button data-act="studycam" title="the view as it is now, keyed at this frame: between keys the camera moves">◉ Key the camera</button>
-      <span class="muted">${cams ? `${cams} camera key${cams === 1 ? '' : 's'}` : 'the camera is free'}</span><span style="flex:1"></span>
+    <div class="line even"><button data-act="studycam" title="the view as it is now, keyed at this frame: between keys the camera moves">◉ Key the camera</button>
       <button data-act="studylook" title="this study is seen in ${esc(STYLES[look.style] ?? look.style)}${edgesOn ? ', with edges' : ''}, as now">Keep this look</button></div>
+    <p class="muted" style="margin:4px 0 0">${cams ? `${cams} camera key${cams === 1 ? '' : 's'}` : 'The camera is free: no key yet.'}</p>
     <p class="muted">What is shown, see-through, where the section cuts and the camera are keyed at the frame shown (<b data-studyframe>${frame}</b>), on the timeline as lines of their own. ${keys('visible') + keys('clear') ? '' : 'Parts: below.'}</p>`);
-  const rows = S.parts.map((q, i) => `<div class="check" data-studypart="${i}"><div class="row">
-      <span><b class="${S.hidden.has(i) ? 'muted' : ''}">${esc(q.name)}</b></span>
+  // the controls first, in columns of their own, so they run in line whatever the names' lengths
+  const rows = S.parts.map((q, i) => `<div class="check" data-studypart="${i}"><div class="row lead seen">
+      <button class="x" data-act="studyeye" data-i="${i}" title="${S.hidden.has(i) ? 'show it' : 'hide it'} from this frame on (keyed)">${S.hidden.has(i) ? '○' : '●'}</button>
       <input type="range" data-see="${esc(q.name)}" min="0.05" max="1" step="0.01" value="${S.see[q.name] ?? 1}" title="how solid ${esc(q.name)} is: 100 % solid, less is see-through (keyed at this frame)"
-        data-icon="◌" data-label="${esc(q.name)} solid" data-scale="100" data-unit="%" data-key="study:see" data-default="1" style="max-width:110px">
-      <button class="x" data-act="studyeye" data-i="${i}" title="${S.hidden.has(i) ? 'show it' : 'hide it'} from this frame on (keyed)">${S.hidden.has(i) ? '○' : '●'}</button></div></div>`).join('');
+        data-icon="◌" data-label="${esc(q.name)} solid" data-scale="100" data-unit="%" data-key="study:see" data-default="1">
+      <b class="${S.hidden.has(i) ? 'muted' : ''}" title="${esc(q.name)}">${esc(q.name)}</b></div></div>`).join('');
   return [head, card('studyparts', `Parts · ${S.parts.length}`, `${rows}<p class="muted">A part hidden or made see-through here is keyed at this frame: it stays so until its next key.</p>`)];
 }
 /** A study's name typed: in a sheet under the button (pop.js), Enter or the button makes it. */
@@ -2836,14 +2837,14 @@ function renderPanel(force) {
   if (d.is_note && r.built && S.parts.length > 1 && !S.compare && S.room !== 'motion') {
     const known = new Set(S.proj.notes.filter((n) => n.kind !== 'module').map((n) => n.name));
     cards.push(card('assembly', `Assembly · ${S.parts.length} parts`, `
-      ${S.parts.map((q, i) => `<div class="check part ${S.sel.part.has(i) ? 'sel' : ''}" data-part="${i}"><div class="row">
-        <span><span class="swatch" style="background:${PARTS[i % PARTS.length]}"></span><b class="${S.hidden.has(i) ? 'muted' : ''}">${esc(q.name)}</b></span>
-        <span class="v muted">${isKeepout(i) ? 'keep-out' : `${fmt(q.volume / 1000)} cm³`}</span>
-        ${known.has(q.name) ? `<button class="x" data-act="opennote" data-name="${esc(q.name)}" title="open this part's Note">↗</button>` : ''}
-        <button class="x" data-act="zoompart" data-i="${i}" title="select this part and zoom to it (F zooms to whatever is selected)">⌖</button>
+      ${S.parts.map((q, i) => `<div class="check part ${S.sel.part.has(i) ? 'sel' : ''}" data-part="${i}"><div class="row lead parts">
+        <button class="x" data-act="eye" data-i="${i}" title="${S.hidden.has(i) ? 'show' : 'hide'}">${S.hidden.has(i) ? '○' : '●'}</button>
         <button class="x" data-act="solo" data-i="${i}" title="show only this part">◎</button>
-        <button class="x" data-act="eye" data-i="${i}" title="${S.hidden.has(i) ? 'show' : 'hide'}">${S.hidden.has(i) ? '○' : '●'}</button></div>
-        <div class="why mono">${[0, 1, 2].map((k) => fmt(q.bbox[k + 3] - q.bbox[k])).join(' × ')} mm${partFact(q.name) ? ` · ${esc(partWords(partFact(q.name), mats))}` : ''}</div></div>`).join('')}
+        <button class="x" data-act="zoompart" data-i="${i}" title="select this part and zoom to it (F zooms to whatever is selected)">⌖</button>
+        ${known.has(q.name) ? `<button class="x" data-act="opennote" data-name="${esc(q.name)}" title="open this part's Note">↗</button>` : '<span></span>'}
+        <b class="${S.hidden.has(i) ? 'muted' : ''}" title="${esc(q.name)}"><span class="swatch" style="background:${PARTS[i % PARTS.length]}"></span>${esc(q.name)}</b>
+        <span class="v muted">${isKeepout(i) ? 'keep-out' : `${fmt(q.volume / 1000)} cm³`}</span></div>
+        <div class="why mono lead-under">${[0, 1, 2].map((k) => fmt(q.bbox[k + 3] - q.bbox[k])).join(' × ')} mm${partFact(q.name) ? ` · ${esc(partWords(partFact(q.name), mats))}` : ''}</div></div>`).join('')}
       <p class="muted">Click a part here or in the view. Explode (above the view) pulls them apart.</p>`, S.hidden.size ? '<button data-act="showall">Show all</button>' : ''));
     if (r.bom && S.room === 'assembly') cards.push(bomCard());
   }
