@@ -79,11 +79,13 @@ def test_a_link_is_made_once_and_kept_only_as_its_hash(setup):
 def test_the_door_opens_the_study_and_nothing_else(setup):
     app, owner, root = setup
     token = owner.post("/w/admin/api/p/arm/studies/tool%20lock/share").json()["link"].rsplit("/", 1)[1]
+    # watching needs no sign-in (Kaspar, 2026-11-24): GitHub is only for writing a note
     nobody = TestClient(app, follow_redirects=False)
-    page = nobody.get(f"/s/{token}")
-    assert page.status_code == 200 and "Sign in with GitHub" in page.text and "data-share" not in page.text
-    asked = nobody.get(f"/s/{token}/api/p/arm/n/rakis")
-    assert asked.status_code == 401 and asked.json()["github"] == f"/auth/github?next=/s/{token}"
+    assert 'data-share="1"' in nobody.get(f"/s/{token}").text
+    anon = nobody.get(f"/s/{token}/api/state").json()["share"]
+    assert anon["viewer"] is None and anon["signin"] == f"/auth/github?next=/s/{token}"
+    assert nobody.get(f"/s/{token}/api/p/arm/n/rakis").status_code == 200
+    assert nobody.get(f"/s/{token}/api/p/arm/n/nest_back").status_code == 404
     viewer = signed_in(app)
     assert 'data-share="1"' in viewer.get(f"/s/{token}").text
     state = viewer.get(f"/s/{token}/api/state").json()

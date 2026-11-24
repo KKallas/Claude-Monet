@@ -1,4 +1,4 @@
-// Beside a shared study (/s/<token>): notes on it, for GitHub. Whoever watches (signed in with GitHub) writes a title
+// Beside a shared study (/s/<token>): notes on it, for GitHub. Anyone with the link watches; whoever signs in with GitHub writes a title
 // and a note, may mark the picture (a pen, boxes, rings, arrows, in a few colours), and Open on GitHub opens a new issue
 // of the project's repository with the note filled in, the picture of that moment (the view under the marks) copied to
 // paste there, and a link back to the moment (frame and camera). GitHub keeps the note and the picture; nothing of it
@@ -148,9 +148,21 @@ export function createShare(panel, view, hooks) {
     if (!s) return;
     if (!built) {
       built = true;
+      const back = encodeURIComponent(location.pathname);
+      if (!s.viewer) {      // watching needs no sign-in: a note does, since it is written on GitHub
+        panel.innerHTML = `<div class="card share-card"><h2>A note on ${esc(s.study)}</h2>
+          <p class="muted">Anyone with the link may watch this study. To leave a note on it (an issue on GitHub, with a marked picture of the moment), sign in with GitHub.</p>
+          ${s.signin ? `<div class="row sh-row"><button class="primary" id="shSignin" title="GitHub tells Monet only who you are; you come back here">Sign in with GitHub</button></div>`
+            : '<p class="muted">Signing in with GitHub is not set up on this server, so no note can be left here.</p>'}
+          <div class="row sh-row"><button id="shPic" title="the view as it is, as a PNG">Download picture</button></div></div>`;
+        panel.querySelector('#shPic').onclick = () => save(false);
+        const go = panel.querySelector('#shSignin');
+        if (go) go.onclick = () => { location.href = s.signin; };
+        return;
+      }
       const d = draft.get();
       panel.innerHTML = `<div class="card share-card"><h2>A note on ${esc(s.study)}</h2>
-        <p class="muted">Signed in with GitHub as <b>${esc(s.viewer)}</b> · <a href="/auth/github/out?next=${encodeURIComponent(location.pathname)}">sign out</a></p>
+        <p class="muted">Signed in with GitHub as <b>${esc(s.viewer)}</b> · <a href="/auth/github/out?next=${back}">sign out</a></p>
         <p class="muted">${s.repository ? `Your note becomes an issue of <a href="https://github.com/${esc(s.repository)}" target="_blank" rel="noopener noreferrer">${esc(s.repository)}</a>, written by you on GitHub. Nothing you write here is kept by Monet.`
           : 'The owner has not named a GitHub repository for this project yet: save the picture and send it to them another way.'}</p>
         <label class="sh-l">Title<input id="shTitle" maxlength="140" placeholder="the bolt heads should be hex" spellcheck="true"></label>

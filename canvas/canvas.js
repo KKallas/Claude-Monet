@@ -3290,7 +3290,7 @@ async function start(project) {
 /** A shared study: its assembly, in Motion, at the moment the address names (#f=<frame>&c=<camera>), else its start. */
 async function startShared() {
   const s = S.state.share, hash = new URLSearchParams(location.hash.slice(1));
-  $('#wsName').textContent = `${s.viewer} · a study of ${S.state.workspace.name}'s`;
+  $('#wsName').textContent = `${s.viewer ? `${s.viewer} · ` : ''}a study of ${S.state.workspace.name}'s`;
   let cam = null;
   try { cam = hash.get('c') ? JSON.parse(hash.get('c')) : null; } catch { /* not a camera */ }
   S.room = 'motion';

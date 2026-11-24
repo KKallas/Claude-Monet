@@ -60,8 +60,9 @@ ever run on the droplet: people's agents build on their own computers and upload
 
 ## 6. Sharing a study (signing in with GitHub)
 
-A motion study can be shared (Motion → the Study card → **Share…**): whoever has the link and signs in with
-GitHub watches it, and writes notes on it as issues of the project's repository, on GitHub. Monet keeps
+A motion study can be shared (Motion → the Study card → **Share…**): whoever has the link watches it, no
+sign-in needed; to write a note on it, as an issue of the project's repository on GitHub, they sign in with
+GitHub (without the OAuth App below, the study can still be watched but no note left). Monet keeps
 none of what they write, and no GitHub token: it asks GitHub once who signed in, and keeps a cookie in their
 browser. For that the server needs a GitHub **OAuth App**, made once:
 

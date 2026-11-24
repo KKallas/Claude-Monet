@@ -66,9 +66,9 @@ a.go:hover{background:rgba(94,246,255,.1)}p.muted{color:#63727b;font-size:14px}p
 def share_signin(there: str, configured: bool, why: str = "") -> str:
     from html import escape
     if not configured:
-        return SHARE_PAGE_HEAD + "<h1>MONET · a shared study</h1><p>Signing in with GitHub is not set up on this server yet, so this study cannot be watched here.</p></main></body></html>"
-    return (SHARE_PAGE_HEAD + "<h1>MONET · a shared study</h1><p>Someone shared a motion study with you. Sign in with GitHub to watch it and to leave notes,"
-            " which you write as issues on GitHub.</p>" + (f'<p class="err">{escape(why)}</p>' if why else "")
+        return SHARE_PAGE_HEAD + "<h1>MONET · a shared study</h1><p>Signing in with GitHub is not set up on this server yet: the study can be watched, but no note left on it.</p></main></body></html>"
+    return (SHARE_PAGE_HEAD + "<h1>MONET · a shared study</h1><p>Signing in with GitHub is only for leaving notes on a shared study,"
+            " which you write as issues on GitHub. Watching it needs no sign-in.</p>" + (f'<p class="err">{escape(why)}</p>' if why else "")
             + (f'<a class="go" href="{escape(there)}">Sign in with GitHub</a>' if there else "")
             + '<p class="muted">Monet asks GitHub only who you are (your public profile) and keeps nothing of yours but a cookie in this browser.</p></main></body></html>')
 
@@ -738,7 +738,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
             raise Problem(f"no such file of Monet's: {path}", 404)
         return {"path": path, "text": MANUAL[path], "readonly": True}
 
-    # ---- sharing a study: a link to watch it, for anyone signed in with GitHub (shares.py, github.py) ------------
+    # ---- sharing a study: a link to watch it, for anyone who has it; notes need GitHub (shares.py, github.py) ----
     def share_study(request, ws, _body):
         """GET: whether the study is shared. POST: a new link (the one before stops working), answered this once: it
         is not kept, only its sha. DELETE: the link closed."""
@@ -761,7 +761,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
         return {"repository": ws.project(request.path_params["project"]).set_repository(body.get("repository"))}
 
     def shared(fn, page_too=False):
-        """The share door: /s/<token>/…, for anyone signed in with GitHub who has the link. It opens one study of one
+        """The share door: /s/<token>/…, for anyone who has the link (GitHub only to write a note). It opens one study of one
         project, as built and played, and nothing else: no source, no check, no other Note, nothing to change."""
         async def endpoint(request: Request):
             token = request.path_params["token"]
@@ -769,11 +769,7 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
             owner = store.users.get(link["user"]) if link else None
             if not owner:
                 return (HTMLResponse(SHARE_GONE, 404) if page_too else JSONResponse({"error": "this link does not open anything (any more)"}, 404))
-            who = github.viewer(secret, request.cookies)
-            if who is None:
-                there = f"/auth/github?next=/s/{token}"
-                return (HTMLResponse(share_signin(there, github.configured() is not None), headers=NO_STORE) if page_too
-                        else JSONResponse({"error": "sign in with GitHub first", "github": there}, 401))
+            who = github.viewer(secret, request.cookies)      # None: watching needs no sign-in, only a note does (share.js)
             ws = workspaces.of(owner["id"], owner["name"])
             try:
                 p = ws.project(link["project"])
@@ -795,10 +791,12 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
 
     def share_state(request, p, study_name, study, of, who, owner):
         base = base_url(request.headers, request.url.scheme)
-        return {"workspace": {"name": owner["name"], "username": ""}, "me": {"username": f"github:{who['login']}", "name": who["login"], "role": "viewer"},
+        login = who["login"] if who else None
+        return {"workspace": {"name": owner["name"], "username": ""}, "me": {"username": f"github:{login}" if login else "", "name": login or "", "role": "viewer"},
                 "projects": [p.name], "templates": [], "base": "", "agent": "", "origin": base, "version": info, "mine": False,
-                "share": {"project": p.name, "study": study_name, "note": of, "repository": p.settings.get("repository"), "viewer": who["login"],
-                          "link": f"{base}/s/{request.path_params['token']}"}}
+                "share": {"project": p.name, "study": study_name, "note": of, "repository": p.settings.get("repository"), "viewer": login,
+                          "link": f"{base}/s/{request.path_params['token']}",
+                          "signin": f"/auth/github?next=/s/{request.path_params['token']}" if github.configured() else None}}
 
     def share_project(request, p, study_name, study, of, who, owner):
         st = p.status()

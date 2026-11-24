@@ -6,7 +6,7 @@
 #   app     the web app: the logins, the canvas, the agents' door. Holds ./data (accounts, session secret) and
 #           ./storage (the working files).
 # No root, no capabilities, a read-only file system apart from its volumes and /tmp, ceilings on memory and
-# processes. Only Caddy is reachable from outside, and only Caddy can reach out. What an agent key can still do:
+# processes. Only Caddy is reachable from outside; the app can reach out too, for GitHub sign-in. What an agent key can still do:
 # upload measurements of its own workspace that are not what the Note would build (they are claims, and the canvas
 # says who built them). Back up ./storage if the work matters.
 x-shut: &shut
@@ -23,6 +23,7 @@ x-shut: &shut
 services:
   app:
     <<: *shut
+    networks: [inside, outside]   # out to GitHub, for signing in to a shared study (it asks who signed in)
     environment:
       MONET_BASE_URL: https://${DOMAIN}
       MONET_MAX_USERS: ${MONET_MAX_USERS:-20}

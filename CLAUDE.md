@@ -204,9 +204,10 @@ wrong:
   report cut to `SHOWN`, so canvas.js runs it with `sharing` true (`share.js` beside it; the timeline `readOnly`).
   Tokens are kept only as sha256 (`monet/shares.py`, `data/shares.json`); a link holds the study by its id (a study's
   `id` in monet.json, given by `set_study` and kept across a rename: `Project.study_id`/`study_by_id`), so renaming
-  keeps the link; a new link closes the old; closed with the project or the user. Watching needs GitHub sign-in (`monet/github.py`: an OAuth App, `MONET_GITHUB_ID/SECRET`, no
-  scope; the token is used once for `/user` and dropped; a signed `monet_gh` cookie {id, login, until}). Any GitHub
-  account with the link may watch for now ("later let's add options for specific users"). A note is never sent to
+  keeps the link; a new link closes the old; closed with the project or the user. Watching needs only the link (Kaspar, 2026-11-24: "I would need github only to
+  make comments"); writing a note needs GitHub sign-in (`monet/github.py`: an OAuth App, `MONET_GITHUB_ID/SECRET`, no
+  scope; the token is used once for `/user` and dropped; a signed `monet_gh` cookie {id, login, until}), asked for in
+  share.js's card (`share.viewer` null, `share.signin`), never at the door ("later let's add options for specific users"). A note is never sent to
   Monet: Open on GitHub opens `github.com/<repository>/issues/new` filled in (`issueUrl`, under 8 kB) with the picture
   of the moment and its marks on the clipboard to paste (GitHub's API takes no images), and a link back
   (`#f=<frame>&c=<camera>`). `repository` is a project setting (monet.json, `Project.set_repository`).
