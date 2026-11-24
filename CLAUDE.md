@@ -202,7 +202,8 @@ wrong:
   `/s/<token>` (`shared()` in app.py), opens one study's assembly as built, played, and nothing else: its routes
   mirror the person's (`/s/<t>/api/state`, `/p/<project>`, `/rev`, `/n/<note>`, `model.glb`, `faces.json`) with the
   report cut to `SHOWN`, so canvas.js runs it with `sharing` true (`share.js` beside it; the timeline `readOnly`).
-  Tokens are kept only as sha256 (`monet/shares.py`, `data/shares.json`); a link holds the study by its id (a study's
+  Links are found by the sha256 of their token, and the token is kept beside it so the Share dialog shows the link
+  again (Kaspar, 2026-11-24; `monet/shares.py`, `data/shares.json`, never in storage/, never in the share door's answers); a link holds the study by its id (a study's
   `id` in monet.json, given by `set_study` and kept across a rename: `Project.study_id`/`study_by_id`), so renaming
   keeps the link; a new link closes the old; closed with the project or the user. Watching needs only the link (Kaspar, 2026-11-24: "I would need github only to
   make comments"); writing a note needs GitHub sign-in (`monet/github.py`: an OAuth App, `MONET_GITHUB_ID/SECRET`, no

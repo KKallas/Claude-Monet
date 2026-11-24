@@ -1,7 +1,9 @@
-"""Share links: one motion study of a project, to watch, for anyone signed in with GitHub who has the link.
+"""Share links: one motion study of a project, to watch, for anyone who has the link (GitHub only to write a note).
 
-A link is /s/<token>; it holds the study by its id (Project.study_id), so renaming the study keeps it. The token is made here once, shown to the person once, and kept only as its sha256: this file
-(data/shares.json, beside the accounts, never in storage/) cannot be turned back into links. A new link for a study
+A link is /s/<token>; it holds the study by its id (Project.study_id), so renaming the study keeps it. Links are found
+by the sha256 of their token; the token is kept too, so the person sees their link again in the Share dialog
+(Kaspar, 2026-11-24: "if I have forgotten I get it from there"). This file is data/shares.json, beside the accounts
+and the session secret, never in storage/; links made before then were kept as the sha alone. A new link for a study
 closes the one before; the person can close it too. What a link opens is the study's assembly as built, played: never
 a source, a check or another Note (the share door in app.py). Notes about it go to GitHub, as issues the viewer writes
 there themselves: nothing a viewer says is kept here.
@@ -36,7 +38,7 @@ class Shares:
         token = secrets.token_urlsafe(18)
         with self._lock:
             self._drop(user_id, project, study)
-            self.links[_key(token)] = {"user": user_id, "project": project, "study": study, "made": now()}
+            self.links[_key(token)] = {"user": user_id, "project": project, "study": study, "made": now(), "token": token}
             self._write()
         return token
 
@@ -63,8 +65,9 @@ class Shares:
                 self._write()
 
     def of(self, user_id: str, project: str, study: str) -> dict | None:
-        """Whether a study is shared, and since when (never the link: it is not kept)."""
-        return next(({"made": s["made"]} for s in self.links.values() if (s["user"], s["project"], s["study"]) == (user_id, project, study)), None)
+        """Whether a study is shared, since when, and its token (none for a link made when only the sha was kept)."""
+        return next(({"made": s["made"], "token": s.get("token")} for s in self.links.values()
+                     if (s["user"], s["project"], s["study"]) == (user_id, project, study)), None)
 
     def find(self, token) -> dict | None:
         token = str(token or "")

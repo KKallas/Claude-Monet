@@ -40,7 +40,7 @@ function ask(text, { yes = 'OK', no = 'Cancel', danger = false } = {}) {
 }
 const tell = (text) => ask(text, { no: null });
 const wid = location.pathname.split('/')[2];
-// a shared study (/s/<token>): one study of one project, watched by someone signed in with GitHub; the page is the same,
+// a shared study (/s/<token>): one study of one project, watched by anyone with the link; the page is the same,
 // with only what plays the study (share.js beside it). The server's share door answers nothing else
 const sharing = location.pathname.startsWith('/s/');
 const root = sharing ? `/s/${wid}/api` : `/w/${wid}/api`;
@@ -2005,7 +2005,7 @@ function studyCards() {
   const head = card('study', `Study · ${esc(name)}`, `
     <div class="line"><select id="studySel" title="the project's motion studies: a timeline each, with its own camera, section and parts">${list}</select></div>
     <div class="line even"><button data-act="studynew" title="a new study of ${esc(S.note)}">New</button><button data-act="studyrename" title="rename this study">Rename</button>
-      <button data-act="studyshare" title="a link to watch this study, for anyone signed in with GitHub; their notes become issues of the project's repository" ${study ? '' : 'disabled'}>Share…</button>
+      <button data-act="studyshare" title="a link to watch this study, for anyone who has it; notes on it, signed in with GitHub, become issues of the project's repository" ${study ? '' : 'disabled'}>Share…</button>
       <button class="danger" data-act="studydel" title="remove this study" ${name === S.note && !study ? 'disabled' : ''}>Remove</button></div>
     <div class="line"><label><input type="checkbox" id="studySection" ${on ? 'checked' : ''}> section</label>
       <select id="studyAxis" ${on ? '' : 'disabled'}>${['X', 'Y', 'Z'].map((a) => `<option ${a === axis ? 'selected' : ''}>${a}</option>`).join('')}</select>
@@ -2042,17 +2042,17 @@ function nameStudy(anchor, title, start, then) {
  *  answered once, when it is made: the server keeps only its fingerprint. */
 async function shareStudy(anchor) {
   const name = studyName(), base = `/p/${S.project}/studies/${encodeURIComponent(name)}/share`;
-  let got, link = '';
+  let got;
   try { got = await api(base); } catch (e) { tell(e.message); return; }
-  const html = () => `<div class="pop-head"><b>Share ${esc(name)}</b><button class="x" data-act="close">×</button></div>
-    ${got.github ? '' : '<p class="err">Signing in with GitHub is not set up on this server (MONET_GITHUB_ID, MONET_GITHUB_SECRET): nobody can open a link yet.</p>'}
-    <p class="muted">Anyone signed in with GitHub who has the link can watch this study as built, and nothing else of the project: no source, no check, no other Note. A note they leave becomes an issue of the repository, written by them on GitHub; Monet keeps none of it.</p>
+  const html = () => { const link = got.link ?? ''; return `<div class="pop-head"><b>Share ${esc(name)}</b><button class="x" data-act="close">×</button></div>
+    ${got.github ? '' : '<p class="err">Signing in with GitHub is not set up on this server (MONET_GITHUB_ID, MONET_GITHUB_SECRET): a link can be watched, but nobody can leave a note.</p>'}
+    <p class="muted">Anyone who has the link can watch this study as built, and nothing else of the project: no source, no check, no other Note. To leave a note they sign in with GitHub; it becomes an issue of the repository, written by them on GitHub, and Monet keeps none of it.</p>
     <div class="line"><span class="muted">Repository</span><input data-r="repo" value="${esc(got.repository ?? '')}" placeholder="owner/name" spellcheck="false"><button data-act="repo">Set</button></div>
     ${link ? `<div class="line"><input readonly data-r="link" value="${esc(link)}"><button data-act="copy" data-what="link">Copy</button></div>
       <div class="line"><input readonly data-r="md" value="${esc(`[▶ ${name}](${link})`)}"><button data-act="copy" data-what="md">Copy for a README</button></div>
-      <p class="muted">Shown this once: Monet keeps only a fingerprint of it. Lost, make a new one (the old one stops working).</p>`
-      : got.shared ? `<p>Shared since ${esc(new Date(got.shared.made).toLocaleString())}. The link was shown when it was made; a new one closes it.</p>` : '<p class="muted">Not shared.</p>'}
-    <div class="line"><button class="primary" data-act="make">${got.shared || link ? 'New link' : 'Make a link'}</button>${got.shared || link ? '<button class="danger" data-act="unshare">Close the link</button>' : ''}</div>`;
+      <p class="muted">Shared since ${esc(new Date(got.shared.made).toLocaleString())}. It is here whenever you open Share; a new link closes this one.</p>`
+      : got.shared ? `<p>Shared since ${esc(new Date(got.shared.made).toLocaleString())}. This link was made before Monet kept links, so it cannot be shown again: make a new one to see it here (the old one stops working).</p>` : '<p class="muted">Not shared.</p>'}
+    <div class="line"><button class="primary" data-act="make">${got.shared ? 'New link' : 'Make a link'}</button>${got.shared ? '<button class="danger" data-act="unshare">Close the link</button>' : ''}</div>`; };
   const el = pop(anchor, html(), { key: 'share', wide: true });
   el.addEventListener('click', async (e) => {
     const b = e.target.closest('[data-act]'), a = b?.dataset.act;
@@ -2061,8 +2061,11 @@ async function shareStudy(anchor) {
       if (a === 'close') { closePop(); return; }
       if (a === 'copy') { await navigator.clipboard.writeText(el.querySelector(`[data-r="${b.dataset.what}"]`).value); notice('copied'); return; }
       if (a === 'repo') { got.repository = (await api(`/p/${S.project}/repository`, 'PUT', { repository: el.querySelector('[data-r="repo"]').value })).repository; notice(got.repository ? `notes go to ${got.repository}` : 'no repository'); }
-      if (a === 'make') { const made = await api(base, 'POST'); link = made.link; got = { ...got, shared: { made: made.made } }; }
-      if (a === 'unshare') { if (!(await ask(`Close the link to ${name}? Whoever has it can no longer watch it.`, { yes: 'Close it', danger: true }))) return; got = await api(base, 'DELETE'); link = ''; }
+      if (a === 'make') {
+        if (got.shared && !(await ask(`A new link to ${name}? The one you shared stops working.`, { yes: 'New link', danger: true }))) return;
+        got = await api(base, 'POST');
+      }
+      if (a === 'unshare') { if (!(await ask(`Close the link to ${name}? Whoever has it can no longer watch it.`, { yes: 'Close it', danger: true }))) return; got = await api(base, 'DELETE'); }
       refill(html());
     } catch (err) { tell(err.message); }
   });

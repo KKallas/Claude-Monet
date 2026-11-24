@@ -740,21 +740,22 @@ def create_app(storage: str | Path, data: str | Path | None = None, max_users: i
 
     # ---- sharing a study: a link to watch it, for anyone who has it; notes need GitHub (shares.py, github.py) ----
     def share_study(request, ws, _body):
-        """GET: whether the study is shared. POST: a new link (the one before stops working), answered this once: it
-        is not kept, only its sha. DELETE: the link closed."""
+        """GET: whether the study is shared, and its link. POST: a new link (the one before stops working). DELETE:
+        the link closed. The person's door only: the link is never in the share door's answers."""
         p, name, owner = ws.project(request.path_params["project"]), request.path_params["study"], request.state.owner
         if name not in p.studies():
             raise Problem(f"no study {name!r} in {p.name}", 404)
         sid = p.study_id(name)      # the link holds the study by its id: renamed, it still opens it
         out = {"project": p.name, "study": name, "github": github.configured() is not None, "repository": p.settings.get("repository")}
         if request.method == "POST":
-            token = shares.make(owner["id"], p.name, sid)
+            shares.make(owner["id"], p.name, sid)
             store.log(type="share", user=owner["username"], project=p.name, study=name, who=request.state.me["username"])
-            return {**out, "link": f"{base_url(request.headers, request.url.scheme)}/s/{token}", **(shares.of(owner["id"], p.name, sid) or {})}
         if request.method == "DELETE":
             shares.close(owner["id"], p.name, sid)
             store.log(type="unshare", user=owner["username"], project=p.name, study=name, who=request.state.me["username"])
-        return {**out, "shared": shares.of(owner["id"], p.name, sid)}
+        kept = shares.of(owner["id"], p.name, sid)
+        token = kept.pop("token", None) if kept else None
+        return {**out, "shared": kept, "link": f"{base_url(request.headers, request.url.scheme)}/s/{token}" if token else None}
 
     def put_repository(request, ws, body):
         """The project's GitHub repository (owner/name): where the share page's notes are opened as issues."""

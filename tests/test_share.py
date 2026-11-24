@@ -55,7 +55,7 @@ def signed_in(app):
     return c
 
 
-def test_a_link_is_made_once_and_kept_only_as_its_hash(setup):
+def test_a_link_is_found_by_its_hash_and_shown_again_to_its_owner(setup):
     app, owner, root = setup
     assert owner.get("/w/admin/api/p/arm/studies/tool%20lock/share").json()["shared"] is None
     made = owner.post("/w/admin/api/p/arm/studies/tool%20lock/share").json()
@@ -63,16 +63,20 @@ def test_a_link_is_made_once_and_kept_only_as_its_hash(setup):
     assert made["github"] and len(token) >= 20
     kept = (root / "data" / "shares.json").read_text()
     sid = owner.get("/w/admin/api/p/arm").json()["studies"]["tool lock"]["id"]
-    assert token not in kept and sid in kept
-    assert owner.get("/w/admin/api/p/arm/studies/tool%20lock/share").json()["shared"]["made"]
-    assert "link" not in owner.get("/w/admin/api/p/arm/studies/tool%20lock/share").json()
+    assert sid in kept
+    # the link is shown again whenever the person opens Share (Kaspar, 2026-11-24), only at their door
+    asked = owner.get("/w/admin/api/p/arm/studies/tool%20lock/share").json()
+    assert asked["shared"]["made"] and asked["link"] == made["link"] and "token" not in asked["shared"]
+    assert token not in signed_in(app).get(f"/s/{token}/api/p/arm/n/rakis").text
     assert owner.post("/w/admin/api/p/arm/studies/nope/share").status_code == 404
     # a new one closes the one before
     again = owner.post("/w/admin/api/p/arm/studies/tool%20lock/share").json()["link"].rsplit("/", 1)[1]
     viewer = signed_in(app)
     assert viewer.get(f"/s/{token}/api/state").status_code == 404
     assert viewer.get(f"/s/{again}/api/state").status_code == 200
-    owner.delete("/w/admin/api/p/arm/studies/tool%20lock/share")
+    assert owner.get("/w/admin/api/p/arm/studies/tool%20lock/share").json()["link"].endswith(again)
+    closed = owner.delete("/w/admin/api/p/arm/studies/tool%20lock/share").json()
+    assert closed["shared"] is None and closed["link"] is None
     assert viewer.get(f"/s/{again}/api/state").status_code == 404
 
 
